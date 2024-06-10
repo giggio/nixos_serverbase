@@ -1,0 +1,45 @@
+#!/usr/bin/env bash
+
+if (return 0 2>/dev/null); then
+  >&2 echo -e "\e[31mThis script should not be sourced.\e[0m"
+  return 1
+fi
+if [ "$EUID" != "0" ]; then
+  >&2 echo -e "\e[31mPlease run this script as root.\e[0m"
+  exit 1
+fi
+set -euo pipefail
+
+_nr() {
+  local product_name
+  product_name=$(cat /sys/devices/virtual/dmi/id/product_name)
+  if [ "$product_name" == "VirtualBox" ]; then
+    local is_virtualbox=true
+  else
+    local is_virtualbox=false
+  fi
+  # available profiles: nixos, nixos_virtualbox
+  local profile=nixos
+  if $is_virtualbox; then
+    profile+=_virtualbox
+  fi
+  local args=("$@")
+  local verbose=false
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+    --verbose)
+      verbose=true
+      shift
+      ;;
+    *)
+      shift
+      ;;
+    esac
+  done
+  if $verbose; then
+    echo -e "\e[32mRunning:\e[0m \e[34mnixos-rebuild \e[0m--flake /home/$SUDO_USER/p/nixos?submodules=1#$profile ${args[*]}"
+  fi
+  nixos-rebuild --flake "/home/$SUDO_USER/p/nixos?submodules=1#$profile" "${args[@]}"
+}
+
+_nr "$@"
