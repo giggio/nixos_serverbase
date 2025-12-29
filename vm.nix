@@ -24,9 +24,4 @@
     virtualbox.guest.enable = true;
     diskSize = 20 * 1024;
   };
-
-  virtualbox = {
-    vmName = "pitest";
-    memorySize = 4096;
-  };
 }

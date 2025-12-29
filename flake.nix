@@ -52,7 +52,14 @@
         vbox = nixos-generators.nixosGenerate {
           system = "x86_64-linux";
           format = "virtualbox";
-          modules = baseModules;
+          modules = baseModules ++ [
+            {
+              virtualbox = {
+                vmName = "pitest";
+                memorySize = 4096;
+              };
+            }
+          ];
           specialArgs = { setup = setup // { virtualbox = true; }; };
         };
       };
