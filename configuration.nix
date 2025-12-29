@@ -56,6 +56,23 @@ in
       };
 
     };
+    services.renderIssue = {
+      description = "Render login issue (IP)";
+      wantedBy = [ "multi-user.target" ];
+      before = [ "getty.target" ];
+      serviceConfig = {
+        Type = "oneshot";
+        ExecStart = ''
+          ${pkgs.bash}/bin/bash -c '
+          mkdir -p /run/issue.d
+          # printf "IP: %s\n" "$(${pkgs.iproute}/bin/ip -4 route get 1.1.1.1 2>/dev/null | ${pkgs.gawk}/bin/awk "{print \\$7; exit}")" \
+            # > /run/issue.d/90-ip.issue
+          echo -e "\e[32mIP: $(${pkgs.iproute}/bin/ip -4 route get 1.1.1.1 | ${pkgs.gawk}/bin/awk '{print $7}')\e[0m\n" \
+            > /run/issue.d/90-ip.issue
+          '
+        '';
+      };
+    };
     user = {
       tmpfiles = {
         enable = true;
