@@ -3,6 +3,10 @@
   inputs = {
     # nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     nixpkgs.url = "github:nixos/nixpkgs/nixos-25.11";
+    home-manager = {
+      url = "github:nix-community/home-manager/release-25.11";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     nixos-hardware.url = "github:NixOS/nixos-hardware/master";
     nixos-generators = {
       url = "github:nix-community/nixos-generators";
@@ -13,10 +17,19 @@
   outputs = inputs@{ nixpkgs, home-manager, nixos-hardware, nixos-generators, ... }:
     let
       lib = nixpkgs.lib;
+      baseModules = [
+        ./configuration.nix
+        home-manager.nixosModules.home-manager
+        {
+          home-manager.useGlobalPkgs = true;
+          home-manager.useUserPackages = true;
+          home-manager.users.giggio = ./home.nix;
+          home-manager.extraSpecialArgs = { };
+        }
+      ];
       mkNixosSystem = { specialArgs, ... }: nixpkgs.lib.nixosSystem {
         system = "aarch64-linux";
-        modules = [
-          ./configuration.nix
+        modules = baseModules ++ [
           nixos-hardware.nixosModules.raspberry-pi-4
         ];
         specialArgs = { } // specialArgs;
@@ -39,9 +52,7 @@
         vbox = nixos-generators.nixosGenerate {
           system = "x86_64-linux";
           format = "virtualbox";
-          modules = [
-            ./configuration.nix
-          ];
+          modules = baseModules;
           specialArgs = { setup = setup // { virtualbox = true; }; };
         };
       };

@@ -53,6 +53,14 @@ in
       };
 
     };
+    user = {
+      tmpfiles = {
+        enable = true;
+        users.giggio.rules = [
+          "d /run/user/1000/gnupg 0700 1000 1000 -"
+        ];
+      };
+    };
   };
 
   time.timeZone = "America/Sao_Paulo";
@@ -85,17 +93,19 @@ in
   };
 
   environment.systemPackages = with pkgs; [ # search with: nix search wget
+    gnupg
+    kitty # to add Kitty's terminfo
     neovim
     wget
-    kitty # to add Kitty's terminfo
   ];
 
   programs = {
-    vim = {
+    neovim = {
       enable = true;
       defaultEditor = true;
     };
     git.enable = true;
+    # gnupg.agent.enable = true; # so that the socket paths at /run/user/1000/gnupg/ are created
   };
 
   services = {
