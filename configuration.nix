@@ -65,9 +65,9 @@ in
         ExecStart = ''
           ${pkgs.bash}/bin/bash -c '
           mkdir -p /run/issue.d
-          # printf "IP: %s\n" "$(${pkgs.iproute}/bin/ip -4 route get 1.1.1.1 2>/dev/null | ${pkgs.gawk}/bin/awk "{print \\$7; exit}")" \
+          # printf "IP: %s\n" "$(${pkgs.iproute2}/bin/ip -4 route get 1.1.1.1 2>/dev/null | ${pkgs.gawk}/bin/awk "{print \\$7; exit}")" \
             # > /run/issue.d/90-ip.issue
-          echo -e "\e[32mIP: $(${pkgs.iproute}/bin/ip -4 route get 1.1.1.1 | ${pkgs.gawk}/bin/awk '{print $7}')\e[0m\n" \
+          echo -e "\e[32mIP: $(${pkgs.iproute2}/bin/ip -4 route get 1.1.1.1 | ${pkgs.gawk}/bin/awk '{print $7}')\e[0m\n" \
             > /run/issue.d/90-ip.issue
           '
         '';
