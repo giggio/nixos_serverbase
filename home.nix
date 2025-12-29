@@ -1,7 +1,137 @@
 { config, pkgs, lib, inputs, setup, ... }:
 
+let
+  # todo: move shellSessionVariables somewhere else when https://github.com/nix-community/home-manager/issues/5474 is fixed
+  shellSessionVariables = {
+    DOCKER_BUILDKIT = "1";
+    FZF_DEFAULT_COMMAND = "'fd --type file --color=always --exclude .git'";
+    FZF_DEFAULT_OPTS = "--ansi";
+    FZF_CTRL_T_COMMAND = ''"$FZF_DEFAULT_COMMAND"'';
+  };
+in
 rec {
   programs = {
+    bash = {
+      enable = true;
+      initExtra = lib.mkMerge [
+        ''
+          # end of nix configuration
+
+          # ending of .bashrc:
+
+          # end of .bashrc
+
+          # beginning of configurations coming from other options, like gpg-agent, direnv and zoxide
+        ''
+        (lib.mkOrder 10000
+          ''
+            # very end of .bashrc
+            export PATH="$(printf '%s\n' "$HOME/.local/bin:$PATH" | tr ':' '\n' | awk '!seen[$0]++' | paste -sd: -)"
+          '')
+      ];
+      profileExtra =
+        ''
+          # beginning of .profile
+          umask 022
+          if ! [ -v XDG_RUNTIME_DIR ]; then
+            XDG_RUNTIME_DIR=/run/user/`id -u`/
+            export XDG_RUNTIME_DIR
+            if ! [ -d "$XDG_RUNTIME_DIR" ]; then
+              mkdir -p "$XDG_RUNTIME_DIR"
+              chmod 755 "$XDG_RUNTIME_DIR"
+            fi
+          fi
+          # ending of .profile
+        '';
+      shellAliases = {
+        ls = "ls --color=auto --hyperlink=always";
+        dir = "dir --color=auto";
+        vdir = "vdir --color=auto";
+        grep = "grep --color=auto";
+        fgrep = "fgrep --color=auto";
+        egrep = "egrep --color=auto";
+        ll = "eza --long --group --all --all --group-directories-first --hyperlink";
+        la = "ls -A";
+        l = "ls -CF";
+        cls = "clear";
+        add = "git add";
+        st = "git status";
+        log = "git log";
+        ci = "git commit";
+        push = "git push";
+        pushf = "git push --force-with-lease";
+        co = "git checkout";
+        pull = "git pull";
+        fixup = "git fixup";
+        dif = "git diff";
+        pushsync = "git push --set-upstream origin `git rev-parse --abbrev-ref HEAD`";
+        "cd-" = "cd -";
+        "cd.." = "cd ..";
+        "cd..." = "cd ../..";
+        "cd...." = "cd ../../..";
+        cdr = "cd `git rev-parse --show-toplevel 2> /dev/null || echo '.'`";
+        update = "sudo apt update; apt list --upgradable";
+        upgrade = "apt list --upgradable; sudo apt upgrade -y; apt list --upgradable; [ -f /var/run/reboot-required ] && echo -e '\e[31mReboot required.\e[0m' || echo -e '\e[32mNo need to reboot.\e[0m'";
+        http = "xh";
+        vim = "nvim";
+        vi = "nvim";
+        cl = "tput clear";
+      };
+      shellOptions = [
+        "histappend"
+        "checkwinsize"
+        "extglob"
+        "globstar"
+        "checkjobs"
+      ];
+
+      bashrcExtra =
+        let
+          bashSessionVariables = {
+            # environment variables to add only to .bashrc
+            PATH = "$HOME/.local/bin:$PATH"; # this is here so it is added before the other paths
+          };
+        in
+          lib.concatStringsSep "\n" (lib.concatLists [
+            [
+              ''
+              # beginning of .bashrc
+
+              # Shell session variables:
+              ''
+            ]
+            (lib.mapAttrsToList (k: v: "export ${k}=${v}") shellSessionVariables)
+            [
+              ''
+
+              # Bash session variables:
+              ''
+            ]
+            (lib.mapAttrsToList (k: v: "export ${k}=${v}") bashSessionVariables)
+            [
+              ''
+
+              # beginning of .bashrc config
+              unset MAILCHECK
+              # If not running interactively, don't do anything
+              [[ $- == *i* ]] || return
+              # configure vi mode
+              set -o vi
+              bind '"jj":"\e"'
+              tabs -4
+              bind 'set completion-ignore-case on'
+              # make less more friendly for non-text input files, see lesspipe(1)
+              [ -x /usr/bin/lesspipe ] && eval "$(SHELL=/bin/sh lesspipe)"
+
+              # beginning of nix configuration
+              ''
+            ]
+          ]
+          );
+
+
+
+    };
     gpg = {
       enable = true;
       publicKeys = [
@@ -31,5 +161,51 @@ rec {
     sessionPath = [
       "$HOME/.local/bin"
     ];
+    sessionVariables = {
+      # this goes into ~/.nix-profile/etc/profile.d/hm-session-vars.sh, which is
+      # loaded by .profile, and so only reloads if we logout and log back in
+      TMP = "/tmp";
+      TEMP = "/tmp";
+      XDG_DATA_HOME = "\${XDG_DATA_HOME:-$HOME/.local/share}";
+      XDG_STATE_HOME = "\${XDG_STATE_HOME:-$HOME/.local/state}";
+      XDG_CACHE_HOME = "\${XDG_CACHE_HOME:-$HOME/.cache}";
+    };
+    sessionVariablesExtra = lib.mkOrder 2000 ''
+      # this is from sessionVariablesExtra, and is loaded at the very end hm-session-vars.sh
+    '';
+
+    file = {
+      ".gitconfig".source = ./.gitconfig;
+      ".hushlogin".text = "";
+      ".tmux.conf".text =
+        ''
+          set -g default-terminal "screen-256color"
+          set-option -g default-shell /bin/bash
+          set -g history-limit 10000
+          source "$HOME/.nix-profile/share/tmux/powerline.conf"
+          set -g status-bg colour233
+          set-option -g status-position top
+          set -g mouse
+
+          # Smart pane switching with awareness of vim splits
+          bind -n C-h run "(tmux display-message -p '#{pane_current_command}' | grep -iqE '(^|\/)g?(view|vim?)(diff)?$' && tmux send-keys C-h) || tmux select-pane -L"
+          bind -n C-j run "(tmux display-message -p '#{pane_current_command}' | grep -iqE '(^|\/)g?(view|vim?)(diff)?$' && tmux send-keys C-j) || tmux select-pane -D"
+          bind -n C-k run "(tmux display-message -p '#{pane_current_command}' | grep -iqE '(^|\/)g?(view|vim?)(diff)?$' && tmux send-keys C-k) || tmux select-pane -U"
+          bind -n C-l run "(tmux display-message -p '#{pane_current_command}' | grep -iqE '(^|\/)g?(view|vim?)(diff)?$' && tmux send-keys C-l) || tmux select-pane -R"
+          # bind -n C-\ run "(tmux display-message -p '#{pane_current_command}' | grep -iqE '(^|\/)g?(view|vim?)(diff)?$' && tmux send-keys 'C-\\') || tmux select-pane -l"
+        '';
+      ".inputrc".text =
+        ''
+          set bell-style none
+        '';
+      ".vimrc".text = "source ~/.vim/init.vim";
+      ".vim".source = ./vimfiles;
+    };
+
+  };
+  xdg = {
+    configFile = {
+      "nvim".source = ./vimfiles;
+    };
   };
 }

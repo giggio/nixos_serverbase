@@ -18,6 +18,9 @@ in
     ];
 
   nixpkgs.config.allowUnfree = false;
+  nixpkgs.overlays = [
+    (final: prev: (import ./pkgs/default.nix { pkgs = prev; }))
+  ];
 
   nix = {
     settings.experimental-features = [ "nix-command" "flakes" ];
@@ -97,6 +100,11 @@ in
     kitty # to add Kitty's terminfo
     neovim
     wget
+    eza
+    delta
+    fzf
+    githooks # Simple Git hooks manager https://github.com/gabyx/githooks
+    mylua # see pkgs/default.nix
   ];
 
   programs = {

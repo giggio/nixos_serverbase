@@ -1,0 +1,58 @@
+[user]
+  name = Giovanni Bassi
+  email = giggio@giggio.net
+[diff]
+  indentHeuristic = true
+  submodule = log
+[color]
+  diff = always
+  interactive = always
+  status = always
+  branch = always
+[alias]
+  st = status
+  ci = commit
+  co = checkout
+  br = branch
+  pf = push --force-with-lease
+  pushtag = push origin --tags
+  fixup = commit --all --amend --no-edit
+  up = push upstream master
+  sync = pull upstream master --rebase
+  which = !git branch | grep -i
+  daily = !sh -c 'git log --since=yesterday --format=%s --author=\"`git config user.email`\"'
+  serve = daemon --reuseaddr --verbose --base-path=. --export-all ./.git
+  graph = log --graph
+  a = add :/
+  hooks = !\"githooks-cli\"
+[pull]
+  ff = only
+[push]
+  default = simple
+  autoSetupRemote = true
+[log]
+  decorate = full
+  abbrevCommit = true
+[format]
+  pretty=format:%Cred%h%Creset -%C(yellow)%d%Creset %s %Cgreen(%cr) %C(bold blue)<%an>%Creset
+[gui]
+  gcwarning = false
+[commit]
+  gpgsign = true
+[init]
+  defaultBranch = main
+[core]
+  pager = delta --dark
+[credential]
+  helper = store --file $HOME/.cache/git/credential/.git-credentials
+[gpg]
+[pack]
+  windowMemory = 0
+[githooks]
+  cloneUrl = https://github.com/gabyx/githooks.git
+  cloneBranch = main
+  installMode = manual
+  pathForUseCoreHooksPath = /home/giggio/.githooks/templates/hooks
+  runner = githooks-runner
+  dialog = githooks-dialog
+  maintainedHooks = all
