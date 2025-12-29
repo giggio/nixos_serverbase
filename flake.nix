@@ -27,11 +27,14 @@
           home-manager.extraSpecialArgs = { };
         }
       ];
-      mkNixosSystem = { specialArgs, ... }: nixpkgs.lib.nixosSystem {
-        system = "aarch64-linux";
-        modules = baseModules ++ [
+      mkNixosSystem = { specialArgs, ... }: let
+        modules = baseModules ++ (if specialArgs.setup.virtualbox then [
+        ] else [
           nixos-hardware.nixosModules.raspberry-pi-4
-        ];
+        ]);
+      in nixpkgs.lib.nixosSystem {
+        system = "aarch64-linux";
+        modules = modules;
         specialArgs = { } // specialArgs;
       };
       setup = {

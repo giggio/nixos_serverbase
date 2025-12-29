@@ -1,15 +1,16 @@
-{ config, pkgs, lib, ... }:
+{ config, pkgs, lib, modulesPath, ... }:
 
 {
   imports = [
+     "${toString modulesPath}/virtualisation/virtualbox-image.nix"
   ];
 
-  fileSystems = {
-    "/" = {
-      device = "/dev/disk/by-label/nixos";
-      fsType = "ext4";
-    };
-  };
+  # fileSystems = {
+  #   "/" = {
+  #     device = "/dev/disk/by-label/nixos";
+  #     fsType = "ext4";
+  #   };
+  # };
   # fileSystems = {
     # "/" = {
     #   device = "/dev/sda2";
