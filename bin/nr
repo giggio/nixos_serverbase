@@ -122,7 +122,7 @@ _nr() {
       echo -e "\e[32mRunning:\e[0m \e[34mnixos-rebuild switch $* --flake $nixos_config_dir?submodules=1$profile_arg ${verbose_args[*]}"
     fi
     if $dry_run; then
-      echo -e "\e[32mWould run:\e[0m \e[34mnixos-rebuild switch $* --flake $nixos_config_dir?submodules=1$profile_arg ${verbose_args[*]}"
+      echo -e "\e[32mWould run:\e[34m nixos-rebuild switch $* --flake $nixos_config_dir?submodules=1$profile_arg ${verbose_args[*]}\e[0m"
     else
       nixos-rebuild switch "$@" --flake "$nixos_config_dir?submodules=1$profile_arg" "${verbose_args[@]}"
     fi
@@ -131,7 +131,7 @@ _nr() {
       echo -e "\e[32mRunning:\e[0m \e[34mnixos-rebuild $*"
     fi
     if $dry_run; then
-      echo -e "\e[32mWould run:\e[0m \e[34mnixos-rebuild $*"
+      echo -e "\e[32mWould run:\e[34m nixos-rebuild $*\e[0m"
     else
       nixos-rebuild "$@"
     fi
