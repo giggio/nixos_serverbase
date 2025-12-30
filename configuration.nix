@@ -56,21 +56,25 @@ in
       };
 
     };
-    services.renderIssue = {
-      description = "Render login issue (IP)";
-      wantedBy = [ "multi-user.target" ];
+    services.issue_append_ip = let
+      print_ip = pkgs.writeShellApplication {
+        name = "print_ip";
+        runtimeInputs = (with pkgs; [ coreutils gawk iproute2 ]);
+        text = ''
+          mkdir -p /run/issue.d
+          echo -e "\e[32mIP: $(ip -4 route get 1.1.1.1 | awk '{print $7}')\e[0m\n" \
+            > /run/issue.d/90-ip.issue
+        '';
+      };
+    in
+    {
+      description = "Render IP in login issue";
+      wantedBy = [ "getty.target" ];
       before = [ "getty.target" ];
+      after = [ "network-online.target" ];
       serviceConfig = {
         Type = "oneshot";
-        ExecStart = ''
-          ${pkgs.bash}/bin/bash -c '
-          mkdir -p /run/issue.d
-          # printf "IP: %s\n" "$(${pkgs.iproute2}/bin/ip -4 route get 1.1.1.1 2>/dev/null | ${pkgs.gawk}/bin/awk "{print \\$7; exit}")" \
-            # > /run/issue.d/90-ip.issue
-          echo -e "\e[32mIP: $(${pkgs.iproute2}/bin/ip -4 route get 1.1.1.1 | ${pkgs.gawk}/bin/awk '{print $7}')\e[0m\n" \
-            > /run/issue.d/90-ip.issue
-          '
-        '';
+        ExecStart = "${print_ip}/bin/print_ip";
       };
     };
     user = {
