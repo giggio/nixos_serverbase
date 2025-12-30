@@ -59,25 +59,65 @@ in
       };
 
     };
-    services.issue_append_ip = let
-      print_ip = pkgs.writeShellApplication {
-        name = "print_ip";
-        runtimeInputs = (with pkgs; [ coreutils gawk iproute2 ]);
-        text = ''
-          mkdir -p /run/issue.d
-          echo -e "\e[32mIP: $(ip -4 route get 1.1.1.1 | awk '{print $7}')\e[0m\n" \
-            > /run/issue.d/90-ip.issue
-        '';
+    services = {
+      issue_append_ip = let
+        print_ip = pkgs.writeShellApplication {
+          name = "print_ip";
+          runtimeInputs = (with pkgs; [ coreutils gawk iproute2 ]);
+          text = ''
+            mkdir -p /run/issue.d
+            echo -e "\e[32mIP: $(ip -4 route get 1.1.1.1 | awk '{print $7}')\e[0m\n" \
+              > /run/issue.d/90-ip.issue
+          '';
+        };
+      in
+      {
+        description = "Render IP in login issue";
+        wantedBy = [ "getty.target" ];
+        before = [ "getty.target" ];
+        after = [ "network-online.target" ];
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = "${print_ip}/bin/print_ip";
+        };
       };
-    in
-    {
-      description = "Render IP in login issue";
-      wantedBy = [ "getty.target" ];
-      before = [ "getty.target" ];
-      after = [ "network-online.target" ];
-      serviceConfig = {
-        Type = "oneshot";
-        ExecStart = "${print_ip}/bin/print_ip";
+      clone-vimfiles = {
+        description = "Clone vimfiles into ~/.vim if missing";
+        wantedBy = [ "multi-user.target" ];
+
+        unitConfig = {
+          ConditionPathExists = "!/home/giggio/.vim";
+          After = [ "network-online.target" ];
+          Wants = [ "network-online.target" ];
+          RequiresMountsFor = [ "/home/giggio" ];
+        };
+
+        serviceConfig = {
+          Type = "oneshot";
+          User = "giggio";
+          WorkingDirectory = "/home/giggio";
+          Environment = "HOME=/home/giggio";
+          ExecStart = let
+            clone_vimfiles = pkgs.writeShellApplication {
+              name = "clone_vimfiles";
+              runtimeInputs = (with pkgs; [ coreutils git ]);
+              text = ''
+                echo "Cloning vimfiles via HTTPS..."
+                git clone --recurse-submodules https://github.com/giggio/vimfiles.git /home/giggio/.vim
+                echo "Cloning done, now removing $HOME/.config/nvim..."
+                rm -rf "$HOME/.config/nvim"
+                echo "Removal done, now symlinking to $HOME/.vim to $HOME/.config/nvim..."
+                ln -s "$HOME/.vim" "$HOME/.config/nvim"
+                cd /home/giggio/.vim
+                echo "Switching origin to SSH..."
+                git remote set-url origin git@github.com:giggio/vimfiles.git
+                git submodule sync
+                echo "Done Switching."
+              '';
+            };
+          in
+            "${clone_vimfiles}/bin/clone_vimfiles";
+        };
       };
     };
     user = {
