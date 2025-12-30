@@ -10,6 +10,7 @@ let
   };
 in
 rec {
+  imports = [ ];
   programs = {
     bash = {
       enable = true;
@@ -225,36 +226,13 @@ rec {
     configFile = {
       "starship.toml".source = ./config/starship.toml;
       "git".source = ./config/git;
+      "nixos-secrets/.keep".text = ""; # ensure the directory exists so the build can work (see flakes.nix inputs)
     };
   };
 
   systemd = {
     user = {
-      services = {
-        clone-nixos-config = let
-          clone_script = import ./clone-script.nix { inherit pkgs; };
-          home = "/home/${setup.user}";
-          destination_dir = "/home/${setup.user}/nixos";
-          repo="git@github.com:giggio/nixos_serverbase.git";
-        in  {
-          Unit = {
-            Description = "Clone NixOS config ~/.config/nixos if missing";
-            After = [ "network-online.target" ];
-            Wants = [ "network-online.target" ];
-            ConditionPathExists = "!${destination_dir}";
-          };
-          Install = {
-            WantedBy = [ "default.target" ];
-          };
-
-          Service = {
-            Type = "oneshot";
-            ExecStart = ''
-              ${clone_script}/bin/clone "${repo}" "${destination_dir}"
-            '';
-          };
-        };
-      };
+      services = { };
     };
   };
 }

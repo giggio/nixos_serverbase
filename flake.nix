@@ -16,17 +16,27 @@
       url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    sops-nix = {
+      url = "github:Mic92/sops-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+    nixos-secrets = {
+      url = "path:/home/giggio/.config/nixos-secrets";
+      flake = false;
+    };
   };
 
-  outputs = inputs@{ nixpkgs, home-manager, nixos-hardware, nixos-generators, ... }:
+  outputs = inputs@{ nixpkgs, home-manager, nixos-hardware, nixos-generators, sops-nix, ... }:
     let
       lib = nixpkgs.lib;
       setup = {
-        virtualbox = false;
         user = "giggio";
+        virtualbox = false;
+        isBuildingImage = false;
       };
       baseModules = [
         ./configuration.nix
+        sops-nix.nixosModules.sops
         home-manager.nixosModules.home-manager
         {
           home-manager = {
@@ -34,6 +44,7 @@
             useUserPackages = true;
             users.${setup.user} = ./home.nix;
             extraSpecialArgs = { inherit setup; };
+            sharedModules = [ ];
           };
         }
       ];
@@ -59,7 +70,9 @@
           specialArgs = { setup = setup // { virtualbox = true; }; };
         };
       };
-      packages.x86_64-linux = {
+      packages.x86_64-linux = let
+        packagingSetup = setup // { isBuildingImage = true; };
+      in  {
         vbox = nixos-generators.nixosGenerate {
           system = "x86_64-linux";
           format = "virtualbox";
@@ -71,7 +84,7 @@
               };
             }
           ];
-          specialArgs = baseSpecialArgs // { setup = setup // { virtualbox = true; }; };
+          specialArgs = baseSpecialArgs // { setup = packagingSetup // { virtualbox = true; }; };
         };
       };
     };

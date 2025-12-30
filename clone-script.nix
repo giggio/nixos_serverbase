@@ -9,6 +9,9 @@ pkgs.writeShellApplication {
       local destination_dir=""
       local symlink_dir=""
       local private_git_origin=""
+      local https_user_file=""
+      local https_password_file=""
+      local chown=""
       local dry_run=false
       while [[ $# -gt 0 ]]; do
         case "$1" in
@@ -31,6 +34,33 @@ pkgs.writeShellApplication {
             exit 1
           fi
           private_git_origin="$2"
+          shift
+          shift
+          ;;
+        --https-user-file|-U)
+          if [ ! -v 2 ]; then
+            echo -e "\e[31mNo value provided for https user.\e[0m" >&2
+            exit 1
+          fi
+          https_user_file="$2"
+          shift
+          shift
+          ;;
+        --https-password-file|-P)
+          if [ ! -v 2 ]; then
+            echo -e "\e[31mNo value provided for https password.\e[0m" >&2
+            exit 1
+          fi
+          https_password_file="$2"
+          shift
+          shift
+          ;;
+        --chown)
+          if [ ! -v 2 ]; then
+            echo -e "\e[31mNo value provided for chown.\e[0m" >&2
+            exit 1
+          fi
+          chown="$2"
           shift
           shift
           ;;
@@ -58,6 +88,15 @@ pkgs.writeShellApplication {
       if [ -z "$destination_dir" ]; then
         echo -e "\e[31mThe destination directory was not provided.\e[0m" >&2
         exit 1
+      fi
+      if ! [ -z "$https_user_file" ] && ! [ -z "$https_password_file" ] && [[ $clone_url == https://* ]]; then
+        local auth
+        auth="$(cat "$https_user_file"):$(cat "$https_password_file")"
+        local original_clone_url="$clone_url"
+        clone_url="https://$auth@''${clone_url#https://}"
+        if [ -z "$private_git_origin" ]; then
+          private_git_origin="$original_clone_url"
+        fi
       fi
       echo "Cloning..."
       if $dry_run; then
@@ -90,6 +129,15 @@ pkgs.writeShellApplication {
         else
           git remote set-url origin "$private_git_origin"
           git submodule sync
+        fi
+        echo "Done switching origin."
+      fi
+      if ! [ -z "$chown" ]; then
+        echo "Changing owner for $destination_dir to $chown..."
+        if $dry_run; then
+          echo -e "\e[32mWould run:\e[34m chown -R $chown $destination_dir\e[0m"
+        else
+          chown -R "$chown" "$destination_dir"
         fi
         echo "Done switching origin."
       fi

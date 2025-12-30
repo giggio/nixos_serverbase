@@ -12,6 +12,7 @@ in
     [
       ./cachix.nix
       ./clone-config.nix
+      ./secrets.nix
       # Include the results of the hardware scan.
       # ./hardware-configuration.nix
     ] ++ lib.lists.optionals (setup.virtualbox) [
@@ -145,6 +146,12 @@ in
     python3
     gcc
   ];
+
+  environment.etc."sops/age/server.agekey" = {
+    enable = setup.isBuildingImage;
+    source = "${inputs.nixos-secrets}/server.agekey";
+    mode = "0400";
+  };
 
   programs = {
     neovim = {

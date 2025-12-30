@@ -1,0 +1,10 @@
+keys:
+  - &giggio 275F6749AFD2379D1033548C1237AB122E6F4761 # this is the gpg key from yubikey
+  - &pi4 age1upyqeu440lchyjhr2742ahjydr5qzcfydvl85za7fh28hfd7rddqrw30s9 # generate with: nix shell nixpkgs#age -c age-keygen -o ./server.agekey
+creation_rules:
+  - path_regex: secrets/[^/]+\.(yaml|json|env|ini)$
+    key_groups:
+    - pgp:
+      - *giggio
+      age:
+      - *pi4
