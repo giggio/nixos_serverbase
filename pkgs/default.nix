@@ -10,4 +10,6 @@ with pkgs;
     busted # Elegant Lua unit testing # https://lunarmodules.github.io/busted/
     luasystem # Platform independent system calls for Lua https://github.com/lunarmodules/luasystem
   ]));
+  # rust-toolchain-fenix = fenix.stable.withComponents [ "cargo" "clippy" "rust-src" "rustc" "rustfmt" ]; # or fenix.complete.defaultToolchain, or beta. Rust toolchains.
+  rust-toolchain-fenix = fenix.stable.defaultToolchain; # or fenix.complete.defaultToolchain, or beta. Rust toolchains.
 }

@@ -90,6 +90,8 @@ rec {
           bashSessionVariables = {
             # environment variables to add only to .bashrc
             PATH = "$HOME/.local/bin:$PATH"; # this is here so it is added before the other paths
+            LUA_PATH = "\"${pkgs.mylua}/share/lua/5.1/?.lua;${pkgs.mylua}/share/lua/5.1/?/init.lua;$HOME/.luarocks/share/lua/5.1/?.lua;$HOME/.luarocks/share/lua/5.1/?/init.lua;$LUA_PATH;;\"";
+            LUA_CPATH = "\"${pkgs.mylua}/lib/lua/5.1/?.so;$HOME/.luarocks/lib/lua/5.1/?.so;$LUA_CPATH;;\"";
           };
         in
           lib.concatStringsSep "\n" (lib.concatLists [
@@ -140,6 +142,22 @@ rec {
           trust = "ultimate";
         }
       ];
+    };
+
+    starship.enable = true;
+
+    direnv = {
+      enable = true;
+      nix-direnv.enable = true;
+      config = {
+        global = {
+          hide_env_diff = true;
+        };
+      };
+    };
+
+    zoxide = {
+      enable = true;
     };
 
   };
@@ -199,13 +217,13 @@ rec {
           set bell-style none
         '';
       ".vimrc".text = "source ~/.vim/init.vim";
-      ".vim".source = ./vimfiles;
     };
 
   };
   xdg = {
     configFile = {
-      "nvim".source = ./vimfiles;
+      "starship.toml".source = ./config/starship.toml;
+      "git".source = ./config/git;
     };
   };
 }

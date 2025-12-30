@@ -12,6 +12,10 @@
       url = "github:nix-community/nixos-generators";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    fenix = {
+      url = "github:nix-community/fenix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs = inputs@{ nixpkgs, home-manager, nixos-hardware, nixos-generators, ... }:
@@ -27,6 +31,7 @@
           home-manager.extraSpecialArgs = { };
         }
       ];
+      baseSpecialArgs = { inherit inputs; };
       mkNixosSystem = { specialArgs, ... }: let
         modules = baseModules ++ (if specialArgs.setup.virtualbox then [
         ] else [
@@ -35,7 +40,7 @@
       in nixpkgs.lib.nixosSystem {
         system = "aarch64-linux";
         modules = modules;
-        specialArgs = { } // specialArgs;
+        specialArgs = baseSpecialArgs // specialArgs;
       };
       setup = {
         virtualbox = false;
@@ -63,7 +68,7 @@
               };
             }
           ];
-          specialArgs = { setup = setup // { virtualbox = true; }; };
+          specialArgs = baseSpecialArgs // { setup = setup // { virtualbox = true; }; };
         };
       };
     };
