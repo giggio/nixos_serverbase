@@ -217,6 +217,7 @@ rec {
           set bell-style none
         '';
       ".vimrc".text = "source ~/.vim/init.vim";
+      ".local/bin/nr".source = ./bin/nr;
     };
 
   };

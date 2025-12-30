@@ -4,17 +4,34 @@ if (return 0 2>/dev/null); then
   >&2 echo -e "\e[31mThis script should not be sourced.\e[0m"
   return 1
 fi
-if [ "$EUID" != "0" ]; then
-  >&2 echo -e "\e[31mPlease run this script as root.\e[0m"
-  exit 1
-fi
+
 set -euo pipefail
 
-_nr() {
+run_checks() {
+  if [ "$EUID" != "0" ]; then
+    >&2 echo -e "\e[31mPlease run this script as root.\e[0m"
+    exit 1
+  fi
+  if [ "$(grep ^ID= /etc/os-release | cut -d'=' -f2)" != nixos ]; then
+    >&2 echo -e "\e[31mOnly run this command on NixOS.\e[0m"
+    exit 1
+  fi
+  if ! [ -v SUDO_USER ]; then
+    >&2 echo -e "\e[31mThis command has to be run with sudo so we can identity the user.\e[0m"
+    exit 1
+  fi
+}
+
+get_generic_profile() {
   local product_name
-  product_name=$(cat /sys/devices/virtual/dmi/id/product_name)
-  if [ "$product_name" == "VirtualBox" ]; then
-    local is_virtualbox=true
+  if [ -f /sys/devices/virtual/dmi/id/product_name ]; then
+    local product_name
+    product_name=$(cat /sys/devices/virtual/dmi/id/product_name)
+    if [ "$product_name" == "VirtualBox" ]; then
+      local is_virtualbox=true
+    else
+      local is_virtualbox=false
+    fi
   else
     local is_virtualbox=false
   fi
@@ -23,23 +40,102 @@ _nr() {
   if $is_virtualbox; then
     profile+=_virtualbox
   fi
-  local args=("$@")
+  echo $profile
+}
+
+_nr() {
+  local get_profile=false
   local verbose=false
+  local switch=false
+  local dry_run=false
+  local forward_args=()
+  local profile=''
   while [[ $# -gt 0 ]]; do
     case "$1" in
     --verbose)
       verbose=true
       shift
       ;;
+    --dry-run)
+      dry_run=true
+      shift
+      ;;
+    --get-profile)
+      get_profile=true
+      shift
+      ;;
+    switch)
+      switch=true
+      shift
+      ;;
     *)
+      forward_args+=("$1")
       shift
       ;;
     esac
   done
-  if $verbose; then
-    echo -e "\e[32mRunning:\e[0m \e[34mnixos-rebuild \e[0m--flake /home/$SUDO_USER/p/nixos?submodules=1#$profile ${args[*]}"
+  set -- "${forward_args[@]}" # reset arguments
+  case $(hostname) in
+  a_host | another_host) ;; # todo: add profiles
+  *)
+    echo -e "\e[33mThis host does not have a specific profile, so it will run using the generic profile rules.\e[0m"
+    profile=$(get_generic_profile)
+    ;;
+  esac
+  if $get_profile; then
+    if [ -z "$profile" ]; then
+      echo -e "This host has specific configuration, so the hostname will be used as the profile: \e[32m$(hostname)\e[0m."
+    else
+      echo "$profile"
+    fi
+    return
   fi
-  nixos-rebuild --flake "/home/$SUDO_USER/p/nixos?submodules=1#$profile" "${args[@]}"
+  if $dry_run; then
+    if ! [ -v SUDO_USER ]; then
+      local SUDO_USER
+      SUDO_USER=$(whoami)
+    fi
+  else
+    run_checks
+  fi
+  local user_env
+  if $dry_run && [ "$EUID" != "0" ]; then
+    user_env=$(env)
+  else
+    user_env=$(su - "$SUDO_USER" -c env)
+  fi
+  if $switch; then
+    local user_config_home
+    user_config_home="$(echo "$user_env" | awk -F= '$1=="XDG_CONFIG_HOME"{print substr($0, index($0,$2))}')"
+    if [ -z "$user_config_home" ]; then
+      user_config_home="/home/$SUDO_USER/.config"
+    fi
+    local nixos_config_dir
+    nixos_config_dir="$user_config_home/nixos"
+    local verbose_args=()
+    local profile_arg=''
+    if ! [ -z "$profile" ]; then
+      profile_arg="#$profile"
+    fi
+    if $verbose; then
+      verbose_args+=(--print-build-logs)
+      echo -e "\e[32mRunning:\e[0m \e[34mnixos-rebuild switch $* --flake $nixos_config_dir?submodules=1$profile_arg ${verbose_args[*]}"
+    fi
+    if $dry_run; then
+      echo -e "\e[32mWould run:\e[0m \e[34mnixos-rebuild switch $* --flake $nixos_config_dir?submodules=1$profile_arg ${verbose_args[*]}"
+    else
+      nixos-rebuild switch "$@" --flake "$nixos_config_dir?submodules=1$profile_arg" "${verbose_args[@]}"
+    fi
+  else
+    if $verbose; then
+      echo -e "\e[32mRunning:\e[0m \e[34mnixos-rebuild $*"
+    fi
+    if $dry_run; then
+      echo -e "\e[32mWould run:\e[0m \e[34mnixos-rebuild $*"
+    else
+      nixos-rebuild "$@"
+    fi
+  fi
 }
 
 _nr "$@"
