@@ -1,7 +1,7 @@
 { pkgs, ... }:
 pkgs.writeShellApplication {
   name = "clone";
-  runtimeInputs = (with pkgs; [ coreutils git ]);
+  runtimeInputs = (with pkgs; [ coreutils git openssh ]);
   text = ''
     set -euo pipefail
     _clone() {
