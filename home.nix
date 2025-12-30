@@ -162,7 +162,7 @@ rec {
 
   };
   home = {
-    username = "giggio";
+    username = setup.user;
     homeDirectory = "/home/" + home.username;
     stateVersion = "25.11"; # Check if there are state version changes before changing this fiels: https://nix-community.github.io/home-manager/release-notes.xhtml
     preferXdgDirectories = true;

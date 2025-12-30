@@ -11,9 +11,9 @@ in
   imports =
     [
       ./cachix.nix
+      ./clone-config.nix
       # Include the results of the hardware scan.
       # ./hardware-configuration.nix
-      # ./clone-config.nix
     ] ++ lib.lists.optionals (setup.virtualbox) [
       ./vm.nix
     ];
@@ -82,49 +82,11 @@ in
           ExecStart = "${print_ip}/bin/print_ip";
         };
       };
-      clone-vimfiles = {
-        description = "Clone vimfiles into ~/.vim if missing";
-        wantedBy = [ "multi-user.target" ];
-
-        unitConfig = {
-          ConditionPathExists = "!/home/giggio/.vim";
-          After = [ "network-online.target" ];
-          Wants = [ "network-online.target" ];
-          RequiresMountsFor = [ "/home/giggio" ];
-        };
-
-        serviceConfig = {
-          Type = "oneshot";
-          User = "giggio";
-          WorkingDirectory = "/home/giggio";
-          Environment = "HOME=/home/giggio";
-          ExecStart = let
-            clone_vimfiles = pkgs.writeShellApplication {
-              name = "clone_vimfiles";
-              runtimeInputs = (with pkgs; [ coreutils git ]);
-              text = ''
-                echo "Cloning vimfiles via HTTPS..."
-                git clone --recurse-submodules https://github.com/giggio/vimfiles.git /home/giggio/.vim
-                echo "Cloning done, now removing $HOME/.config/nvim..."
-                rm -rf "$HOME/.config/nvim"
-                echo "Removal done, now symlinking to $HOME/.vim to $HOME/.config/nvim..."
-                ln -s "$HOME/.vim" "$HOME/.config/nvim"
-                cd /home/giggio/.vim
-                echo "Switching origin to SSH..."
-                git remote set-url origin git@github.com:giggio/vimfiles.git
-                git submodule sync
-                echo "Done Switching."
-              '';
-            };
-          in
-            "${clone_vimfiles}/bin/clone_vimfiles";
-        };
-      };
     };
     user = {
       tmpfiles = {
         enable = true;
-        users.giggio.rules = [
+        users.${setup.user}.rules = [
           "d /run/user/1000/gnupg 0700 1000 1000 -"
         ];
       };
@@ -148,7 +110,7 @@ in
     };
   };
 
-  users.users.giggio = {
+  users.users.${setup.user} = {
     hashedPassword = "$y$j9T$uFrz8gHZsyL7Jo1iCC/ky.$lVYuZPrYGtrxbP564V49AO.HraNu8fqRWVtiXLVrUkD"; # generate with: nix run nixpkgs#mkpasswd -- -m yescrypt
     isNormalUser = true;
     description = "Giovanni Bassi";

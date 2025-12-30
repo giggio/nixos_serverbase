@@ -1,30 +1,49 @@
-{ config, pkgs, lib, ... }:
+{ config, pkgs, lib, setup, ... }:
 
 let
-  repoUrl = "https://github.com/giggio/your-nixos-flake.git";
+  foo = 1;
 in
 {
-  systemd.services.clone-nixos-config = {
-    description = "Clone the flake into /etc/nixos if absent";
-    wantedBy = [ "multi-user.target" ];
-    serviceConfig = {
-      Type = "oneshot";
-      ExecStart = ''
-        ${pkgs.bash}/bin/bash -eux -o pipefail -c '
-          if [ ! -d /etc/nixos ] || [ -z "$(ls -A /etc/nixos 2>/dev/null || true)" ]; then
-            rm -rf /etc/nixos
-            ${pkgs.git}/bin/git clone --recurse-submodules ${repoUrl} /etc/nixos
-            chown -R root:root /etc/nixos
-          fi
-        '
-      '';
-      RemainAfterExit = true;
-    };
-    # only run if /etc/nixos is missing or empty (negated condition)
-    unitConfig = {
-      ConditionPathExists = "!/etc/nixos";
+  systemd = {
+    services = {
+      clone-vimfiles = {
+        description = "Clone vimfiles into ~/.vim if missing";
+        wantedBy = [ "multi-user.target" ];
+
+        unitConfig = {
+          ConditionPathExists = "!/home/${setup.user}/.vim";
+          After = [ "network-online.target" ];
+          Wants = [ "network-online.target" ];
+          RequiresMountsFor = [ "/home/${setup.user}" ];
+        };
+
+        serviceConfig = {
+          Type = "oneshot";
+          User = setup.user;
+          WorkingDirectory = "/home/${setup.user}";
+          Environment = "HOME=/home/${setup.user} REPO=giggio/vimfiles.git";
+          ExecStart = let
+            clone_vimfiles = pkgs.writeShellApplication {
+              name = "clone_vimfiles";
+              runtimeInputs = (with pkgs; [ coreutils git ]);
+              text = ''
+                echo "Cloning vimfiles via HTTPS..."
+                git clone --recurse-submodules "https://github.com/$REPO" "$HOME/.vim"
+                echo "Cloning done, now removing $HOME/.config/nvim..."
+                rm -rf "$HOME/.config/nvim"
+                echo "Removal done, now symlinking to $HOME/.vim to $HOME/.config/nvim..."
+                ln -s "$HOME/.vim" "$HOME/.config/nvim"
+                cd "$HOME/.vim"
+                echo "Switching origin to SSH..."
+                git remote set-url origin "git@github.com:$REPO"
+                git submodule sync
+                echo "Done Switching."
+              '';
+            };
+          in
+            "${clone_vimfiles}/bin/clone_vimfiles";
+        };
+      };
     };
   };
-
-  systemd.targets.multi-user.wants = [ "clone-nixos-config.service" ];
 }

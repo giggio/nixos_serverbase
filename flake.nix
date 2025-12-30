@@ -21,14 +21,20 @@
   outputs = inputs@{ nixpkgs, home-manager, nixos-hardware, nixos-generators, ... }:
     let
       lib = nixpkgs.lib;
+      setup = {
+        virtualbox = false;
+        user = "giggio";
+      };
       baseModules = [
         ./configuration.nix
         home-manager.nixosModules.home-manager
         {
-          home-manager.useGlobalPkgs = true;
-          home-manager.useUserPackages = true;
-          home-manager.users.giggio = ./home.nix;
-          home-manager.extraSpecialArgs = { };
+          home-manager = {
+            useGlobalPkgs = true;
+            useUserPackages = true;
+            users.${setup.user} = ./home.nix;
+            extraSpecialArgs = { inherit setup; };
+          };
         }
       ];
       baseSpecialArgs = { inherit inputs; };
@@ -41,9 +47,6 @@
         system = "aarch64-linux";
         modules = modules;
         specialArgs = baseSpecialArgs // specialArgs;
-      };
-      setup = {
-        virtualbox = false;
       };
     in
     {
