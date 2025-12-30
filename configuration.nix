@@ -75,6 +75,7 @@ in
         description = "Render IP in login issue";
         wantedBy = [ "getty.target" ];
         before = [ "getty.target" ];
+        wants = [ "network-online.target" ];
         after = [ "network-online.target" ];
         serviceConfig = {
           Type = "oneshot";
