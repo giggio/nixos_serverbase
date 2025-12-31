@@ -8,6 +8,12 @@ let
   fenix = inputs.fenix;
 in
 {
+  assertions = [
+    {
+      assertion = (!setup.isBuildingImage) || builtins.pathExists (inputs.nixos-secrets + "/server.agekey");
+      message = "Missing secret file in ${inputs.nixos-secrets}/server.agekey";
+    }
+  ];
   imports =
     [
       ./cachix.nix

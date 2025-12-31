@@ -97,8 +97,8 @@
     "nixos-secrets": {
       "flake": false,
       "locked": {
-        "lastModified": 1767135947,
-        "narHash": "sha256-pQpattmS9VmO3ZIQUFn66az8GSmB4IvYhTTCFn6SUmo=",
+        "lastModified": 1767190403,
+        "narHash": "sha256-P84SQkbF9Tj5XbZp9zg29nrHsKejzaK2CvovvoN4yJ8=",
         "path": "/home/giggio/.config/nixos-secrets",
         "type": "path"
       },
