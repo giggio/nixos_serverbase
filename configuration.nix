@@ -39,7 +39,7 @@ in
   boot = {
     loader = {
       systemd-boot.enable = false; # using grub and not UEFI
-      timeout = 5;
+      timeout = lib.mkDefault 5;
     };
   };
 
@@ -47,7 +47,7 @@ in
     hostName = "pitest";
     wireless.enable = false;  # enables/disables wireless support via wpa_supplicant.
     useNetworkd = true;
-    networkmanager.enable = false; # using systemd-networkd
+    networkmanager.enable = lib.mkForce false; # using systemd-networkd
     useDHCP = lib.mkDefault true;
   };
 
