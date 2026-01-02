@@ -32,7 +32,6 @@
       setup = {
         user = "giggio";
         virtualbox = false;
-        isBuildingImage = false;
       };
       baseModules = [
         ./configuration.nix
@@ -66,7 +65,7 @@
       formatter.x86_64-linux = nixpkgs.legacyPackages.x86_64-linux.nixpkgs-fmt; # todo: remove x86_64-linux
       images.pi4 = (mkNixosSystem {
           system = "aarch64-linux";
-          specialArgs = { setup = setup // { isBuildingImage = true; }; };
+          specialArgs = { inherit setup; };
         }).config.system.build.sdImage;
       nixosConfigurations = {
         nixos = mkNixosSystem {
@@ -79,7 +78,7 @@
         };
       };
       packages.x86_64-linux = let
-        packagingSetup = setup // { isBuildingImage = true; };
+        packagingSetup = setup;
       in  {
         vbox = nixos-generators.nixosGenerate {
           system = "x86_64-linux";
