@@ -4,6 +4,41 @@ pkgs.writeShellApplication {
   runtimeInputs = (with pkgs; [ coreutils git openssh ]);
   text = ''
     set -euo pipefail
+    chown_parent_dir() {
+      if ! [ -v 1 ]; then
+        echo "No directory provided."
+        exit 1
+      fi
+      if ! [ -v 2 ]; then
+        echo "No chown provided."
+        exit 1
+      fi
+      if ! [ -v 3 ]; then
+        echo "No dry-run provided."
+        exit 1
+      fi
+      local dir="$1"
+      local chown="$2"
+      local dry_run="$3"
+      local parent_dir
+      parent_dir=$(dirname "$dir")
+      if ! [ -z "$chown" ] && ! [ -d "$parent_dir" ]; then
+        echo "Creating parent dir $parent_dir..."
+        if $dry_run; then
+          echo -e "\e[32mWould run:\e[34m mkdir -p $parent_dir\e[0m"
+        else
+          mkdir -p "$parent_dir"
+        fi
+        echo "Creation done."
+        echo "Changing owner for $parent_dir to $chown..."
+        if $dry_run; then
+          echo -e "\e[32mWould run:\e[34m chown -R $chown $parent_dir\e[0m"
+        else
+          chown -R "$chown" "$parent_dir"
+        fi
+        echo "Done changing owner."
+      fi
+    }
     _clone() {
       local clone_url=""
       local destination_dir=""
@@ -98,6 +133,7 @@ pkgs.writeShellApplication {
           private_git_origin="$original_clone_url"
         fi
       fi
+      chown_parent_dir "$destination_dir" "$chown" "$dry_run"
       echo "Cloning..."
       if $dry_run; then
         echo -e "\e[32mWould run:\e[34m git clone --recurse-submodules $clone_url $destination_dir\e[0m"
@@ -112,11 +148,21 @@ pkgs.writeShellApplication {
         else
           rm -rf "$symlink_dir"
         fi
+        chown_parent_dir "$symlink_dir" "$chown" "$dry_run"
         echo "Removal done, now symlinking $destination_dir to $symlink_dir..."
         if $dry_run; then
           echo -e "\e[32mWould run:\e[34m ln -s $destination_dir $symlink_dir\e[0m"
         else
           ln -s "$destination_dir" "$symlink_dir"
+        fi
+        if ! [ -z "$chown" ]; then
+          echo "Changing owner for $symlink_dir to $chown..."
+          if $dry_run; then
+            echo -e "\e[32mWould run:\e[34m chown -R $chown $symlink_dir\e[0m"
+          else
+            chown -R "$chown" "$symlink_dir"
+          fi
+          echo "Done changing owner."
         fi
         echo "Symlinking done."
       fi
@@ -139,7 +185,7 @@ pkgs.writeShellApplication {
         else
           chown -R "$chown" "$destination_dir"
         fi
-        echo "Done switching origin."
+        echo "Done changing owner."
       fi
     }
     _clone "$@"

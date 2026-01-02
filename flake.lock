@@ -112,19 +112,6 @@
         "type": "github"
       }
     },
-    "nixos-secrets": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1767190403,
-        "narHash": "sha256-P84SQkbF9Tj5XbZp9zg29nrHsKejzaK2CvovvoN4yJ8=",
-        "path": "/home/giggio/.config/nixos-secrets",
-        "type": "path"
-      },
-      "original": {
-        "path": "/home/giggio/.config/nixos-secrets",
-        "type": "path"
-      }
-    },
     "nixpkgs": {
       "locked": {
         "lastModified": 1767047869,
@@ -148,7 +135,6 @@
         "home-manager": "home-manager",
         "nixos-generators": "nixos-generators",
         "nixos-hardware": "nixos-hardware",
-        "nixos-secrets": "nixos-secrets",
         "nixpkgs": "nixpkgs",
         "sops-nix": "sops-nix"
       }

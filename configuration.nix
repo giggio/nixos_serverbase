@@ -8,12 +8,6 @@ let
   fenix = inputs.fenix;
 in
 {
-  assertions = [
-    {
-      assertion = builtins.pathExists (inputs.nixos-secrets + "/server.agekey");
-      message = "Missing secret file in ${inputs.nixos-secrets}/server.agekey";
-    }
-  ];
   imports =
     [
       ./cachix.nix
@@ -37,6 +31,19 @@ in
   };
 
   boot = {
+    initrd = {
+      extraFiles."/bin/install_sops_key".source = pkgs.writeShellApplication {
+        name = "install-sops-key.sh";
+        runtimeInputs = with pkgs; [ "busybox" "bash" ];
+        text = (builtins.readFile ./scripts/install-sops-key.sh);
+      };
+      postMountCommands = ''
+        # run the script we placed into the initrd
+        if [ -x /bin/install_sops_key/bin/install-sops-key.sh ]; then
+          /bin/install_sops_key/bin/install-sops-key.sh || true
+        fi
+      '';
+    };
     loader = {
       systemd-boot.enable = false; # using grub and not UEFI
       timeout = lib.mkDefault 5;
@@ -132,10 +139,6 @@ in
 
   environment = {
     etc = {
-      "sops/age/server.agekey" = {
-        source = "${inputs.nixos-secrets}/server.agekey";
-        mode = "0400";
-      };
       "issue.d/extra.issue".text = ''
         NixOS \v
         \e{green}Machine:\e{reset} \n

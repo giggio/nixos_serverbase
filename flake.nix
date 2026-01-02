@@ -20,10 +20,6 @@
       url = "github:Mic92/sops-nix";
       inputs.nixpkgs.follows = "nixpkgs";
     };
-    nixos-secrets = {
-      url = "path:/home/giggio/.config/nixos-secrets";
-      flake = false;
-    };
     flake-utils.url = "github:numtide/flake-utils";
   };
 

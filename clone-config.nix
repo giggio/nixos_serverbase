@@ -6,30 +6,30 @@ in
 {
   systemd = {
     services = {
-      clone-vimfiles = {
+      clone-vimfiles = let
+        home = "/home/${setup.user}";
+        clone_dir = "${home}/.vim";
+        repo="giggio/vimfiles.git";
+      in  {
         description = "Clone vimfiles into ~/.vim if missing";
         wantedBy = [ "multi-user.target" ];
 
         unitConfig = {
-          ConditionPathExists = "!/home/${setup.user}/.vim";
+          ConditionPathExists = "!${clone_dir}";
           After = [ "network-online.target" ];
           Wants = [ "network-online.target" ];
-          RequiresMountsFor = [ "/home/${setup.user}" ];
+          RequiresMountsFor = [ home ];
           StartLimitIntervalSec = 600;
           StartLimitBurst = 10;
         };
 
         serviceConfig = {
           Type = "oneshot";
-          User = setup.user;
-          WorkingDirectory = "/home/${setup.user}";
-          ExecStart = let
-            home = "/home/${setup.user}";
-            repo="giggio/vimfiles.git";
-          in ''
-            ${clone_script}/bin/clone "https://github.com/${repo}" "${home}/.vim" \
+          ExecStart = ''
+            ${clone_script}/bin/clone "https://github.com/${repo}" "${clone_dir}" \
             --symlink "${home}/.config/nvim" \
-            --private-git-origin "git@github.com:${repo}"
+            --private-git-origin "git@github.com:${repo}" \
+            --chown "${setup.user}"
           '';
           Restart = "on-failure";
           RestartSec = 30;
