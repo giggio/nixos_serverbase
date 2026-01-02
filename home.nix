@@ -188,6 +188,7 @@ rec {
       XDG_DATA_HOME = "\${XDG_DATA_HOME:-$HOME/.local/share}";
       XDG_STATE_HOME = "\${XDG_STATE_HOME:-$HOME/.local/state}";
       XDG_CACHE_HOME = "\${XDG_CACHE_HOME:-$HOME/.cache}";
+      IS_SERVER = "1"; # used by vim/nvim to configure a leaner environment
     };
     sessionVariablesExtra = lib.mkOrder 2000 ''
       # this is from sessionVariablesExtra, and is loaded at the very end hm-session-vars.sh
