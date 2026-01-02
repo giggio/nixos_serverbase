@@ -66,30 +66,7 @@ in
       };
 
     };
-    services = {
-      issue_append_ip = let
-        print_ip = pkgs.writeShellApplication {
-          name = "print_ip";
-          runtimeInputs = (with pkgs; [ coreutils gawk iproute2 ]);
-          text = ''
-            mkdir -p /run/issue.d
-            echo -e "\e[32mIP: $(ip -4 route get 1.1.1.1 | awk '{print $7}')\e[0m\n" \
-              > /run/issue.d/90-ip.issue
-          '';
-        };
-      in
-      {
-        description = "Render IP in login issue";
-        wantedBy = [ "getty.target" ];
-        before = [ "getty.target" ];
-        wants = [ "network-online.target" ];
-        after = [ "network-online.target" ];
-        serviceConfig = {
-          Type = "oneshot";
-          ExecStart = "${print_ip}/bin/print_ip";
-        };
-      };
-    };
+    services = { };
     user = {
       tmpfiles = {
         enable = true;
@@ -153,9 +130,19 @@ in
     gcc
   ];
 
-  environment.etc."sops/age/server.agekey" = {
-    source = "${inputs.nixos-secrets}/server.agekey";
-    mode = "0400";
+  environment = {
+    etc = {
+      "sops/age/server.agekey" = {
+        source = "${inputs.nixos-secrets}/server.agekey";
+        mode = "0400";
+      };
+      "issue.d/extra.issue".text = ''
+        NixOS \v
+        \e{green}Machine:\e{reset} \n
+        \e{green}IP:\e{reset} \4
+        \e{green}Today is:\e{reset} \d \t
+      '';
+    };
   };
 
   programs = {
@@ -164,7 +151,6 @@ in
       defaultEditor = true;
     };
     git.enable = true;
-    # gnupg.agent.enable = true; # so that the socket paths at /run/user/1000/gnupg/ are created
   };
 
   services = {
