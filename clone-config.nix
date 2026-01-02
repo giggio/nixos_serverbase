@@ -15,6 +15,8 @@ in
           After = [ "network-online.target" ];
           Wants = [ "network-online.target" ];
           RequiresMountsFor = [ "/home/${setup.user}" ];
+          StartLimitIntervalSec = 600;
+          StartLimitBurst = 10;
         };
 
         serviceConfig = {
@@ -25,8 +27,12 @@ in
             home = "/home/${setup.user}";
             repo="giggio/vimfiles.git";
           in ''
-            ${clone_script}/bin/clone "https://github.com/${repo}" "${home}/.vim" --symlink "${home}/.config/nvim" --private-git-origin "git@github.com:${repo}"
+            ${clone_script}/bin/clone "https://github.com/${repo}" "${home}/.vim" \
+            --symlink "${home}/.config/nvim" \
+            --private-git-origin "git@github.com:${repo}"
           '';
+          Restart = "on-failure";
+          RestartSec = 30;
         };
       };
       clone-nixos-config = let
@@ -44,6 +50,8 @@ in
           After = [ "network-online.target" ];
           Wants = [ "network-online.target" ];
           RequiresMountsFor = [ "/home/${setup.user}" ];
+          StartLimitIntervalSec = 600;
+          StartLimitBurst = 10;
         };
 
         serviceConfig = {
@@ -55,6 +63,8 @@ in
             --https-password-file "${config.sops.secrets."gh_repo_clone/pat".path}" \
             --chown "${setup.user}"
           '';
+          Restart = "on-failure";
+          RestartSec = 30;
         };
       };
     };
