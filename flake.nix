@@ -45,37 +45,41 @@
         }
       ];
       baseSpecialArgs = { inherit inputs; };
-      mkNixosSystem = { specialArgs, system, ... }: let
-        modules = baseModules ++ (if specialArgs.setup.virtualbox then [
-        ] else [
-          "${nixpkgs}/nixos/modules/installer/sd-card/sd-image-aarch64.nix"
-          nixos-hardware.nixosModules.raspberry-pi-4
-          ./kernel-configuration.nix
-        ]);
-      in nixpkgs.lib.nixosSystem {
-        inherit system;
-        modules = modules;
-        specialArgs = baseSpecialArgs // specialArgs;
-      };
+      mkNixosSystem = { specialArgs, system, ... }:
+        let
+          modules = baseModules ++ (if specialArgs.setup.virtualbox then [
+          ] else [
+            "${nixpkgs}/nixos/modules/installer/sd-card/sd-image-aarch64.nix"
+            nixos-hardware.nixosModules.raspberry-pi-4
+            ./kernel-configuration.nix
+          ]);
+        in
+        nixpkgs.lib.nixosSystem {
+          inherit system;
+          modules = modules;
+          specialArgs = baseSpecialArgs // specialArgs;
+        };
     in
-      {
-        images.pi4 = (mkNixosSystem {
+    {
+      images.pi4 = (mkNixosSystem {
+        system = "aarch64-linux";
+        specialArgs = { inherit setup; };
+      }).config.system.build.sdImage;
+      nixosConfigurations = {
+        nixos = mkNixosSystem {
           system = "aarch64-linux";
           specialArgs = { inherit setup; };
-        }).config.system.build.sdImage;
-        nixosConfigurations = {
-          nixos = mkNixosSystem {
-            system = "aarch64-linux";
-            specialArgs = { inherit setup; };
-          };
-          nixos_virtualbox = mkNixosSystem {
-            system = "x86_64-linux";
-            specialArgs = { setup = setup // { virtualbox = true; }; };
-          };
         };
-        packages.x86_64-linux = let
+        nixos_virtualbox = mkNixosSystem {
+          system = "x86_64-linux";
+          specialArgs = { setup = setup // { virtualbox = true; }; };
+        };
+      };
+      packages.x86_64-linux =
+        let
           packagingSetup = setup;
-        in  {
+        in
+        {
           vbox = nixos-generators.nixosGenerate {
             system = "x86_64-linux";
             format = "virtualbox";
@@ -90,11 +94,12 @@
             specialArgs = baseSpecialArgs // { setup = packagingSetup // { virtualbox = true; }; };
           };
         };
-      } //
+    } //
     flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs { inherit system; };
-      in {
+      in
+      {
         formatter = pkgs.nixpkgs-fmt;
         devShells.default = pkgs.mkShell {
           name = "Image build environment";

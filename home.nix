@@ -95,24 +95,24 @@ rec {
             LUA_CPATH = "\"${pkgs.mylua}/lib/lua/5.1/?.so;$HOME/.luarocks/lib/lua/5.1/?.so;$LUA_CPATH;;\"";
           };
         in
-          lib.concatStringsSep "\n" (lib.concatLists [
-            [
-              ''
+        lib.concatStringsSep "\n" (lib.concatLists [
+          [
+            ''
               # beginning of .bashrc
 
               # Shell session variables:
-              ''
-            ]
-            (lib.mapAttrsToList (k: v: "export ${k}=${v}") shellSessionVariables)
-            [
-              ''
+            ''
+          ]
+          (lib.mapAttrsToList (k: v: "export ${k}=${v}") shellSessionVariables)
+          [
+            ''
 
               # Bash session variables:
               ''
-            ]
-            (lib.mapAttrsToList (k: v: "export ${k}=${v}") bashSessionVariables)
-            [
-              ''
+          ]
+          (lib.mapAttrsToList (k: v: "export ${k}=${v}") bashSessionVariables)
+          [
+            ''
 
               # beginning of .bashrc config
               unset MAILCHECK
@@ -128,9 +128,9 @@ rec {
 
               # beginning of nix configuration
               ''
-            ]
           ]
-          );
+        ]
+        );
 
 
 

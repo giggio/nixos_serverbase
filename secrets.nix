@@ -6,8 +6,8 @@
       generateKey = false;
     };
     secrets = {
-      "gh_repo_clone/user" = {};
-      "gh_repo_clone/pat" = {};
+      "gh_repo_clone/user" = { };
+      "gh_repo_clone/pat" = { };
     };
   };
 }

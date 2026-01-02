@@ -2,7 +2,7 @@
 
 {
   imports = [
-     "${toString modulesPath}/virtualisation/virtualbox-image.nix"
+    "${toString modulesPath}/virtualisation/virtualbox-image.nix"
   ];
 
   # fileSystems = {
@@ -12,17 +12,17 @@
   #   };
   # };
   # fileSystems = {
-    # "/" = {
-    #   device = "/dev/sda2";
-    #   fsType = "ext4";
-    # };
+  # "/" = {
+  #   device = "/dev/sda2";
+  #   fsType = "ext4";
+  # };
 
-    # "/boot" = {
-    #   # device = "/dev/sda1";
-    #   device = "/dev/disk/by-label/boot";
-    #   fsType = "vfat";
-    #   # options = [ "fmask=0022" "dmask=0022" ];
-    # };
+  # "/boot" = {
+  #   # device = "/dev/sda1";
+  #   device = "/dev/disk/by-label/boot";
+  #   fsType = "vfat";
+  #   # options = [ "fmask=0022" "dmask=0022" ];
+  # };
   # };
 
   nixpkgs.hostPlatform = lib.mkDefault "x86_64-linux";

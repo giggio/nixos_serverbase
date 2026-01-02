@@ -6,67 +6,71 @@ in
 {
   systemd = {
     services = {
-      clone-vimfiles = let
-        home = "/home/${setup.user}";
-        clone_dir = "${home}/.vim";
-        repo="giggio/vimfiles.git";
-      in  {
-        description = "Clone vimfiles into ~/.vim if missing";
-        wantedBy = [ "multi-user.target" ];
+      clone-vimfiles =
+        let
+          home = "/home/${setup.user}";
+          clone_dir = "${home}/.vim";
+          repo = "giggio/vimfiles.git";
+        in
+        {
+          description = "Clone vimfiles into ~/.vim if missing";
+          wantedBy = [ "multi-user.target" ];
 
-        unitConfig = {
-          ConditionPathExists = "!${clone_dir}";
-          After = [ "network-online.target" ];
-          Wants = [ "network-online.target" ];
-          RequiresMountsFor = [ home ];
-          StartLimitIntervalSec = 600;
-          StartLimitBurst = 10;
-        };
+          unitConfig = {
+            ConditionPathExists = "!${clone_dir}";
+            After = [ "network-online.target" ];
+            Wants = [ "network-online.target" ];
+            RequiresMountsFor = [ home ];
+            StartLimitIntervalSec = 600;
+            StartLimitBurst = 10;
+          };
 
-        serviceConfig = {
-          Type = "oneshot";
-          ExecStart = ''
-            ${clone_script}/bin/clone "https://github.com/${repo}" "${clone_dir}" \
-            --symlink "${home}/.config/nvim" \
-            --private-git-origin "git@github.com:${repo}" \
-            --chown "${setup.user}"
-          '';
-          Restart = "on-failure";
-          RestartSec = 30;
+          serviceConfig = {
+            Type = "oneshot";
+            ExecStart = ''
+              ${clone_script}/bin/clone "https://github.com/${repo}" "${clone_dir}" \
+              --symlink "${home}/.config/nvim" \
+              --private-git-origin "git@github.com:${repo}" \
+              --chown "${setup.user}"
+            '';
+            Restart = "on-failure";
+            RestartSec = 30;
+          };
         };
-      };
-      clone-nixos-config = let
+      clone-nixos-config =
+        let
           clone_script = import ./clone-script.nix { inherit pkgs; };
           home = "/home/${setup.user}";
           destination_dir = "/home/${setup.user}/.config/nixos";
-          https_repo="https://github.com/giggio/nixos_serverbase.git";
-          ssh_repo="git@github.com:giggio/nixos_serverbase.git";
-        in {
-        description = "Clone NixOS config ~/.config/nixos if missing";
-        wantedBy = [ "multi-user.target" ];
+          https_repo = "https://github.com/giggio/nixos_serverbase.git";
+          ssh_repo = "git@github.com:giggio/nixos_serverbase.git";
+        in
+        {
+          description = "Clone NixOS config ~/.config/nixos if missing";
+          wantedBy = [ "multi-user.target" ];
 
-        unitConfig = {
-          ConditionPathExists = "!${destination_dir}";
-          After = [ "network-online.target" ];
-          Wants = [ "network-online.target" ];
-          RequiresMountsFor = [ "/home/${setup.user}" ];
-          StartLimitIntervalSec = 600;
-          StartLimitBurst = 10;
-        };
+          unitConfig = {
+            ConditionPathExists = "!${destination_dir}";
+            After = [ "network-online.target" ];
+            Wants = [ "network-online.target" ];
+            RequiresMountsFor = [ "/home/${setup.user}" ];
+            StartLimitIntervalSec = 600;
+            StartLimitBurst = 10;
+          };
 
-        serviceConfig = {
-          Type = "oneshot";
-          ExecStart = ''
-            ${clone_script}/bin/clone "${https_repo}" "${destination_dir}" \
-            --private-git-origin "${ssh_repo}" \
-            --https-user-file "${config.sops.secrets."gh_repo_clone/user".path}" \
-            --https-password-file "${config.sops.secrets."gh_repo_clone/pat".path}" \
-            --chown "${setup.user}"
-          '';
-          Restart = "on-failure";
-          RestartSec = 30;
+          serviceConfig = {
+            Type = "oneshot";
+            ExecStart = ''
+              ${clone_script}/bin/clone "${https_repo}" "${destination_dir}" \
+              --private-git-origin "${ssh_repo}" \
+              --https-user-file "${config.sops.secrets."gh_repo_clone/user".path}" \
+              --https-password-file "${config.sops.secrets."gh_repo_clone/pat".path}" \
+              --chown "${setup.user}"
+            '';
+            Restart = "on-failure";
+            RestartSec = 30;
+          };
         };
-      };
     };
   };
 }

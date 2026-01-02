@@ -52,7 +52,7 @@ in
 
   networking = {
     hostName = "pitest";
-    wireless.enable = false;  # enables/disables wireless support via wpa_supplicant.
+    wireless.enable = false; # enables/disables wireless support via wpa_supplicant.
     useNetworkd = true;
     networkmanager.enable = lib.mkForce false; # using systemd-networkd
     useDHCP = lib.mkDefault true;
@@ -113,7 +113,8 @@ in
     ];
   };
 
-  environment.systemPackages = with pkgs; [ # search with: nix search wget
+  environment.systemPackages = with pkgs; [
+    # search with: nix search wget
     gnupg
     kitty # to add Kitty's terminfo
     neovim
