@@ -43,7 +43,7 @@
             useGlobalPkgs = true;
             useUserPackages = true;
             users.${setup.user} = ./home.nix;
-            extraSpecialArgs = { inherit setup; };
+            extraSpecialArgs = { inherit setup; inherit inputs; };
             sharedModules = [ ];
           };
         }

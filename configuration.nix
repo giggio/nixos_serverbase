@@ -10,7 +10,7 @@ in
 {
   assertions = [
     {
-      assertion = (!setup.isBuildingImage) || builtins.pathExists (inputs.nixos-secrets + "/server.agekey");
+      assertion = builtins.pathExists (inputs.nixos-secrets + "/server.agekey");
       message = "Missing secret file in ${inputs.nixos-secrets}/server.agekey";
     }
   ];
@@ -154,7 +154,6 @@ in
   ];
 
   environment.etc."sops/age/server.agekey" = {
-    enable = setup.isBuildingImage;
     source = "${inputs.nixos-secrets}/server.agekey";
     mode = "0400";
   };

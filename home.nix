@@ -226,7 +226,7 @@ rec {
     configFile = {
       "starship.toml".source = ./config/starship.toml;
       "git".source = ./config/git;
-      "nixos-secrets/.keep".text = ""; # ensure the directory exists so the build can work (see flakes.nix inputs)
+      "nixos-secrets/server.agekey".source = "${inputs.nixos-secrets}/server.agekey";
     };
   };
 
