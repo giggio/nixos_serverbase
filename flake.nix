@@ -55,7 +55,6 @@
           "${nixpkgs}/nixos/modules/installer/sd-card/sd-image-aarch64.nix"
           nixos-hardware.nixosModules.raspberry-pi-4
             ({ config, pkgs, lib, ... }: {
-              # boot.kernelPackages = pkgs.linuxPackages_rpi4; # does not work, probably an older kernel
               boot.kernelPackages = pkgs.linuxPackages_6_12;
             })
         ]);
@@ -84,12 +83,6 @@
       packages.x86_64-linux = let
         packagingSetup = setup // { isBuildingImage = true; };
       in  {
-        pi4 = nixos-generators.nixosGenerate { # do not use, use images.pi4
-          system = "aarch64-linux";
-          format = "sd-aarch64-installer";
-          modules = baseModules;
-          specialArgs = baseSpecialArgs // { setup = packagingSetup; };
-        };
         vbox = nixos-generators.nixosGenerate {
           system = "x86_64-linux";
           format = "virtualbox";
