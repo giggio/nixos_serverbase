@@ -24,9 +24,10 @@
       url = "path:/home/giggio/.config/nixos-secrets";
       flake = false;
     };
+    flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = inputs@{ nixpkgs, home-manager, nixos-hardware, nixos-generators, sops-nix, ... }:
+  outputs = inputs@{ nixpkgs, home-manager, nixos-hardware, nixos-generators, sops-nix, flake-utils, ... }:
     let
       lib = nixpkgs.lib;
       setup = {
@@ -61,38 +62,53 @@
         specialArgs = baseSpecialArgs // specialArgs;
       };
     in
-    {
-      formatter.x86_64-linux = nixpkgs.legacyPackages.x86_64-linux.nixpkgs-fmt; # todo: remove x86_64-linux
-      images.pi4 = (mkNixosSystem {
+      {
+        images.pi4 = (mkNixosSystem {
           system = "aarch64-linux";
           specialArgs = { inherit setup; };
         }).config.system.build.sdImage;
-      nixosConfigurations = {
-        nixos = mkNixosSystem {
-          system = "aarch64-linux";
-          specialArgs = { inherit setup; };
+        nixosConfigurations = {
+          nixos = mkNixosSystem {
+            system = "aarch64-linux";
+            specialArgs = { inherit setup; };
+          };
+          nixos_virtualbox = mkNixosSystem {
+            system = "x86_64-linux";
+            specialArgs = { setup = setup // { virtualbox = true; }; };
+          };
         };
-        nixos_virtualbox = mkNixosSystem {
-          system = "x86_64-linux";
-          specialArgs = { setup = setup // { virtualbox = true; }; };
+        packages.x86_64-linux = let
+          packagingSetup = setup;
+        in  {
+          vbox = nixos-generators.nixosGenerate {
+            system = "x86_64-linux";
+            format = "virtualbox";
+            modules = baseModules ++ [
+              {
+                virtualbox = {
+                  vmName = "pitest";
+                  memorySize = 4096;
+                };
+              }
+            ];
+            specialArgs = baseSpecialArgs // { setup = packagingSetup // { virtualbox = true; }; };
+          };
         };
-      };
-      packages.x86_64-linux = let
-        packagingSetup = setup;
-      in  {
-        vbox = nixos-generators.nixosGenerate {
-          system = "x86_64-linux";
-          format = "virtualbox";
-          modules = baseModules ++ [
-            {
-              virtualbox = {
-                vmName = "pitest";
-                memorySize = 4096;
-              };
-            }
+      } //
+    flake-utils.lib.eachDefaultSystem (system:
+      let
+        pkgs = import nixpkgs { inherit system; };
+      in {
+        formatter = pkgs.nixpkgs-fmt;
+        devShells.default = pkgs.mkShell {
+          name = "Image build environment";
+          buildInputs = with pkgs; [
+            guestfs-tools
+            qemu-utils
+            yq-go
+            util-linux
           ];
-          specialArgs = baseSpecialArgs // { setup = packagingSetup // { virtualbox = true; }; };
         };
-      };
-    };
+      }
+    );
 }

@@ -4,3 +4,5 @@
 *.orig
 *.agekey
 result
+*.ova
+.direnv
