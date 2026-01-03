@@ -23,7 +23,7 @@
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs = inputs@{ nixpkgs, home-manager, nixos-hardware, nixos-generators, sops-nix, flake-utils, ... }:
+  outputs = inputs@{ self, nixpkgs, home-manager, nixos-hardware, nixos-generators, sops-nix, flake-utils, ... }:
     let
       lib = nixpkgs.lib;
       setup = {
@@ -79,23 +79,42 @@
       {
         formatter = pkgs.nixpkgs-fmt;
         packages = {
-          pi4 = (mkNixosSystem {
-            system = "aarch64-linux";
-            specialArgs = { inherit setup; };
-          }).config.system.build.sdImage;
-          vbox = nixos-generators.nixosGenerate {
-            inherit system;
-            format = "virtualbox";
-            modules = baseModules ++ [
-              {
-                virtualbox = {
-                  vmName = "pitest";
-                  memorySize = 4096;
-                };
-              }
-            ];
-            specialArgs = baseSpecialArgs // { setup = setup // { virtualbox = true; }; };
-          };
+          pi4 =
+            let
+              pi4 = (mkNixosSystem {
+                system = "aarch64-linux";
+                specialArgs = { inherit setup; };
+              }).config.system.build.sdImage;
+            in
+            pkgs.runCommand "pi4-img" { } ''
+              mkdir -p "$out"
+              ln -s ${pi4}/sd-image/*.img.zst $out/nixos.img.zst
+            '';
+          vbox =
+            let
+              vbox = nixos-generators.nixosGenerate {
+                inherit system;
+                format = "virtualbox";
+                modules = baseModules ++ [
+                  {
+                    virtualbox = {
+                      vmName = "pitest";
+                      memorySize = 4096;
+                    };
+                  }
+                ];
+                specialArgs = baseSpecialArgs // { setup = setup // { virtualbox = true; }; };
+              };
+            in
+            pkgs.runCommand "vbox-ova" { } ''
+              mkdir -p "$out"
+              if [ ${vbox}/*.ova == '${vbox}/*.ova' ]; then
+                echo "No OVA found"
+                ls -la "${vbox}"
+                exit 1
+              fi
+              ln -s ${vbox}/*.ova $out/nixos.ova
+            '';
         };
         devShells.default = pkgs.mkShell {
           name = "Image build environment";
