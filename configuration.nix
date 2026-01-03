@@ -123,6 +123,7 @@ in
     delta
     fzf
     githooks # Simple Git hooks manager https://github.com/gabyx/githooks
+    htop
     mylua # see pkgs/default.nix
     gnumake
     cachix
