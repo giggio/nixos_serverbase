@@ -1,8 +1,14 @@
-{ pkgs, lib, ... }:
+{ pkgs, lib, setup, ... }:
 
 {
   boot = {
-    kernelPackages = pkgs.linuxPackages_latest; # todo: evaluate if we should use the vendored kernel: pkgs.linuxKernel.packages.linux_rpi4 or pkgs.linuxPackages_rpi4
+    kernelPackages =
+      if setup.virtualbox then
+      # do not use pkgs.linuxPackages_latest, try to stay as close as possible to the kernel version used in the raspberry pi 4
+      # check the version with: nix eval --raw nixpkgs#legacyPackages.aarch64-linux.linuxPackages_rpi4.kernel.version
+        pkgs.linuxPackages_6_12
+      else
+        pkgs.pkgs.linuxPackages_rpi4; # vendored kernel
     supportedFilesystems.zfs = lib.mkForce false; # todo: remove this when zfs is supported
     kernelModules = [ "bcm2835-v4l2" ]; # originally missing, as we are not using the vendored kernel
     kernelParams = lib.mkForce [
@@ -12,7 +18,27 @@
       "loglevel=7"
       "lsm=landlock,yama,bpf"
     ];
-    initrd.kernelModules = [ "usb_storage" "uas" "sd_mod" "xhci_pci" "ehci_pci" ];
-    initrd.availableKernelModules = [ "vfat" "ext4" "fuse" "nls_cp437" "nls_iso8859_1" ];
+    initrd = {
+      kernelModules = [ "usb_storage" "uas" "sd_mod" "xhci_pci" "ehci_pci" ];
+      availableKernelModules = {
+        vfat = true;
+        ext4 = true;
+        fuse = true;
+        nls_cp437 = true;
+        nls_iso8859_1 = true;
+        # todo: remove this when this is fixed: https://github.com/NixOS/nixpkgs/issues/154163
+        # related: https://github.com/NixOS/nixpkgs/issues/109280
+        # related: https://discourse.nixos.org/t/cannot-build-raspberry-pi-sdimage-module-dw-hdmi-not-found/71804
+        dw-hdmi = lib.mkForce false;
+        dw-mipi-dsi = lib.mkForce false;
+        rockchipdrm = lib.mkForce false;
+        rockchip-rga = lib.mkForce false;
+        phy-rockchip-pcie = lib.mkForce false;
+        pcie-rockchip-host = lib.mkForce false;
+        pwm-sun4i = lib.mkForce false;
+        sun4i-drm = lib.mkForce false;
+        sun8i-mixer = lib.mkForce false;
+      };
+    };
   };
 }
