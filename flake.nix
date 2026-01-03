@@ -61,10 +61,6 @@
         };
     in
     {
-      images.pi4 = (mkNixosSystem {
-        system = "aarch64-linux";
-        specialArgs = { inherit setup; };
-      }).config.system.build.sdImage;
       nixosConfigurations = {
         nixos = mkNixosSystem {
           system = "aarch64-linux";
@@ -80,6 +76,10 @@
           packagingSetup = setup;
         in
         {
+          pi4 = (mkNixosSystem {
+            system = "aarch64-linux";
+            specialArgs = { inherit setup; };
+          }).config.system.build.sdImage;
           vbox = nixos-generators.nixosGenerate {
             system = "x86_64-linux";
             format = "virtualbox";
