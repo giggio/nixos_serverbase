@@ -12,5 +12,7 @@
       "loglevel=7"
       "lsm=landlock,yama,bpf"
     ];
+    initrd.kernelModules = [ "usb_storage" "uas" "sd_mod" "xhci_pci" "ehci_pci" ];
+    initrd.availableKernelModules = [ "vfat" "ext4" "fuse" "nls_cp437" "nls_iso8859_1" ];
   };
 }

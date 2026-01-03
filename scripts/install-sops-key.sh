@@ -63,7 +63,14 @@ found=0
 tmpmnt=/tmp/usbmnt
 mkdir -p "$tmpmnt"
 
-search_for_key_in_drives || true
+for i in $(seq 1 6); do
+  echo "Searching for sops key, attempt $i"
+  search_for_key_in_drives || true
+  if [ "$found" -eq 1 ]; then
+    break
+  fi
+  sleep 5
+done
 
 if [ "$found" -eq 1 ]; then
   echo "sops key installed to $key_file_destination"
