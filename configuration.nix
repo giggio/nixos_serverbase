@@ -63,8 +63,18 @@ in
       enable = true;
       wait-online.enable = true;
       networks = {
-        "docker" = {
+        "01-docker" = {
           matchConfig.Name = "docker*";
+          extraConfig = ''
+            [Link]
+            Unmanaged=yes
+          '';
+        };
+        "01-wlan0" = {
+          matchConfig.WLANInterfaceType = "station";
+          linkConfig = {
+            ActivationPolicy = "down";
+          };
           extraConfig = ''
             [Link]
             Unmanaged=yes
