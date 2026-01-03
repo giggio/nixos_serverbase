@@ -71,17 +71,20 @@
           specialArgs = { setup = setup // { virtualbox = true; }; };
         };
       };
-      packages.x86_64-linux =
-        let
-          packagingSetup = setup;
-        in
-        {
+    } //
+    flake-utils.lib.eachDefaultSystem (system:
+      let
+        pkgs = import nixpkgs { inherit system; };
+      in
+      {
+        formatter = pkgs.nixpkgs-fmt;
+        packages = {
           pi4 = (mkNixosSystem {
             system = "aarch64-linux";
             specialArgs = { inherit setup; };
           }).config.system.build.sdImage;
           vbox = nixos-generators.nixosGenerate {
-            system = "x86_64-linux";
+            inherit system;
             format = "virtualbox";
             modules = baseModules ++ [
               {
@@ -91,16 +94,9 @@
                 };
               }
             ];
-            specialArgs = baseSpecialArgs // { setup = packagingSetup // { virtualbox = true; }; };
+            specialArgs = baseSpecialArgs // { setup = setup // { virtualbox = true; }; };
           };
         };
-    } //
-    flake-utils.lib.eachDefaultSystem (system:
-      let
-        pkgs = import nixpkgs { inherit system; };
-      in
-      {
-        formatter = pkgs.nixpkgs-fmt;
         devShells.default = pkgs.mkShell {
           name = "Image build environment";
           buildInputs = with pkgs; [
