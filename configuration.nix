@@ -46,7 +46,7 @@ in
     };
     loader = {
       systemd-boot.enable = false; # using grub and not UEFI
-      timeout = lib.mkDefault 5;
+      timeout = lib.mkForce 10;
     };
   };
 
@@ -88,7 +88,7 @@ in
       tmpfiles = {
         enable = true;
         users.${setup.user}.rules = [
-          "d /run/user/1000/gnupg 0700 1000 1000 -"
+          "D /run/user/1000/gnupg 0700 1000 1000 -"
         ];
       };
     };
@@ -169,7 +169,12 @@ in
   };
 
   services = {
-    openssh.enable = true;
+    openssh = {
+      enable = true;
+      settings = {
+        StreamLocalBindUnlink = "yes";
+      };
+    };
     logind.settings.Login.KillUserProcesses = true;
   };
 
