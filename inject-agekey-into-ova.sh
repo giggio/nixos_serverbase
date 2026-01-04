@@ -10,7 +10,12 @@ if ! [ -v 1 ]; then
 else
   OVA_IN="$1"
 fi
-AGEKEY="${2:-$HOME/.config/nixos-secrets/server.agekey}"
+if ! [ -v 2 ]; then
+  DEST_DIR="$DIR/result"
+else
+  DEST_DIR="$(realpath "$2")"
+fi
+AGEKEY="${3:-$HOME/.config/nixos-secrets/server.agekey}"
 
 if [ "$(echo "$OVA_IN" | wc -l)" -gt 1 ]; then
   echo "Multiple OVA files found: $OVA_IN" >&2
@@ -124,11 +129,12 @@ done
 
 # 6. Repack the OVA
 OVA_OUT="${OVA_IN%.ova}-with-agekey.ova"
-if [ -d "$DIR/result" ]; then
-  rm -rf "$DIR/result"
+if [ -L "$DEST_DIR" ]; then
+  # remove if the destination is a symlink
+  rm -rf "$DEST_DIR"
 fi
-mkdir "$DIR/result"
-OVA_OUT="$DIR/result/${OVA_OUT##*/}"
+mkdir -p "$DEST_DIR"
+OVA_OUT="$DEST_DIR/${OVA_OUT##*/}"
 
 echo "Removing raw file $EXTRA_RAW..."
 rm "$EXTRA_RAW"
