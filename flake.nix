@@ -127,6 +127,8 @@
             qemu-utils
             yq-go
             util-linux
+            sops
+            # virtualboxHeadless # this conflicts with the VirtualBox installed on Ubuntu, versions don't match and calls to VBoxHeadless fail, install VirtualBox manually
           ];
         };
       }
