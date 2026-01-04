@@ -8,7 +8,7 @@ in
     services = {
       clone-vimfiles =
         let
-          home = "/home/${setup.user}";
+          home = "/home/${config.setup.username}";
           clone_dir = "${home}/.vim";
           repo = "giggio/vimfiles.git";
         in
@@ -31,7 +31,7 @@ in
               ${clone_script}/bin/clone "https://github.com/${repo}" "${clone_dir}" \
               --symlink "${home}/.config/nvim" \
               --private-git-origin "git@github.com:${repo}" \
-              --chown "${setup.user}"
+              --chown "${config.setup.username}"
             '';
             Restart = "on-failure";
             RestartSec = 30;
@@ -40,8 +40,8 @@ in
       clone-nixos-config =
         let
           clone_script = import ./clone-script.nix { inherit pkgs; };
-          home = "/home/${setup.user}";
-          destination_dir = "/home/${setup.user}/.config/nixos";
+          home = "/home/${config.setup.username}";
+          destination_dir = "/home/${config.setup.username}/.config/nixos";
           https_repo = "https://github.com/giggio/nixos_serverbase.git";
           ssh_repo = "git@github.com:giggio/nixos_serverbase.git";
         in
@@ -53,7 +53,7 @@ in
             ConditionPathExists = "!${destination_dir}";
             After = [ "network-online.target" ];
             Wants = [ "network-online.target" ];
-            RequiresMountsFor = [ "/home/${setup.user}" ];
+            RequiresMountsFor = [ "/home/${config.setup.username}" ];
             StartLimitIntervalSec = 600;
             StartLimitBurst = 10;
           };
@@ -65,7 +65,7 @@ in
               --private-git-origin "${ssh_repo}" \
               --https-user-file "${config.sops.secrets."gh_repo_clone/user".path}" \
               --https-password-file "${config.sops.secrets."gh_repo_clone/pat".path}" \
-              --chown "${setup.user}"
+              --chown "${config.setup.username}"
             '';
             Restart = "on-failure";
             RestartSec = 30;

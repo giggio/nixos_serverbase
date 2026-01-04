@@ -1,4 +1,4 @@
-{ config, pkgs, lib, inputs, setup, ... }:
+{ config, pkgs, lib, setup, ... }:
 
 let
   # todo: move shellSessionVariables somewhere else when https://github.com/nix-community/home-manager/issues/5474 is fixed
@@ -163,7 +163,7 @@ rec {
 
   };
   home = {
-    username = setup.user;
+    username = config.setup.username;
     homeDirectory = "/home/" + home.username;
     stateVersion = "25.11"; # Check if there are state version changes before changing this fiels: https://nix-community.github.io/home-manager/release-notes.xhtml
     preferXdgDirectories = true;

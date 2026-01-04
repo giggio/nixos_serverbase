@@ -26,49 +26,53 @@
   outputs = inputs@{ self, nixpkgs, home-manager, nixos-hardware, nixos-generators, sops-nix, flake-utils, ... }:
     let
       lib = nixpkgs.lib;
-      setup = {
-        user = "giggio";
-        virtualbox = false;
-      };
-      baseModules = [
-        ./configuration.nix
-        sops-nix.nixosModules.sops
-        home-manager.nixosModules.home-manager
-        {
-          home-manager = {
-            useGlobalPkgs = true;
-            useUserPackages = true;
-            users.${setup.user} = ./home.nix;
-            extraSpecialArgs = { inherit setup; inherit inputs; };
-            sharedModules = [ ];
-          };
-        }
-      ];
-      baseSpecialArgs = { inherit inputs; };
-      mkNixosSystem = { specialArgs, system, ... }:
+      username = "giggio";
+      common_options = { setup.username = username; };
+      makeBaseModules = { virtualbox ? false, ... }:
+        [
+          ./options.nix
+          ./configuration.nix
+          common_options
+          sops-nix.nixosModules.sops
+          home-manager.nixosModules.home-manager
+          {
+            home-manager = {
+              useGlobalPkgs = true;
+              useUserPackages = true;
+              users.${username} = ./home.nix;
+              extraSpecialArgs = { inherit inputs; };
+              sharedModules = [
+                ./options.nix
+                common_options
+              ];
+            };
+          }
+        ] ++ (if virtualbox then [
+          ./vm.nix
+        ] else [
+          "${nixpkgs}/nixos/modules/installer/sd-card/sd-image-aarch64.nix"
+          nixos-hardware.nixosModules.raspberry-pi-4
+          ./kernel-configuration.nix
+        ]);
+      specialArgs = { inherit inputs; };
+      mkNixosSystem = { system, virtualbox ? false, ... }:
         let
-          modules = baseModules ++ (if specialArgs.setup.virtualbox then [
-          ] else [
-            "${nixpkgs}/nixos/modules/installer/sd-card/sd-image-aarch64.nix"
-            nixos-hardware.nixosModules.raspberry-pi-4
-            ./kernel-configuration.nix
-          ]);
+          modules = makeBaseModules { inherit virtualbox; };
         in
         nixpkgs.lib.nixosSystem {
           inherit system;
           modules = modules;
-          specialArgs = baseSpecialArgs // specialArgs;
+          inherit specialArgs;
         };
     in
     {
       nixosConfigurations = {
         nixos = mkNixosSystem {
           system = "aarch64-linux";
-          specialArgs = { inherit setup; };
         };
         nixos_virtualbox = mkNixosSystem {
           system = "x86_64-linux";
-          specialArgs = { setup = setup // { virtualbox = true; }; };
+          virtualbox = true;
         };
       };
     } //
@@ -83,7 +87,6 @@
             let
               pi4 = (mkNixosSystem {
                 system = "aarch64-linux";
-                specialArgs = { inherit setup; };
               }).config.system.build.sdImage;
             in
             pkgs.runCommand "pi4-img" { } ''
@@ -95,15 +98,16 @@
               vbox = nixos-generators.nixosGenerate {
                 inherit system;
                 format = "virtualbox";
-                modules = baseModules ++ [
+                modules = (makeBaseModules { virtualbox = true; }) ++ [
                   {
+                    setup.virtualbox = true;
                     virtualbox = {
                       vmName = "pitest";
                       memorySize = 4096;
                     };
                   }
                 ];
-                specialArgs = baseSpecialArgs // { setup = setup // { virtualbox = true; }; };
+                inherit specialArgs;
               };
             in
             pkgs.runCommand "vbox-ova" { } ''

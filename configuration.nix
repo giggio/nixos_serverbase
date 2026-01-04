@@ -1,7 +1,3 @@
-# Edit this configuration file to define what should be installed on
-# your system.  Help is available in the configuration.nix(5) man page
-# and in the NixOS manual (accessible by running ‘nixos-help’).
-
 { config, pkgs, lib, setup, inputs, ... }:
 
 let
@@ -13,10 +9,6 @@ in
       ./cachix.nix
       ./clone-config.nix
       ./secrets.nix
-      # Include the results of the hardware scan.
-      # ./hardware-configuration.nix
-    ] ++ lib.lists.optionals (setup.virtualbox) [
-      ./vm.nix
     ];
 
   nixpkgs.config.allowUnfree = false;
@@ -87,7 +79,7 @@ in
     user = {
       tmpfiles = {
         enable = true;
-        users.${setup.user}.rules = [
+        users.${config.setup.username}.rules = [
           "D /run/user/1000/gnupg 0700 1000 1000 -"
         ];
       };
@@ -111,7 +103,7 @@ in
     };
   };
 
-  users.users.${setup.user} = {
+  users.users.${config.setup.username} = {
     hashedPassword = "$y$j9T$uFrz8gHZsyL7Jo1iCC/ky.$lVYuZPrYGtrxbP564V49AO.HraNu8fqRWVtiXLVrUkD"; # generate with: nix run nixpkgs#mkpasswd -- -m yescrypt
     isNormalUser = true;
     description = "Giovanni Bassi";
