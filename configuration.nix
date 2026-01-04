@@ -13,7 +13,6 @@ in
 
   nixpkgs.config.allowUnfree = false;
   nixpkgs.overlays = [
-    # inputs.fenix.overlays.default # rust toolchain
     (_: super: let pkgs = fenix.inputs.nixpkgs.legacyPackages.${super.system}; in fenix.overlays.default pkgs pkgs) # rust toolchain
     (final: prev: (import ./pkgs/default.nix { pkgs = prev; }))
   ];
@@ -129,7 +128,7 @@ in
     mylua # see pkgs/default.nix
     gnumake
     cachix
-    rust-toolchain-fenix # see pkgs/default.nix
+    # rust-toolchain-fenix # see pkgs/default.nix # commented out, takes too long to build, will add back if needed
     tree-sitter # An incremental parsing system for programming tools https://github.com/tree-sitter/tree-sitter
     marksman # Write Markdown with code assist and intelligence in the comfort of your favourite editor https://github.com/artempyanykh/marksman/
     markdownlint-cli2 # Fast, flexible, configuration-based command-line interface for linting Markdown/CommonMark files with the markdownlint library https://github.com/DavidAnson/markdownlint-cli2
