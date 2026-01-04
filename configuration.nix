@@ -1,4 +1,4 @@
-{ config, pkgs, lib, setup, inputs, ... }:
+{ config, pkgs, lib, inputs, ... }:
 
 let
   fenix = inputs.fenix;
@@ -23,15 +23,19 @@ in
 
   boot = {
     initrd = {
-      extraFiles."/bin/install_sops_key".source = pkgs.writeShellApplication {
+      extraFiles."/bin/install_sops_key".source = (pkgs.writeShellApplication {
         name = "install-sops-key.sh";
-        runtimeInputs = with pkgs; [ "busybox" "bash" ];
+        runtimeInputs = with pkgs; [ coreutils bashInteractive util-linux procps iproute2 ncurses python3 ];
         text = (builtins.readFile ./scripts/install-sops-key.sh);
-      };
+      }).overrideAttrs (oldAttrs: {
+        buildCommand = oldAttrs.buildCommand + ''
+          ln -s "${./scripts/initrd-nice-bash.sh}" "$out/bin/initrd-nice-bash.sh"
+        '';
+      });
       postMountCommands = ''
         # run the script we placed into the initrd
         if [ -x /bin/install_sops_key/bin/install-sops-key.sh ]; then
-          /bin/install_sops_key/bin/install-sops-key.sh || true
+          ${pkgs.bashInteractive}/bin/bash /bin/install_sops_key/bin/install-sops-key.sh || true
         fi
       '';
     };

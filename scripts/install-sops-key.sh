@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -eu
 
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 copy_if_has_key() {
   # $1 is mounted path
   if [ -f "$1/nixos-secrets/$key_file_name" ]; then
@@ -69,7 +71,11 @@ for i in $(seq 1 6); do
   if [ "$found" -eq 1 ]; then
     break
   fi
-  sleep 5
+  if [ "$(cat /sys/devices/virtual/dmi/id/product_name 2> /dev/null)" == "VirtualBox" ]; then
+    sleep 1
+  else
+    sleep 5
+  fi
 done
 
 if [ "$found" -eq 1 ]; then
@@ -80,23 +86,26 @@ else
 fi
 
 # interactive fallback loop (useful for manual installs)
-
 while true; do
   echo "$key_file_name not found on removable media."
   echo "Insert USB with 'nixos-secrets/$key_file_name' (or '$key_file_name') then press ENTER to retry."
-  echo "Type 'shell' and ENTER to get an interactive shell to copy the file manually."
-  echo -e "Type 'exit' and ENTER to stop trying to find the keys and continue to boot.\n"
+  echo "Type:"
+  echo "* 'shell' to get an interactive shell to copy the file manually."
+  echo "* 'sh' to get a bare shell to copy the file manually."
+  echo "* 'q' to stop trying to find the keys and continue to boot."
   printf "> "
   if ! read -r line; then
-    # EOF: just exit and allow normal failure / installer to continue
-    break
+    echo "Select an option:"
+    continue
   fi
-  if [ "$line" = "exit" ]; then
+  if [ "$line" = "q" ]; then
     echo "sops key not found on removable media, exiting..."
-    exit 0
-  fi
-  if [ "$line" = "shell" ]; then
-    $BASH
+    break
+  elif [ "$line" = "shell" ]; then
+    "$DIR"/initrd-nice-bash.sh || true
+    # after shell returns, re-run the scanning logic
+  elif [ "$line" = "sh" ]; then
+    "$BASH" -i || true
     # after shell returns, re-run the scanning logic
   fi
 
