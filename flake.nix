@@ -1,8 +1,7 @@
 {
   description = "NixOS configuration";
   inputs = {
-    # nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-25.11";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-25.11"; # or unstable: github:nixos/nixpkgs/nixos-unstable
     home-manager = {
       url = "github:nix-community/home-manager/release-25.11";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -28,7 +27,7 @@
       lib = nixpkgs.lib;
       username = "giggio";
       common_options = { setup.username = username; };
-      makeBaseModules = { virtualbox ? false, ... }:
+      makeBaseModules = { system ? "", virtualbox ? false }:
         [
           ./options.nix
           ./configuration.nix
@@ -47,34 +46,35 @@
               ];
             };
           }
+          (if system == "" then { } else { nixpkgs.hostPlatform = system; })
         ] ++ (if virtualbox then [
           ./vm.nix
         ] else [
-          "${nixpkgs}/nixos/modules/installer/sd-card/sd-image-aarch64.nix"
-          nixos-hardware.nixosModules.raspberry-pi-4
           ./kernel-configuration.nix
         ]);
       specialArgs = { inherit inputs; };
-      mkNixosSystem = { system, virtualbox ? false, ... }:
+      mkNixosSystem = { virtualbox ? false, modules ? [ ], system ? "", ... }@additionalConfiguration:
         let
-          modules = makeBaseModules { inherit virtualbox; };
+          extraModules = (makeBaseModules { inherit virtualbox; inherit system; }) ++ modules;
         in
-        nixpkgs.lib.nixosSystem {
-          inherit system;
-          modules = modules;
-          inherit specialArgs;
-        };
+        nixpkgs.lib.nixosSystem
+          {
+            modules = extraModules;
+            inherit specialArgs;
+          } // additionalConfiguration;
+      nixosConfigurations = nixpkgs.lib.foldr (a: b: a // b) { } (map
+        (system:
+          {
+            "nixos_${system}" = mkNixosSystem { system = "${system}-linux"; };
+            "nixos_virtualbox_${system}" = mkNixosSystem {
+              system = "${system}-linux";
+              virtualbox = true;
+            };
+          }
+        ) [ "x86_64" "aarch64" ]);
     in
     {
-      nixosConfigurations = {
-        nixos = mkNixosSystem {
-          system = "aarch64-linux";
-        };
-        nixos_virtualbox = mkNixosSystem {
-          system = "x86_64-linux";
-          virtualbox = true;
-        };
-      };
+      inherit nixosConfigurations;
     } //
     flake-utils.lib.eachDefaultSystem (system:
       let
@@ -86,7 +86,7 @@
           pi4 =
             let
               pi4 = (mkNixosSystem {
-                system = "aarch64-linux";
+                modules = [{ nixpkgs.hostPlatform = "aarch64-linux"; }]; # this is what makes cross compilation work
               }).config.system.build.sdImage;
             in
             pkgs.runCommand "pi4-img" { } ''
@@ -98,15 +98,7 @@
               vbox = nixos-generators.nixosGenerate {
                 inherit system;
                 format = "virtualbox";
-                modules = (makeBaseModules { virtualbox = true; }) ++ [
-                  {
-                    setup.virtualbox = true;
-                    virtualbox = {
-                      vmName = "pitest";
-                      memorySize = 4096;
-                    };
-                  }
-                ];
+                modules = makeBaseModules { virtualbox = true; };
                 inherit specialArgs;
               };
             in

@@ -75,19 +75,23 @@ _nr() {
     esac
   done
   set -- "${forward_args[@]}" # reset arguments
+  host_platform="$(uname -m)"
   case $(hostname) in
   a_host | another_host) ;; # todo: add profiles
   *)
-    echo -e "\e[33mThis host does not have a specific profile, so it will run using the generic profile rules.\e[0m"
     profile=$(get_generic_profile)
+    if ! $get_profile; then
+      echo -e "\e[33mThis host does not have a specific profile, so it will run using the generic profile rules. Selected profile: \e[34m$profile\e[33m.\e[0m Selected host platform: \e[34m$host_platform\e[0m"
+    fi
     ;;
   esac
   if $get_profile; then
     if [ -z "$profile" ]; then
       echo -e "This host has specific configuration, so the hostname will be used as the profile: \e[32m$(hostname)\e[0m."
     else
-      echo "$profile"
+      echo -e "Profile: \e[34m$profile\e[33m.\e[0m"
     fi
+    echo -e "Host platform: \e[34m$host_platform\e[33m.\e[0m"
     return
   fi
   if $dry_run; then
@@ -115,7 +119,7 @@ _nr() {
     local verbose_args=()
     local profile_arg=''
     if ! [ -z "$profile" ]; then
-      profile_arg="#$profile"
+      profile_arg="#${profile}_$host_platform"
     fi
     if $verbose; then
       verbose_args+=(--print-build-logs)

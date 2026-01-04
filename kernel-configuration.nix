@@ -1,14 +1,13 @@
-{ pkgs, lib, config, ... }:
+{ pkgs, lib, modulesPath, inputs, ... }:
 
 {
+  imports = [
+    "${modulesPath}/installer/sd-card/sd-image-aarch64.nix"
+    inputs.nixos-hardware.nixosModules.raspberry-pi-4
+  ];
+
   boot = {
-    kernelPackages =
-      if config.setup.virtualbox then
-      # do not use pkgs.linuxPackages_latest, try to stay as close as possible to the kernel version used in the raspberry pi 4
-      # check the version with: nix eval --raw nixpkgs#legacyPackages.aarch64-linux.linuxPackages_rpi4.kernel.version
-        pkgs.linuxPackages_6_12
-      else
-        pkgs.pkgs.linuxPackages_rpi4; # vendored kernel
+    kernelPackages = pkgs.pkgs.linuxPackages_rpi4; # vendored kernel
     supportedFilesystems.zfs = lib.mkForce false; # todo: remove this when zfs is supported
     kernelModules = [ "bcm2835-v4l2" ]; # originally missing, as we are not using the vendored kernel
     kernelParams = lib.mkForce [
