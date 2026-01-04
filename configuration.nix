@@ -138,6 +138,9 @@ in
     procs # A modern replacement for ps written in Rust https://github.com/dalance/procs
     python3
     gcc
+    file
+    tree
+    bat
   ];
 
   environment = {
