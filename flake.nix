@@ -48,9 +48,9 @@
           }
           (if system == "" then { } else { nixpkgs.hostPlatform = system; })
         ] ++ (if virtualbox then [
-          ./vm.nix
+          ./config-virtual.nix
         ] else [
-          ./kernel-configuration.nix
+          ./config-physical.nix
         ]);
       specialArgs = { inherit inputs; };
       mkNixosSystem = { virtualbox ? false, modules ? [ ], system ? "", ... }@additionalConfiguration:
