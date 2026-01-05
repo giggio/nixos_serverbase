@@ -52,7 +52,15 @@ fi
 if ! [ -f "$HOME/.bashrc" ]; then
 cat > "$HOME/.bashrc" <<'BASHRC'
 # prompt, history and helpful aliases
-export PS1='[initrd \u@\h \W]\$ '
+if command -v tput >/dev/null 2>&1 && [ "$(tput colors 2>/dev/null || echo 0)" -ge 8 ]; then
+  RED="\[$(tput setaf 1)\]"
+  GREEN="\[$(tput setaf 2)\]"
+  BLUE="\[$(tput setaf 4)\]"
+  RESET="\[$(tput sgr0)\]"
+  export PS1="${RED}[initrd ${GREEN}\u ${BLUE}\W${RED}]${RESET}\\$ "
+else
+  export PS1='[initrd \u \W]\$ '
+fi
 HISTFILE="$HOME/.bash_history"
 HISTSIZE=1000
 HISTFILESIZE=2000
