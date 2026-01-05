@@ -22,14 +22,31 @@ copy_if_has_key() {
 
 try_mount_and_check() {
   dev="$1"
-  # try common partition names first; mount read-only
-  if [ -b "$dev" ]; then
+  [ -b "$dev" ] || return 1
+
+  # Check if checking the device is safe/useful:
+  # 1. Skip if it is not a filesystem (e.g. partition table only) to avoid kernel errors
+  #    "blkid -o value -s TYPE" returns the filesystem type if found.
+  fstype=$(blkid -o value -s TYPE "$dev" || true)
+  if [ -z "$fstype" ]; then
+    return 1
+  fi
+
+  # 2. Check if already mounted
+  mountpoint=$(findmnt -n -o TARGET --source "$dev" | head -n 1 || true)
+
+  if [ -n "$mountpoint" ]; then
+    if copy_if_has_key "$mountpoint"; then
+       echo "sops key found on $dev (already mounted at $mountpoint) and copied"
+       return 0
+    fi
+  else
     if mount -o ro "$dev" "$tmpmnt" 2>/dev/null; then
-      copy_if_has_key "$tmpmnt" && {
+      if copy_if_has_key "$tmpmnt"; then
         echo "sops key found on $dev and copied"
         umount "$tmpmnt" || true
         return 0
-      }
+      fi
       umount "$tmpmnt" || true
     fi
   fi
