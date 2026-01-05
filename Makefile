@@ -14,7 +14,7 @@ out/nix/ova/nixos.ova: $(nix_deps)
 out/nixos-with-agekey.ova: out/nix/ova/nixos.ova $(nix_deps)
 	./inject-agekey-into-ova.sh out/nix/ova/nixos.ova out
 
-out/nix/img/nixos.img.zst:
+out/nix/img/nixos.img.zst: $(nix_deps)
 	nix build .\#pi4 --print-build-logs --out-link out/nix/img/
 
 import: out/nixos-with-agekey.ova
