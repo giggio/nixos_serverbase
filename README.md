@@ -1,29 +1,153 @@
-# Base NixOS server config for Raspberry Pi 4
+# Reusable NixOS Server Configuration
 
-On a client machine you can develop and build a VirtualBox image (`.ova`) for
-testing, or build the `.img.zst` image to install on the Raspberry Pi 4.
+This project provides a modular and reusable NixOS configuration, primarily
+targeted at building server environments for Raspberry Pi 4 and VirtualBox
+(testing).
 
-## Developing
+It is structured as a Nix Flake that can be consumed by other projects to
+inherit a base server configuration while allowing specific machine
+customizations.
 
-Clone this repo, and add the secret file (see [the Secrets section bellow](#secrets)).
+It can also run by itself for creating a default, base configuration.
 
-1. Build and import the vm with `make import`.
+## Architecture
 
-Or do it manually...
+- [modules/serverbase/](modules/serverbase/) (directory): The core reusable module (see [serverbase](serverbase)). It includes standard
+  packages, Home Manager integration, encryption setup (SOPS), and general system
+  settings.
+- [modules/lib.nix](./modules/lib.nix): Provides helper functions to build system artifacts (Pi4 images,
+  VBox OVAs) and development shells.
+- [configuration.nix](./configuration.nix): A specific machine configuration (example: `pitest`)
+  that imports the serverbase and applies host-specific settings.
+
+## Usage as a flake (library)
+
+You can import this project in your own `flake.nix` to build your custom servers.
+
+### 1. In your `flake.nix` inputs
+
+```nix
+{
+  inputs.serverbase = {
+    url = "github:giggio/nixos_serverbase";
+    inputs.nixpkgs.follows = "nixpkgs";
+  };
+};
+```
+
+### 2. Creating NixOS Configurations
+
+Use `nixosModules.default` to get the base configuration (includes serverbase,
+sops, and home-manager).
+
+```nix
+outputs = { nixpkgs, serverbase, ... }: {
+  nixosConfigurations = {
+    nixos = serverbase.nixosModules.lib.mkNixosSystem {
+      system = "x86_64-linux";
+      modules = [ ./configuration.nix ];
+      specialArgs = { }; # optional
+      extraConfiguration = { }; # optional
+    };
+    nixos_virtuabox = serverbase.nixosModules.lib.mkNixosSystem {
+      # .. the same as above, plus:
+      virtualbox = true;
+    };
+  };
+}
+```
+
+Available modules in `nixosModules`:
+
+- `default`: Base list of modules (recommended).
+- `lib`: Useful helper functions.
+- `pi4`: Raspberry Pi 4 specific hardware config.
+- `virtualbox`: VirtualBox specific hardware config.
+
+### 3. Building Artifacts for deployment
+
+You can build a Raspberry Pi 4 image that can be used to create an installation SD card.
+You can also build a VirtualBox OVA that can be imported into VirtualBox.
+
+```nix
+outputs = { nixpkgs, serverbase, ... }: {
+  packages.x86_64-linux = {
+    pi4 = serverbase.nixosModules.lib.mkPi4Image {
+      system = "x86_64-linux";
+      nixos-system = serverbase.nixosModules.lib.mkNixosSystem {
+        modules = [ ./configuration.nix ];
+        system = "aarch64-linux";
+      };
+    };
+    vbox = serverbase.nixosModules.lib.mkVboxImage {
+      inherit pkgs nixos-generators;
+      system = "x86_64-linux";
+      modules = serverbase.nixosModules.lib.makeBaseModules {
+        modules = [ ./configuration.nix ];
+        virtualbox = true;
+      };
+    };
+  };
+}
+```
+
+## Direct Usage: Building the Default Configs
+
+If you are using this repository directly to build the default machine (e.g.,
+for testing or as a starting point):
+
+### Developing with VirtualBox
+
+1. Clone this repo and set up your secrets (see [Secrets](#secrets)).
+2. Build and import the VM with `make import`.
+
+The resulting OVA can be found in `out/nixos-with-agekey.ova`.
+
+*Alternatively, import it manually.*
 
 1. Build the vm with `make out/nixos-with-agekey.ova`.
-2. Import it into VirtualBox via `File > Import Appliance`.
+2. Import the result into VirtualBox (`File > Import Appliance`).
 
-The secrets will be automatically added to a separate disk in the VM.
+The secrets will be automatically added to a separate disk in the VM during
+the build process if using the provided scripts.
 
-## Deploying
+### Deploying to Raspberry Pi 4
 
-1. Build it with `make out/nix/img/nixos.img.zst`.
-2. Burn it into the SD card using the Raspberry Pi Imager. For the operating system,
+1. Clone this repo and set up your secrets (see [Secrets](#secrets)).
+2. Build it with `make out/nix/img/nixos.img.zst`.
+   Or build with nix:
+
+   ```bash
+   nix build .#pi4 --out-link out/nix/img/
+   ```
+
+3. Burn it into the SD card using the Raspberry Pi Imager. For the operating system,
    select the last option, "Use custom" and select the image.
-3. Load the sd card into the Raspberry Pi 4.
-4. Copy the secret file `server.agekey` to the root of a USB flash drive and connect
+4. Load the sd card into the Raspberry Pi 4.
+5. Copy the secret file `server.agekey` to the root of a USB flash drive and connect
    the device to the Pi 4.
+
+## Local Development Tools
+
+### Entering the Dev Shell
+
+Provides all necessary tools like SOPS, build utilities, etc.
+
+```bash
+nix develop
+# or if you use direnv:
+direnv allow
+```
+
+### Running Tests
+
+Run the integrated NixOS verification tests (boots a VM and runs checks):
+
+```bash
+nix flake check
+```
+
+---
 
 ## Secrets
 
@@ -36,17 +160,13 @@ Generate the key file with:
 nix shell nixpkgs#age -c age-keygen -o $HOME/.config/nixos-secrets/server.agekey
 ```
 
-After that, you need to update the file at [.sops.yaml](.sops.yaml) with the key.
-View it with:
+Update the [.sops.yaml](.sops.yaml) with the key:
+
+1. View public key: `grep public ~/.config/nixos-secrets/server.agekey`
+2. Update `.sops.yaml` (automated helper):
 
 ```bash
-grep public ~/.config/nixos-secrets/server.agekey
-```
-
-Update the `.sops.yaml` file with the key with:
-
-```bash
-key=`grep public ~/.config/nixos-secrets/server.agekey | sed 's/.*: //'`
+key=$(grep public ~/.config/nixos-secrets/server.agekey | sed 's/.*: //')
 sed -i -E "s/(.*pi4 )(.*)( #)/\$key\3/" .sops.yaml
 ```
 
@@ -60,8 +180,8 @@ gpg --with-colons --fingerprint | awk -F: '$1 == "fpr" {print $10; exit}'
 ```
 
 If you have more than one key, this will print multiple lines. Choose the key
-that you need, or you can use all of them.
-Add the key to the `.sops.yaml` file, replacing the one that is there under `giggio`.
+that you need, or you can use all of them. Add the key to the
+[.sops.yaml](.sops.yaml) file, replacing the one that is there under `giggio`.
 
 ### Editing the secrets file
 

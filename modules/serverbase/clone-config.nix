@@ -41,9 +41,9 @@ in
         let
           clone_script = import ./clone-script.nix { inherit pkgs; };
           home = "/home/${config.setup.username}";
-          destination_dir = "/home/${config.setup.username}/.config/nixos";
-          https_repo = "https://github.com/giggio/nixos_serverbase.git";
-          ssh_repo = "git@github.com:giggio/nixos_serverbase.git";
+          destination_dir = config.setup.nixosConfigDir;
+          https_repo = "https://github.com/${config.setup.configRepo}.git";
+          ssh_repo = "git@github.com:${config.setup.configRepo}.git";
         in
         {
           description = "Clone NixOS config ~/.config/nixos if missing";
