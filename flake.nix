@@ -84,7 +84,7 @@
             };
           };
           vbox = self.nixosModules.lib.mkVboxImage {
-            inherit pkgs system nixos-generators;
+            inherit pkgs system;
             modules = self.nixosModules.lib.makeBaseModules {
               virtualbox = true;
               inherit modules;

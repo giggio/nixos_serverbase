@@ -66,7 +66,6 @@ rec {
       pkgs,
       system,
       modules,
-      nixos-generators,
       specialArgs ? { },
     }:
     let
@@ -74,7 +73,7 @@ rec {
         inherit inputs;
       }
       // specialArgs;
-      vbox = nixos-generators.nixosGenerate {
+      vbox = inputs.nixos-generators.nixosGenerate {
         inherit system modules;
         specialArgs = extendedSpecialArgs;
         format = "virtualbox";
