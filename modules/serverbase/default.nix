@@ -1,16 +1,21 @@
-{ config, pkgs, lib, inputs, ... }:
+{
+  config,
+  pkgs,
+  lib,
+  inputs,
+  ...
+}:
 
 let
   fenix = inputs.fenix;
 in
 {
-  imports =
-    [
-      ../../cachix.nix # ugly loading from the root folder, can we do something about it?
-      ./clone-config.nix
-      ./secrets.nix
-      ./options.nix
-    ];
+  imports = [
+    ../../cachix.nix # ugly loading from the root folder, can we do something about it?
+    ./clone-config.nix
+    ./secrets.nix
+    ./options.nix
+  ];
 
   home-manager = {
     useGlobalPkgs = true;
@@ -25,25 +30,44 @@ in
 
   nixpkgs.config.allowUnfree = false;
   nixpkgs.overlays = [
-    (_: super: let pkgs = fenix.inputs.nixpkgs.legacyPackages.${super.system}; in fenix.overlays.default pkgs pkgs) # rust toolchain
+    (
+      _: super:
+      let
+        pkgs = fenix.inputs.nixpkgs.legacyPackages.${super.system};
+      in
+      fenix.overlays.default pkgs pkgs
+    ) # rust toolchain
     (final: prev: (import ./pkgs/default.nix { pkgs = prev; }))
   ];
 
   nix = {
-    settings.experimental-features = [ "nix-command" "flakes" ];
+    settings.experimental-features = [
+      "nix-command"
+      "flakes"
+    ];
   };
 
   boot = {
     initrd = {
-      extraFiles."/bin/install_sops_key".source = (pkgs.writeShellApplication {
-        name = "install-sops-key.sh";
-        runtimeInputs = with pkgs; [ coreutils bashInteractive util-linux procps iproute2 ncurses python3 ];
-        text = (builtins.readFile ./scripts/install-sops-key.sh);
-      }).overrideAttrs (oldAttrs: {
-        buildCommand = oldAttrs.buildCommand + ''
-          ln -s "${./scripts/initrd-nice-bash.sh}" "$out/bin/initrd-nice-bash.sh"
-        '';
-      });
+      extraFiles."/bin/install_sops_key".source =
+        (pkgs.writeShellApplication {
+          name = "install-sops-key.sh";
+          runtimeInputs = with pkgs; [
+            coreutils
+            bashInteractive
+            util-linux
+            procps
+            iproute2
+            ncurses
+            python3
+          ];
+          text = (builtins.readFile ./scripts/install-sops-key.sh);
+        }).overrideAttrs
+          (oldAttrs: {
+            buildCommand = oldAttrs.buildCommand + ''
+              ln -s "${./scripts/initrd-nice-bash.sh}" "$out/bin/initrd-nice-bash.sh"
+            '';
+          });
       postMountCommands = ''
         # run the script we placed into the initrd
         if [ -x /bin/install_sops_key/bin/install-sops-key.sh ]; then
@@ -123,11 +147,13 @@ in
     hashedPassword = "$y$j9T$uFrz8gHZsyL7Jo1iCC/ky.$lVYuZPrYGtrxbP564V49AO.HraNu8fqRWVtiXLVrUkD"; # generate with: nix run nixpkgs#mkpasswd -- -m yescrypt
     isNormalUser = true;
     description = "Giovanni Bassi";
-    extraGroups = [ "networkmanager" "wheel" "docker" ];
+    extraGroups = [
+      "networkmanager"
+      "wheel"
+      "docker"
+    ];
     openssh.authorizedKeys.keys = [
       "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAACAQCv/c4C2RbcY9phczEe980HpYJJPAtLJ14cBZPk6y3yhEVIISCaUGAfIcqFRcpA59xeyNnpbyvuuYNSrBSMiFFeYdLxw++9C7LAXKCODetAZsae+qkWkdO6aw3yVF9I4vmGaN7xfroQlodfX2u0tQ1MFxhmjxnBvV14kPsxlAlWFGKE9Hx9+HMRaNi0tw+N5QGfx33wSJ5wV+Q0xunM54226WeEtXO7InbsLySHCFaV0A8GW41bjrt5Q/DNmYAOgiezR1vVz81RxSzsGc0v5hVmwdadNPBvXhBoKvYTpooXILdHvKyNNIhUMEOS6aA5HooTwcExqosMp/xyFBVqpWjnKXzP7tzvTLu7W2GyHfBcoYgk5n7/PYvgnPvpx/G0rVDMjDYz2xchi6S8Qf4isj5brnLuXSUUcB2P3pG94epajIml9HZri3P+UaueAYb6F1CJttZdZu07sGkGww1GxRBv0IlHe61/yo7ZiWjOyFfTMn5BdyNjCy3bKuGAmNhCy3aBzOoDKrLfEDkWHMRZ4ypDsCqPcLBarhgQD0qArAd3lMcWvaiBASDkNonATQ6Bvv0udm8XCpc0yeUQ4VLi1QaUHTKCE4LfL8tBJZyGdWJevnP0v+ojf+NpW7EzqypzQerP3jTzHFOfTp2zKJ+R/oJ7ZQniwt6yUvXhQ9POW+aQcQ== openpgp:0x2E6F4761"
-    ];
-    packages = with pkgs; [
     ];
   };
 

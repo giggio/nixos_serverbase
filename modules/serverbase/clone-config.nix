@@ -1,4 +1,10 @@
-{ config, pkgs, lib, setup, ... }:
+{
+  config,
+  pkgs,
+  lib,
+  setup,
+  ...
+}:
 
 let
   clone_script = import ./clone-script.nix { inherit pkgs; };

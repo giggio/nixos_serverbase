@@ -1,4 +1,10 @@
-{ pkgs, lib, modulesPath, inputs, ... }:
+{
+  pkgs,
+  lib,
+  modulesPath,
+  inputs,
+  ...
+}:
 
 {
   imports = [
@@ -18,7 +24,13 @@
       "lsm=landlock,yama,bpf"
     ];
     initrd = {
-      kernelModules = [ "usb_storage" "uas" "sd_mod" "xhci_pci" "ehci_pci" ];
+      kernelModules = [
+        "usb_storage"
+        "uas"
+        "sd_mod"
+        "xhci_pci"
+        "ehci_pci"
+      ];
       availableKernelModules = {
         vfat = true;
         ext4 = true;

@@ -1,7 +1,14 @@
 { pkgs, ... }:
 pkgs.writeShellApplication {
   name = "clone";
-  runtimeInputs = (with pkgs; [ coreutils git openssh ]);
+  runtimeInputs = (
+    with pkgs;
+    [
+      coreutils
+      git
+      openssh
+    ]
+  );
   text = ''
     set -euo pipefail
     chown_parent_dir() {

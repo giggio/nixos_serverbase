@@ -1,32 +1,79 @@
-{ serverbaseModules, lib, inputs }:
+{
+  serverbaseModules,
+  lib,
+  inputs,
+}:
 rec {
-  makeBaseModules = { system ? "", virtualbox ? false, modules ? [ ] }:
-    serverbaseModules.default ++ [
+  makeBaseModules =
+    {
+      system ? "",
+      virtualbox ? false,
+      modules ? [ ],
+    }:
+    serverbaseModules.default
+    ++ [
       (if system == "" then { } else { nixpkgs.hostPlatform = system; })
-    ] ++ (if virtualbox then [
-      serverbaseModules.virtualbox
-    ] else [
-      serverbaseModules.pi4
-    ]) ++ modules;
-  mkNixosSystem = { virtualbox ? false, modules ? [ ], system ? "", extraConfiguration ? { }, specialArgs ? { }, ... }:
+    ]
+    ++ (
+      if virtualbox then
+        [
+          serverbaseModules.virtualbox
+        ]
+      else
+        [
+          serverbaseModules.pi4
+        ]
+    )
+    ++ modules;
+  mkNixosSystem =
+    {
+      virtualbox ? false,
+      modules ? [ ],
+      system ? "",
+      extraConfiguration ? { },
+      specialArgs ? { },
+      ...
+    }:
     let
-      extraModules = (makeBaseModules { inherit virtualbox; inherit modules; inherit system; });
-      extendedSpecialArgs = { inherit inputs; } // specialArgs;
+      extraModules = (
+        makeBaseModules {
+          inherit virtualbox;
+          inherit modules;
+          inherit system;
+        }
+      );
+      extendedSpecialArgs = {
+        inherit inputs;
+      }
+      // specialArgs;
     in
-    lib.nixosSystem
-      ({
+    lib.nixosSystem (
+      {
         specialArgs = extendedSpecialArgs;
         modules = extraModules;
-      } // extraConfiguration);
-  mkPi4Image = { pkgs, nixos-system }:
+      }
+      // extraConfiguration
+    );
+  mkPi4Image =
+    { pkgs, nixos-system }:
     pkgs.runCommand "pi4-img" { } ''
       mkdir -p "$out"
       ln -s ${nixos-system.config.system.build.sdImage}/sd-image/*.img.zst $out/nixos.img.zst
     '';
 
-  mkVboxImage = { pkgs, system, modules, nixos-generators, specialArgs ? { } }:
+  mkVboxImage =
+    {
+      pkgs,
+      system,
+      modules,
+      nixos-generators,
+      specialArgs ? { },
+    }:
     let
-      extendedSpecialArgs = { inherit inputs; } // specialArgs;
+      extendedSpecialArgs = {
+        inherit inputs;
+      }
+      // specialArgs;
       vbox = nixos-generators.nixosGenerate {
         inherit system modules;
         specialArgs = extendedSpecialArgs;
@@ -43,16 +90,23 @@ rec {
       ln -s ${vbox}/*.ova $out/nixos.ova
     '';
 
-  mkDevShell = { pkgs, extraModules ? [ ] }:
+  mkDevShell =
+    {
+      pkgs,
+      extraModules ? [ ],
+    }:
     pkgs.mkShell {
       name = "Image build environment";
-      buildInputs = with pkgs; [
-        guestfs-tools
-        qemu-utils
-        yq-go
-        util-linux
-        sops
-        # virtualboxHeadless # see flake.nix comment
-      ] ++ extraModules;
+      buildInputs =
+        with pkgs;
+        [
+          guestfs-tools
+          qemu-utils
+          yq-go
+          util-linux
+          sops
+          # virtualboxHeadless # see flake.nix comment
+        ]
+        ++ extraModules;
     };
 }

@@ -1,4 +1,10 @@
-{ config, pkgs, lib, setup, ... }:
+{
+  config,
+  pkgs,
+  lib,
+  setup,
+  ...
+}:
 
 let
   # todo: move shellSessionVariables somewhere else when https://github.com/nix-community/home-manager/issues/5474 is fixed
@@ -24,26 +30,24 @@ rec {
 
           # beginning of configurations coming from other options, like gpg-agent, direnv and zoxide
         ''
-        (lib.mkOrder 10000
-          ''
-            # very end of .bashrc
-            export PATH="$(printf '%s\n' "$HOME/.local/bin:$PATH" | tr ':' '\n' | awk '!seen[$0]++' | paste -sd: -)"
-          '')
+        (lib.mkOrder 10000 ''
+          # very end of .bashrc
+          export PATH="$(printf '%s\n' "$HOME/.local/bin:$PATH" | tr ':' '\n' | awk '!seen[$0]++' | paste -sd: -)"
+        '')
       ];
-      profileExtra =
-        ''
-          # beginning of .profile
-          umask 022
-          if ! [ -v XDG_RUNTIME_DIR ]; then
-            XDG_RUNTIME_DIR=/run/user/`id -u`/
-            export XDG_RUNTIME_DIR
-            if ! [ -d "$XDG_RUNTIME_DIR" ]; then
-              mkdir -p "$XDG_RUNTIME_DIR"
-              chmod 755 "$XDG_RUNTIME_DIR"
-            fi
+      profileExtra = ''
+        # beginning of .profile
+        umask 022
+        if ! [ -v XDG_RUNTIME_DIR ]; then
+          XDG_RUNTIME_DIR=/run/user/`id -u`/
+          export XDG_RUNTIME_DIR
+          if ! [ -d "$XDG_RUNTIME_DIR" ]; then
+            mkdir -p "$XDG_RUNTIME_DIR"
+            chmod 755 "$XDG_RUNTIME_DIR"
           fi
-          # ending of .profile
-        '';
+        fi
+        # ending of .profile
+      '';
       shellAliases = {
         ls = "ls --color=auto --hyperlink=always";
         dir = "dir --color=auto";
@@ -95,44 +99,43 @@ rec {
             LUA_CPATH = "\"${pkgs.mylua}/lib/lua/5.1/?.so;$HOME/.luarocks/lib/lua/5.1/?.so;$LUA_CPATH;;\"";
           };
         in
-        lib.concatStringsSep "\n" (lib.concatLists [
-          [
-            ''
-              # beginning of .bashrc
-
-              # Shell session variables:
-            ''
-          ]
-          (lib.mapAttrsToList (k: v: "export ${k}=${v}") shellSessionVariables)
-          [
-            ''
-
-              # Bash session variables:
+        lib.concatStringsSep "\n" (
+          lib.concatLists [
+            [
               ''
-          ]
-          (lib.mapAttrsToList (k: v: "export ${k}=${v}") bashSessionVariables)
-          [
-            ''
+                # beginning of .bashrc
 
-              # beginning of .bashrc config
-              unset MAILCHECK
-              # If not running interactively, don't do anything
-              [[ $- == *i* ]] || return
-              # configure vi mode
-              set -o vi
-              bind '"jj":"\e"'
-              tabs -4
-              bind 'set completion-ignore-case on'
-              # make less more friendly for non-text input files, see lesspipe(1)
-              [ -x /usr/bin/lesspipe ] && eval "$(SHELL=/bin/sh lesspipe)"
-
-              # beginning of nix configuration
+                # Shell session variables:
               ''
+            ]
+            (lib.mapAttrsToList (k: v: "export ${k}=${v}") shellSessionVariables)
+            [
+              ''
+
+                # Bash session variables:
+              ''
+            ]
+            (lib.mapAttrsToList (k: v: "export ${k}=${v}") bashSessionVariables)
+            [
+              ''
+
+                # beginning of .bashrc config
+                unset MAILCHECK
+                # If not running interactively, don't do anything
+                [[ $- == *i* ]] || return
+                # configure vi mode
+                set -o vi
+                bind '"jj":"\e"'
+                tabs -4
+                bind 'set completion-ignore-case on'
+                # make less more friendly for non-text input files, see lesspipe(1)
+                [ -x /usr/bin/lesspipe ] && eval "$(SHELL=/bin/sh lesspipe)"
+
+                # beginning of nix configuration
+              ''
+            ]
           ]
-        ]
         );
-
-
 
     };
     gpg = {
@@ -197,27 +200,25 @@ rec {
     file = {
       ".gitconfig".source = ./.gitconfig;
       ".hushlogin".text = "";
-      ".tmux.conf".text =
-        ''
-          set -g default-terminal "screen-256color"
-          set-option -g default-shell /bin/bash
-          set -g history-limit 10000
-          source "$HOME/.nix-profile/share/tmux/powerline.conf"
-          set -g status-bg colour233
-          set-option -g status-position top
-          set -g mouse
+      ".tmux.conf".text = ''
+        set -g default-terminal "screen-256color"
+        set-option -g default-shell /bin/bash
+        set -g history-limit 10000
+        source "$HOME/.nix-profile/share/tmux/powerline.conf"
+        set -g status-bg colour233
+        set-option -g status-position top
+        set -g mouse
 
-          # Smart pane switching with awareness of vim splits
-          bind -n C-h run "(tmux display-message -p '#{pane_current_command}' | grep -iqE '(^|\/)g?(view|vim?)(diff)?$' && tmux send-keys C-h) || tmux select-pane -L"
-          bind -n C-j run "(tmux display-message -p '#{pane_current_command}' | grep -iqE '(^|\/)g?(view|vim?)(diff)?$' && tmux send-keys C-j) || tmux select-pane -D"
-          bind -n C-k run "(tmux display-message -p '#{pane_current_command}' | grep -iqE '(^|\/)g?(view|vim?)(diff)?$' && tmux send-keys C-k) || tmux select-pane -U"
-          bind -n C-l run "(tmux display-message -p '#{pane_current_command}' | grep -iqE '(^|\/)g?(view|vim?)(diff)?$' && tmux send-keys C-l) || tmux select-pane -R"
-          # bind -n C-\ run "(tmux display-message -p '#{pane_current_command}' | grep -iqE '(^|\/)g?(view|vim?)(diff)?$' && tmux send-keys 'C-\\') || tmux select-pane -l"
-        '';
-      ".inputrc".text =
-        ''
-          set bell-style none
-        '';
+        # Smart pane switching with awareness of vim splits
+        bind -n C-h run "(tmux display-message -p '#{pane_current_command}' | grep -iqE '(^|\/)g?(view|vim?)(diff)?$' && tmux send-keys C-h) || tmux select-pane -L"
+        bind -n C-j run "(tmux display-message -p '#{pane_current_command}' | grep -iqE '(^|\/)g?(view|vim?)(diff)?$' && tmux send-keys C-j) || tmux select-pane -D"
+        bind -n C-k run "(tmux display-message -p '#{pane_current_command}' | grep -iqE '(^|\/)g?(view|vim?)(diff)?$' && tmux send-keys C-k) || tmux select-pane -U"
+        bind -n C-l run "(tmux display-message -p '#{pane_current_command}' | grep -iqE '(^|\/)g?(view|vim?)(diff)?$' && tmux send-keys C-l) || tmux select-pane -R"
+        # bind -n C-\ run "(tmux display-message -p '#{pane_current_command}' | grep -iqE '(^|\/)g?(view|vim?)(diff)?$' && tmux send-keys 'C-\\') || tmux select-pane -l"
+      '';
+      ".inputrc".text = ''
+        set bell-style none
+      '';
       ".vimrc".text = "source ~/.vim/init.vim";
       ".local/bin/nr".source = ./bin/nr;
     };
