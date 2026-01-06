@@ -3,7 +3,7 @@
 SHELL=bash
 
 nix_deps := $(shell git ls-files --cached --modified --others --exclude-standard | sort | uniq | grep -v '^\..*')
-vm_count := $(shell (VBoxManage list vms | grep pitest || true) | awk '{gsub(/"/,""); print $$1}' | sed 's/pitest//' | sort | tail -n-1)
+vm_count := $(shell (VBoxManage list vms | grep pitest || true) | awk '{gsub(/"/,""); print $$1}' | sed 's/pitest//' | sort --general-numeric-sort | tail -n-1)
 
 clean:
 	rm -rf out
