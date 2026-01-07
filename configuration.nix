@@ -1,4 +1,6 @@
 {
-  networking.hostName = "pitest";
-  setup.username = "giggio";
+  setup = {
+    username = "giggio";
+    servername = "pitest";
+  };
 }

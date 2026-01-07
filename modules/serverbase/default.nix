@@ -82,8 +82,7 @@ in
   };
 
   networking = {
-    # hostName = "pitest"; # Set by the machine configuration
-
+    hostName = config.setup.servername;
     wireless.enable = false; # enables/disables wireless support via wpa_supplicant.
     useNetworkd = true;
     networkmanager.enable = lib.mkForce false; # using systemd-networkd

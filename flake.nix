@@ -36,30 +36,32 @@
     let
       lib = nixpkgs.lib;
       modules = [ ./configuration.nix ];
+      mkBaseConfig =
+        { system }:
+        {
+          system = if lib.strings.hasSuffix "-linux" system then system else "${system}-linux";
+          inherit modules;
+        };
+      nixosConfigurations = (
+        lib.foldr (a: b: a // b) { } (
+          map
+            (system: {
+              "nixos_${system}" = self.nixosModules.lib.mkNixosSystem (mkBaseConfig {
+                inherit system;
+              });
+              "nixos_virtualbox_${system}" = self.nixosModules.lib.mkNixosSystem (
+                { virtualbox = true; } // (mkBaseConfig { inherit system; })
+              );
+            })
+            [
+              "x86_64"
+              "aarch64"
+            ]
+        )
+      );
     in
     {
-      nixosConfigurations = lib.foldr (a: b: a // b) { } (
-        map
-          (
-            system:
-            let
-              baseConfig = {
-                system = "${system}-linux";
-                inherit modules;
-              };
-            in
-            {
-              "nixos_${system}" = self.nixosModules.lib.mkNixosSystem baseConfig;
-              "nixos_virtualbox_${system}" = self.nixosModules.lib.mkNixosSystem (
-                { virtualbox = true; } // baseConfig
-              );
-            }
-          )
-          [
-            "x86_64"
-            "aarch64"
-          ]
-      );
+      inherit nixosConfigurations;
       nixosModules = import ./modules/default.nix {
         inherit inputs lib;
         modules = self.nixosConfigurations;
@@ -78,17 +80,10 @@
         packages = {
           pi4 = self.nixosModules.lib.mkPi4Image {
             inherit pkgs;
-            nixos-system = self.nixosModules.lib.mkNixosSystem {
-              inherit modules;
-              system = "aarch64-linux";
-            };
+            nixos-system = nixosConfigurations.nixos_aarch64;
           };
           vbox = self.nixosModules.lib.mkVboxImage {
-            inherit pkgs system;
-            modules = self.nixosModules.lib.makeBaseModules {
-              virtualbox = true;
-              inherit modules;
-            };
+            inherit pkgs system modules;
           };
         };
         devShells.default = self.nixosModules.lib.mkDevShell { inherit pkgs; };

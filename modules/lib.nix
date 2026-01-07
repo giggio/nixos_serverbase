@@ -34,29 +34,22 @@ rec {
       specialArgs ? { },
       ...
     }:
-    let
-      extraModules = (
-        makeBaseModules {
+    lib.nixosSystem (
+      {
+        specialArgs = specialArgs // {
+          inherit inputs;
+        };
+        modules = makeBaseModules {
           inherit virtualbox;
           inherit modules;
           inherit system;
-        }
-      );
-      extendedSpecialArgs = {
-        inherit inputs;
-      }
-      // specialArgs;
-    in
-    lib.nixosSystem (
-      {
-        specialArgs = extendedSpecialArgs;
-        modules = extraModules;
+        };
       }
       // extraConfiguration
     );
   mkPi4Image =
     { pkgs, nixos-system }:
-    pkgs.runCommand "pi4-img" { } ''
+    pkgs.runCommand "${nixos-system.config.setup.servername}_img" { } ''
       mkdir -p "$out"
       ln -s ${nixos-system.config.system.build.sdImage}/sd-image/*.img.zst $out/nixos.img.zst
     '';
@@ -69,13 +62,15 @@ rec {
       specialArgs ? { },
     }:
     let
-      extendedSpecialArgs = {
-        inherit inputs;
-      }
-      // specialArgs;
       vbox = inputs.nixos-generators.nixosGenerate {
-        inherit system modules;
-        specialArgs = extendedSpecialArgs;
+        inherit system;
+        modules = makeBaseModules {
+          virtualbox = true;
+          inherit modules;
+        };
+        specialArgs = specialArgs // {
+          inherit inputs;
+        };
         format = "virtualbox";
       };
     in

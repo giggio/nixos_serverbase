@@ -7,6 +7,10 @@ with lib;
       type = types.str;
       example = literalExpression "{ username = \"giggio\"; }";
     };
+    servername = mkOption {
+      type = types.str;
+      example = literalExpression "{ servername = \"my_server\"; }";
+    };
     configRepo = mkOption {
       type = types.str;
       default = "giggio/nixos_serverbase";
