@@ -17,6 +17,7 @@ rec {
     ++ (
       if virtualbox then
         [
+          inputs.nixos-generators.nixosModules.all-formats
           serverbaseModules.virtualbox
         ]
       else
@@ -25,6 +26,7 @@ rec {
         ]
     )
     ++ modules;
+
   mkNixosSystem =
     {
       virtualbox ? false,
@@ -47,6 +49,7 @@ rec {
       }
       // extraConfiguration
     );
+
   mkPi4Image =
     { pkgs, nixos-system }:
     pkgs.runCommand "${nixos-system.config.setup.servername}_img" { } ''
@@ -55,33 +58,10 @@ rec {
     '';
 
   mkVboxImage =
-    {
-      pkgs,
-      system,
-      modules,
-      specialArgs ? { },
-    }:
-    let
-      vbox = inputs.nixos-generators.nixosGenerate {
-        inherit system;
-        modules = makeBaseModules {
-          virtualbox = true;
-          inherit modules;
-        };
-        specialArgs = specialArgs // {
-          inherit inputs;
-        };
-        format = "virtualbox";
-      };
-    in
-    pkgs.runCommand "vbox-ova" { } ''
+    { pkgs, nixos-system }:
+    pkgs.runCommand "${nixos-system.config.setup.servername}_ova" { } ''
       mkdir -p "$out"
-      if [ ${vbox}/*.ova == '${vbox}/*.ova' ]; then
-        echo "No OVA found"
-        ls -la "${vbox}"
-        exit 1
-      fi
-      ln -s ${vbox}/*.ova $out/nixos.ova
+      ln -s ${nixos-system.config.formats.virtualbox}/*.ova $out/nixos.ova
     '';
 
   mkDevShell =

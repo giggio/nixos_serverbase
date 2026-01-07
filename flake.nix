@@ -83,7 +83,8 @@
             nixos-system = nixosConfigurations.nixos_aarch64;
           };
           vbox = self.nixosModules.lib.mkVboxImage {
-            inherit pkgs system modules;
+            inherit pkgs;
+            nixos-system = nixosConfigurations."nixos_virtualbox_${lib.strings.removeSuffix "-linux" system}";
           };
         };
         devShells.default = self.nixosModules.lib.mkDevShell { inherit pkgs; };
