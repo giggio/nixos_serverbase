@@ -56,15 +56,13 @@ virt-format -a "$EXTRA_RAW" --filesystem=ext4
 
 # 3. Copy the key into the disk
 echo "Injecting server.agekey..."
-# virt-copy-in -a "$EXTRA_RAW" "$AGEKEY" /nixos-secrets
-sudo guestfish -a "$EXTRA_RAW" <<'EOF'
+sudo guestfish -a "$EXTRA_RAW" <<EOF
 run
 # optional: show discovered filesystems for debug
 # list-filesystems
-# explicit mount (adjust device name as reported by list-filesystems)
 mount /dev/sda1 /
 mkdir-p /nixos-secrets
-upload /home/giggio/.config/nixos-secrets/server.agekey /nixos-secrets/server.agekey
+upload "$HOME/.config/nixos-secrets/server.agekey" /nixos-secrets/server.agekey
 chmod 0400 /nixos-secrets/server.agekey
 sync
 exit

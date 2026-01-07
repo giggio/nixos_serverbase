@@ -44,13 +44,14 @@ sops, and home-manager).
 outputs = { nixpkgs, serverbase, ... }: {
   nixosConfigurations = {
     nixos = serverbase.nixosModules.lib.mkNixosSystem {
-      system = "x86_64-linux";
+      system = "aarch64";
       modules = [ ./configuration.nix ];
       specialArgs = { }; # optional
       extraConfiguration = { }; # optional
     };
     nixos_virtuabox = serverbase.nixosModules.lib.mkNixosSystem {
       # .. the same as above, plus:
+      system = "x86_64-linux"; # or "aarch64" if you are on an ARM machine
       virtualbox = true;
     };
   };
@@ -72,20 +73,13 @@ You can also build a VirtualBox OVA that can be imported into VirtualBox.
 ```nix
 outputs = { nixpkgs, serverbase, ... }: {
   packages.x86_64-linux = {
-    pi4 = serverbase.nixosModules.lib.mkPi4Image {
-      system = "x86_64-linux";
-      nixos-system = serverbase.nixosModules.lib.mkNixosSystem {
-        modules = [ ./configuration.nix ];
-        system = "aarch64-linux";
-      };
+    nixos = self.nixosModules.lib.mkPi4Image {
+      inherit pkgs;
+      nixos-system = nixosConfigurations.nixos;
     };
-    vbox = serverbase.nixosModules.lib.mkVboxImage {
-      inherit pkgs nixos-generators;
-      system = "x86_64-linux";
-      modules = serverbase.nixosModules.lib.makeBaseModules {
-        modules = [ ./configuration.nix ];
-        virtualbox = true;
-      };
+    nixos_virtualbox = self.nixosModules.lib.mkVboxImage {
+      inherit pkgs;
+      nixos-system = nixosConfigurations."nixos_virtualbox";
     };
   };
 }
@@ -118,7 +112,7 @@ the build process if using the provided scripts.
    Or build with nix:
 
    ```bash
-   nix build .#pi4 --out-link out/nix/img/
+   nix build .#nixos --out-link out/nix/img/
    ```
 
 3. Burn it into the SD card using the Raspberry Pi Imager. For the operating system,

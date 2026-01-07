@@ -1,4 +1,4 @@
-.PHONY: default import start connect
+.PHONY: default start connect
 
 SHELL=bash
 
@@ -8,21 +8,21 @@ vm_count := $(shell (VBoxManage list vms | grep pitest || true) | awk '{gsub(/"/
 clean:
 	rm -rf out
 
-out/nix/ova/nixos.ova: $(nix_deps)
-	nix build .\#vbox --print-build-logs --out-link out/nix/ova/
+out/nix/ova/%.ova: $(nix_deps)
+	nix build .\#$*_virtualbox --print-build-logs --out-link out/nix/ova/
 
-out/nixos-with-agekey.ova: out/nix/ova/nixos.ova $(nix_deps)
-	./inject-agekey-into-ova.sh out/nix/ova/nixos.ova out
+out/%-with-agekey.ova: out/nix/ova/%.ova $(nix_deps)
+	./inject-agekey-into-ova.sh out/nix/ova/$*.ova out
 
-out/nix/img/nixos.img.zst: $(nix_deps)
-	nix build .\#pi4 --print-build-logs --out-link out/nix/img/
+out/nix/img/%.img.zst: $(nix_deps)
+	nix build .\#$* --print-build-logs --out-link out/nix/img/
 
-import: out/nixos-with-agekey.ova
+import_%: out/%-with-agekey.ova
 	up_if=$$(comm -12 <(ip -br link show up | awk '{ print $$1 }' | sort) <(for f in /sys/class/net/*/device; do echo $$f | awk -F/ '{ print $$5 }'; done | sort) | head -n1); \
 	[ -z "$$up_if" ] && echo "no network interface is up" && exit 1; \
 	vm_name="pitest$$(($(vm_count)+1))"; \
 	echo "VM is $$vm_name"; \
-	VBoxManage import out/nixos-with-agekey.ova --vsys 0 --vmname=$$vm_name --cpus 4 --unit 7 --ignore; \
+	VBoxManage import out/$*-with-agekey.ova --vsys 0 --vmname=$$vm_name --cpus 4 --unit 7 --ignore; \
 	VBoxManage modifyvm $$vm_name --nic1 bridged --bridge-adapter1=$$up_if --uart1 0x3f8 4 --uartmode1 server /tmp/$$vm_name.sock
 
 start:

@@ -78,11 +78,11 @@
           boot-test = pkgs.testers.nixosTest (import ./tests/default.nix { inherit pkgs inputs; });
         };
         packages = {
-          pi4 = self.nixosModules.lib.mkPi4Image {
+          nixos = self.nixosModules.lib.mkPi4Image {
             inherit pkgs;
             nixos-system = nixosConfigurations.nixos_aarch64;
           };
-          vbox = self.nixosModules.lib.mkVboxImage {
+          nixos_virtualbox = self.nixosModules.lib.mkVboxImage {
             inherit pkgs;
             nixos-system = nixosConfigurations."nixos_virtualbox_${lib.strings.removeSuffix "-linux" system}";
           };

@@ -1,6 +1,6 @@
 {
   setup = {
     username = "giggio";
-    servername = "pitest";
+    servername = "nixos";
   };
 }
