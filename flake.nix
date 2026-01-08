@@ -43,23 +43,24 @@
           system = if lib.strings.hasSuffix "-linux" system then system else "${system}-linux";
           inherit modules;
         };
-      nixosConfigurations = (
-        lib.foldr (a: b: a // b) { } (
-          map
-            (system: {
-              "nixos_${system}" = self.nixosModules.lib.mkNixosSystem (mkBaseConfig {
-                inherit system;
-              });
-              "nixos_virtualbox_${system}" = self.nixosModules.lib.mkNixosSystem (
-                { virtualbox = true; } // (mkBaseConfig { inherit system; })
-              );
-            })
-            [
-              "x86_64"
-              "aarch64"
-            ]
-        )
-      );
+      nixosConfigurations = {
+        nixos = nixosConfigurations.nixos_aarch64;
+      }
+      // (lib.foldr (a: b: a // b) { } (
+        map
+          (system: {
+            "nixos_${system}" = self.nixosModules.lib.mkNixosSystem (mkBaseConfig {
+              inherit system;
+            });
+            "nixos_virtualbox_${system}" = self.nixosModules.lib.mkNixosSystem (
+              { virtualbox = true; } // (mkBaseConfig { inherit system; })
+            );
+          })
+          [
+            "x86_64"
+            "aarch64"
+          ]
+      ));
     in
     {
       inherit nixosConfigurations;
