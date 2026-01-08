@@ -64,6 +64,14 @@ rec {
       ln -s ${nixos-system.config.formats.virtualbox}/*.ova $out/${nixos-system.config.setup.servername}.ova
     '';
 
+  list_machines =
+    { pkgs, machines, ... }:
+    pkgs.runCommand "list_machines" { } ''
+      mkdir -p "$out/bin"
+      echo -e "#!/usr/bin/env bash\n\necho ${lib.strings.concatStringsSep " " machines}" > "$out/bin/list_machines";
+      chmod +x "$out/bin/list_machines";
+    '';
+
   mkDevShell =
     {
       pkgs,

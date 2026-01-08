@@ -3,6 +3,7 @@
 *.rej
 *.orig
 *.agekey
+.result
 result
 out
 *.ova

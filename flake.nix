@@ -34,6 +34,7 @@
       ...
     }:
     let
+      machines = [ "nixos" ];
       lib = nixpkgs.lib;
       modules = [ ./configuration.nix ];
       mkBaseConfig =
@@ -78,6 +79,7 @@
           boot-test = pkgs.testers.nixosTest (import ./tests/default.nix { inherit pkgs inputs; });
         };
         packages = {
+          list_machines = self.nixosModules.lib.list_machines { inherit pkgs machines; };
           nixos = self.nixosModules.lib.mkPi4Image {
             inherit pkgs;
             nixos-system = nixosConfigurations.nixos_aarch64;
