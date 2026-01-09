@@ -1,4 +1,4 @@
-.PHONY: default start connect
+.PHONY: default start connect delete_old_vms
 
 .SECONDARY:
 .SUFFIXES:
@@ -70,6 +70,18 @@ connect:
 	! [ -S $$socket ] && echo "no socket found" && exit 1; \
 	echo -e "\e[1;32m*** Exit with Ctrl + ] ***\e[0m"; \
 	socat STDIO,raw,echo=0,escape=0x1d UNIX-CONNECT:$$socket
+
+delete_old_vms:
+	vm_numbers=$$((VBoxManage list vms | grep pitest) | awk '{gsub(/"/,""); print $$1}' | sed 's/pitest//' | sort  --general-numeric-sort); \
+	if [ $$(echo "$$vm_numbers" | wc -l) -lt 2 ]; then echo "No VMs to delete"; exit; fi; \
+	for vm_number in $$(echo "$$vm_numbers" | head -n-1); do \
+	  vm=$$(printf 'pitest%s' "$$vm_number"); \
+	  echo "Deleting VirtualBox VM: $$vm"; \
+	  VBoxManage controlvm $$vm poweroff 2>/dev/null || true; \
+	  VBoxManage unregistervm $$vm --delete-all; \
+	  echo "VMs left:"; \
+	  VBoxManage list vms; \
+	done
 
 default:
 	echo "no default target"
