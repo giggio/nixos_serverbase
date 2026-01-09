@@ -4,7 +4,7 @@
 .SUFFIXES:
 SHELL=bash
 
-nix_deps = $(shell git ls-files --cached --modified --others --exclude-standard | sort | uniq | grep -v -e '^\..*' -e '.*\.md' -e Makefile)
+nix_deps = $(shell git ls-files --cached --modified --others --exclude-standard | sort | uniq | grep -v -e '^\..*' -e '.*\.md' -e Makefile | while IFS= read -r f; do [ -e "$$f" ] && echo "$$f"; done)
 vm_count = $(shell (VBoxManage list vms | grep pitest || true) | awk '{gsub(/"/,""); print $$1}' | sed 's/pitest//' | sort --general-numeric-sort | tail -n-1)
 out_dir := out
 result_dir := .result
