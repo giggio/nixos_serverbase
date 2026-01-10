@@ -1,8 +1,6 @@
 {
   config,
   pkgs,
-  lib,
-  setup,
   ...
 }:
 
@@ -46,10 +44,16 @@ in
       clone-nixos-config =
         let
           clone_script = import ./clone-script.nix { inherit pkgs; };
-          home = "/home/${config.setup.username}";
           destination_dir = config.setup.nixosConfigDir;
           https_repo = "https://github.com/${config.setup.configRepo}.git";
           ssh_repo = "git@github.com:${config.setup.configRepo}.git";
+          git_askpass = pkgs.writeShellScript "git_askpass" ''
+            source "${config.sops.templates."git-askpass".path}"
+            case "$1" in
+              *Username*) echo "$username" ;;
+              *Password*) echo "$password" ;;
+            esac
+          '';
         in
         {
           description = "Clone NixOS config ~/.config/nixos if missing";
@@ -69,8 +73,7 @@ in
             ExecStart = ''
               ${clone_script}/bin/clone "${https_repo}" "${destination_dir}" \
               --private-git-origin "${ssh_repo}" \
-              --https-user-file "${config.sops.secrets."gh_repo_clone/user".path}" \
-              --https-password-file "${config.sops.secrets."gh_repo_clone/pat".path}" \
+              --git-askpass-file "${git_askpass}" \
               --chown "${config.setup.username}"
             '';
             Restart = "on-failure";
@@ -78,5 +81,11 @@ in
           };
         };
     };
+  };
+  sops.templates."git-askpass" = {
+    content = ''
+      username=${config.sops.placeholder."gh_repo_clone/user"}
+      password=${config.sops.placeholder."gh_repo_clone/pat"}
+    '';
   };
 }

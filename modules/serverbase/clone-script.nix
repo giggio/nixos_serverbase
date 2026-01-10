@@ -51,8 +51,7 @@ pkgs.writeShellApplication {
       local destination_dir=""
       local symlink_dir=""
       local private_git_origin=""
-      local https_user_file=""
-      local https_password_file=""
+      local git_askpass_file=""
       local chown=""
       local dry_run=false
       while [[ $# -gt 0 ]]; do
@@ -79,21 +78,12 @@ pkgs.writeShellApplication {
           shift
           shift
           ;;
-        --https-user-file|-U)
+        --git-askpass-file)
           if [ ! -v 2 ]; then
-            echo -e "\e[31mNo value provided for https user.\e[0m" >&2
+            echo -e "\e[31mNo value provided for git askpass file.\e[0m" >&2
             exit 1
           fi
-          https_user_file="$2"
-          shift
-          shift
-          ;;
-        --https-password-file|-P)
-          if [ ! -v 2 ]; then
-            echo -e "\e[31mNo value provided for https password.\e[0m" >&2
-            exit 1
-          fi
-          https_password_file="$2"
+          git_askpass_file="$2"
           shift
           shift
           ;;
@@ -131,14 +121,9 @@ pkgs.writeShellApplication {
         echo -e "\e[31mThe destination directory was not provided.\e[0m" >&2
         exit 1
       fi
-      if ! [ -z "$https_user_file" ] && ! [ -z "$https_password_file" ] && [[ $clone_url == https://* ]]; then
-        local auth
-        auth="$(cat "$https_user_file"):$(cat "$https_password_file")"
-        local original_clone_url="$clone_url"
-        clone_url="https://$auth@''${clone_url#https://}"
-        if [ -z "$private_git_origin" ]; then
-          private_git_origin="$original_clone_url"
-        fi
+      if ! [ -z "$git_askpass_file" ] && [[ $clone_url == https://* ]]; then
+        export GIT_ASKPASS="$git_askpass_file"
+        export GIT_TERMINAL_PROMPT=0
       fi
       chown_parent_dir "$destination_dir" "$chown" "$dry_run"
       echo "Cloning..."
