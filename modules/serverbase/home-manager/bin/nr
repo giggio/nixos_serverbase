@@ -36,16 +36,51 @@ get_generic_profile() {
     local is_virtualbox=false
   fi
   # available profiles: nixos, nixos_virtualbox
-  local profile=nixos
+  local profile=${1:-nixos}
   if $is_virtualbox; then
     profile+=_virtualbox
   fi
+  host_platform="$(uname -m)"
+  profile+=_$host_platform
   echo $profile
+}
+
+get_config_dir() {
+  dry_run=${1:-false}
+  local user_env
+  if $dry_run && [ "$EUID" != "0" ]; then
+    user_env=$(env)
+  else
+    user_env=$(su - "$SUDO_USER" -c env)
+  fi
+  local user_config_home
+  user_config_home="$(echo "$user_env" | awk -F= '$1=="XDG_CONFIG_HOME"{print substr($0, index($0,$2))}')"
+  if [ -z "$user_config_home" ]; then
+    user_config_home="/home/$SUDO_USER/.config"
+  fi
+  local nixos_config_dir
+  nixos_config_dir="$user_config_home/nixos"
+  echo "$nixos_config_dir"
+}
+
+get_overrides() {
+  local overrides=''
+  local serverbase_flake_input
+  serverbase_flake_input="$(basename "$(nix flake metadata "$(pwd)" --json | jq -r '.locks.nodes.serverbase.original.path // ""')")"
+  if ! [ -z "$serverbase_flake_input" ]; then
+    overrides="--override-input serverbase path:$nixos_config_dir/$serverbase_flake_input"
+    if $VERBOSE; then
+      echo "serverbase flake input: $serverbase_flake_input" >&2
+    fi
+  else
+    echo "No serverbase flake input" >&2
+  fi
+  echo "$overrides"
 }
 
 _nr() {
   local get_profile=false
-  local verbose=false
+  export VERBOSE=false
   local switch=false
   local dry_run=false
   local forward_args=()
@@ -53,7 +88,7 @@ _nr() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
     --verbose)
-      verbose=true
+      VERBOSE=true
       shift
       ;;
     --dry-run)
@@ -75,64 +110,55 @@ _nr() {
     esac
   done
   set -- "${forward_args[@]}" # reset arguments
-  host_platform="$(uname -m)"
-  case $(hostname) in
-  a_host | another_host) ;; # todo: add profiles
-  *)
-    profile=$(get_generic_profile)
-    if ! $get_profile; then
-      echo -e "\e[33mThis host does not have a specific profile, so it will run using the generic profile rules. Selected profile: \e[34m$profile\e[33m.\e[0m Selected host platform: \e[34m$host_platform\e[0m"
-    fi
-    ;;
-  esac
-  if $get_profile; then
-    if [ -z "$profile" ]; then
-      echo -e "This host has specific configuration, so the hostname will be used as the profile: \e[32m$(hostname)\e[0m."
-    else
-      echo -e "Profile: \e[34m$profile\e[33m.\e[0m"
-    fi
-    echo -e "Host platform: \e[34m$host_platform\e[33m.\e[0m"
-    return
-  fi
+
   if $dry_run; then
     if ! [ -v SUDO_USER ]; then
-      local SUDO_USER
-      SUDO_USER=$(whoami)
+      SUDO_USER="$(whoami)"
+      export SUDO_USER
     fi
   else
     run_checks
   fi
-  local user_env
-  if $dry_run && [ "$EUID" != "0" ]; then
-    user_env=$(env)
-  else
-    user_env=$(su - "$SUDO_USER" -c env)
+
+  # getting config dir
+  local nixos_config_dir
+  nixos_config_dir="$(get_config_dir $dry_run)"
+
+  # getting profile
+  local overrides
+  overrides="$(get_overrides)"
+  local profile
+  # shellcheck disable=SC2086
+  machine_name="$(nix run ".#list_machines" $overrides | grep "$(hostname)" || true)"
+  profile=$(get_generic_profile "$machine_name")
+  if [ -z "$machine_name" ]; then
+    if ! $get_profile; then
+      echo -e "\e[33mThis host does not have a specific profile, so it will run using the generic profile rules. Selected profile: \e[34m$profile\e[33m.\e[0m"
+    fi
+  fi
+
+  if $get_profile; then
+    echo -e "Profile: \e[34m$profile\e[33m.\e[0m"
+    return
   fi
   if $switch; then
-    local user_config_home
-    user_config_home="$(echo "$user_env" | awk -F= '$1=="XDG_CONFIG_HOME"{print substr($0, index($0,$2))}')"
-    if [ -z "$user_config_home" ]; then
-      user_config_home="/home/$SUDO_USER/.config"
+    local other_args=()
+    if ! [ -z "$overrides" ]; then
+      # shellcheck disable=SC2206
+      other_args+=($overrides)
     fi
-    local nixos_config_dir
-    nixos_config_dir="$user_config_home/nixos"
-    local verbose_args=()
-    local profile_arg=''
-    if ! [ -z "$profile" ]; then
-      profile_arg="#${profile}_$host_platform"
-    fi
-    if $verbose; then
-      verbose_args+=(--print-build-logs)
-      echo -e "\e[32mRunning:\e[0m \e[34mnixos-rebuild switch $* --flake $nixos_config_dir?submodules=1$profile_arg ${verbose_args[*]}"
+    if $VERBOSE; then
+      other_args+=(--print-build-logs)
+      echo -e "\e[32mRunning:\e[0m \e[34mnixos-rebuild switch $* --flake $nixos_config_dir?submodules=1#${profile} ${other_args[*]}" >&2
     fi
     if $dry_run; then
-      echo -e "\e[32mWould run:\e[34m nixos-rebuild switch $* --flake $nixos_config_dir?submodules=1$profile_arg ${verbose_args[*]}\e[0m"
+      echo -e "\e[32mWould run:\e[34m nixos-rebuild switch $* --flake $nixos_config_dir?submodules=1#${profile} ${other_args[*]}\e[0m"
     else
-      nixos-rebuild switch "$@" --flake "$nixos_config_dir?submodules=1$profile_arg" "${verbose_args[@]}"
+      nixos-rebuild switch "$@" --flake "$nixos_config_dir?submodules=1#${profile}" "${other_args[@]}"
     fi
   else
-    if $verbose; then
-      echo -e "\e[32mRunning:\e[0m \e[34mnixos-rebuild $*"
+    if $VERBOSE; then
+      echo -e "\e[32mRunning:\e[0m \e[34mnixos-rebuild $*" >&2
     fi
     if $dry_run; then
       echo -e "\e[32mWould run:\e[34m nixos-rebuild $*\e[0m"

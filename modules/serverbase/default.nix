@@ -183,6 +183,7 @@ in
     file
     tree
     bat
+    jq
   ];
 
   environment = {
