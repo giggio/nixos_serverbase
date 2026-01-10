@@ -14,8 +14,9 @@ let
     FZF_DEFAULT_OPTS = "--ansi";
     FZF_CTRL_T_COMMAND = ''"$FZF_DEFAULT_COMMAND"'';
   };
+  homeDirectory = "/home/${config.setup.username}";
 in
-rec {
+{
   imports = [ ];
   programs = {
     bash = {
@@ -167,7 +168,7 @@ rec {
   };
   home = {
     username = config.setup.username;
-    homeDirectory = "/home/" + home.username;
+    inherit homeDirectory;
     stateVersion = "25.11"; # Check if there are state version changes before changing this fiels: https://nix-community.github.io/home-manager/release-notes.xhtml
     preferXdgDirectories = true;
     # packages = import ./pkgs.nix { inherit config; inherit pkgs; inherit pkgs-stable; inherit lib; inherit setup; };
@@ -234,6 +235,9 @@ rec {
   systemd = {
     user = {
       services = { };
+      tmpfiles.rules = [
+        "d ${homeDirectory}/${config.setup.username}/.cache/git/credential/ 0700 ${config.setup.username} - -"
+      ];
     };
   };
 }
