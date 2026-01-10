@@ -25,7 +25,7 @@ in
         inputs.sops-nix.nixosModules.sops
         inputs.home-manager.nixosModules.home-manager
         {
-          networking.hostName = "pitest";
+          networking.hostName = "nixos";
           setup.username = "giggio";
         }
       ];
@@ -40,6 +40,6 @@ in
   testScript = ''
     machine.wait_for_unit("multi-user.target")
     machine.succeed("id giggio")
-    machine.succeed("hostname | grep pitest")
+    machine.succeed("hostname | grep nixos")
   '';
 }

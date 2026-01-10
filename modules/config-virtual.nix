@@ -1,7 +1,6 @@
 {
   config,
   pkgs,
-  lib,
   modulesPath,
   ...
 }:
@@ -14,7 +13,7 @@
   setup.virtualbox = true;
 
   virtualbox = {
-    vmName = "pitest";
+    vmName = config.setup.servername;
     memorySize = 4096;
   };
 
