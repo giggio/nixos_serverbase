@@ -25,7 +25,7 @@ deps:
 	echo "These are the make build deps: $(nix_deps)"
 
 $(ova_with_agekey_files): $(out_dir)/nix/ova/%-with-agekey.ova: $(out_dir)/nix/ova/.%.ova.stamp $(nix_deps)
-	./inject-agekey-into-ova.sh "$(out_dir)/nix/ova/$*.ova" "$(out_dir)/nix/ova" # todo: simple test, remove
+	./inject-agekey-into-ova.sh "$(out_dir)/nix/ova/$*.ova" "$(out_dir)/nix/ova"
 
 # The .stamp file is necessary because otherwise the timestamp of the ova file is the same as the
 # timestamp of the nix build, which is unix time, 1-1-1970
