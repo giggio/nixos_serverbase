@@ -82,6 +82,7 @@ in
   };
 
   networking = {
+    firewall.enable = true;
     hostName = config.setup.derivedHostName;
     wireless.enable = false; # enables/disables wireless support via wpa_supplicant.
     useNetworkd = true;
@@ -216,8 +217,6 @@ in
   };
 
   virtualisation.docker.enable = true;
-
-  networking.firewall.allowedTCPPorts = [ 22 ];
 
   # This value determines the NixOS release from which the default
   # settings for stateful data, like file locations and database versions
