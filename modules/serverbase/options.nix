@@ -3,13 +3,35 @@ with lib;
 {
   options.setup = {
     virtualbox = mkEnableOption "Virtualbox enabled";
+    environment = mkOption {
+      type = types.enum [
+        "dev"
+        "prod"
+      ];
+      default = "prod";
+      example = literalExpression "{ environment = \"dev\"; }";
+    };
+    isDev = mkOption {
+      type = types.bool;
+      readOnly = true;
+      description = "Computed from setup.environment.";
+    };
+    isProd = mkOption {
+      type = types.bool;
+      readOnly = true;
+      description = "Computed from setup.environment.";
+    };
     username = mkOption {
       type = types.str;
       example = literalExpression "{ username = \"giggio\"; }";
     };
-    servername = mkOption {
+    hostName = mkOption {
       type = types.str;
-      example = literalExpression "{ servername = \"my_server\"; }";
+      example = literalExpression "{ hostName = \"my_server\"; }";
+    };
+    derivedHostName = mkOption {
+      type = types.str;
+      readOnly = true;
     };
     configRepo = mkOption {
       type = types.str;
@@ -21,5 +43,10 @@ with lib;
       default = "/home/${config.setup.username}/.config/nixos";
       description = "The directory to clone the configuration to";
     };
+  };
+  config.setup = {
+    isDev = config.setup.environment == "dev";
+    isProd = config.setup.environment == "prod";
+    derivedHostName = "${config.setup.hostName}${if config.setup.isDev then "_dev" else ""}";
   };
 }

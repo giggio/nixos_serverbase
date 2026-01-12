@@ -13,7 +13,7 @@
   setup.virtualbox = true;
 
   virtualbox = {
-    vmName = config.setup.servername;
+    vmName = config.setup.hostName;
     memorySize = 4096;
   };
 

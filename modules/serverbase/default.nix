@@ -82,7 +82,7 @@ in
   };
 
   networking = {
-    hostName = config.setup.servername;
+    hostName = config.setup.derivedHostName;
     wireless.enable = false; # enables/disables wireless support via wpa_supplicant.
     useNetworkd = true;
     networkmanager.enable = lib.mkForce false; # using systemd-networkd
