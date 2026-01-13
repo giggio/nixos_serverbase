@@ -124,6 +124,8 @@ _nr() {
   local nixos_config_dir
   nixos_config_dir="$(get_config_dir $dry_run)"
 
+  # moving to script dir so flake.nix can be found
+  cd "$nixos_config_dir"
   # getting profile
   local overrides
   overrides="$(get_overrides)"
