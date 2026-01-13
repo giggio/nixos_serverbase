@@ -63,21 +63,6 @@ get_config_dir() {
   echo "$nixos_config_dir"
 }
 
-get_overrides() {
-  local overrides=''
-  local serverbase_flake_input
-  serverbase_flake_input="$(basename "$(nix flake metadata "$(pwd)" --json | jq -r '.locks.nodes.serverbase.original.path // ""')")"
-  if ! [ -z "$serverbase_flake_input" ]; then
-    overrides="--override-input serverbase path:$nixos_config_dir/$serverbase_flake_input"
-    if $VERBOSE; then
-      echo "serverbase flake input: $serverbase_flake_input" >&2
-    fi
-  else
-    echo "No serverbase flake input" >&2
-  fi
-  echo "$overrides"
-}
-
 _nr() {
   local get_profile=false
   export VERBOSE=false
@@ -127,11 +112,8 @@ _nr() {
   # moving to script dir so flake.nix can be found
   cd "$nixos_config_dir"
   # getting profile
-  local overrides
-  overrides="$(get_overrides)"
   local profile
-  # shellcheck disable=SC2086
-  machine_name="$(nix run ".#list_machines" $overrides | grep "$(hostname)" || true)"
+  machine_name="$(nix run ".#list_machines" | grep "^$(hostname)$" || true)"
   profile=$(get_generic_profile "$machine_name")
   if [ -z "$machine_name" ]; then
     if ! $get_profile; then
@@ -145,10 +127,6 @@ _nr() {
   fi
   if $switch; then
     local other_args=()
-    if ! [ -z "$overrides" ]; then
-      # shellcheck disable=SC2206
-      other_args+=($overrides)
-    fi
     if $VERBOSE; then
       other_args+=(--print-build-logs)
       echo -e "\e[32mRunning:\e[0m \e[34mnixos-rebuild switch $* --flake $nixos_config_dir?submodules=1#${profile} ${other_args[*]}" >&2
