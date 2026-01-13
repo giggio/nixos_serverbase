@@ -187,7 +187,19 @@ in
         \e{green}IP:\e{reset} \4
         \e{green}Today is:\e{reset} \d \t
       '';
+      "profile.d/xdg_dirs_extra.sh".source = ./scripts/xdg_dirs_extra.sh;
     };
+    extraInit = ''
+      # read extra profile files in /etc/profile.d/
+      if [ -d /etc/profile.d ]; then
+        for i in /etc/profile.d/*.sh; do
+          if [ -r $i ]; then
+            . $i
+          fi
+        done
+        unset i
+      fi
+    '';
   };
 
   programs = {
