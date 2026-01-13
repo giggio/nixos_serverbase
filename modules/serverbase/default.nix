@@ -120,7 +120,8 @@ in
       tmpfiles = {
         enable = true;
         users.${config.setup.username}.rules = [
-          "D /run/user/1000/gnupg 0700 1000 1000 -"
+          "d /run/user/1000/ 0700 1000 1000 -"
+          "d /run/user/1000/gnupg 0700 1000 1000 -"
         ];
       };
     };
