@@ -236,6 +236,8 @@ in
     user = {
       services = { };
       tmpfiles.rules = [
+        "d /run/user/1000/ 0700 1000 1000 -"
+        "d /run/user/1000/gnupg 0700 1000 1000 -"
         "d ${homeDirectory}/${config.setup.username}/.cache/git/credential/ 0700 ${config.setup.username} - -"
       ];
     };
