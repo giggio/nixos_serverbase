@@ -52,16 +52,16 @@ rec {
 
   mkPi4Image =
     { pkgs, nixos-system }:
-    pkgs.runCommand "${nixos-system.config.setup.derivedHostName}_img" { } ''
+    pkgs.runCommand "${nixos-system.config.setup.hostName}_img" { } ''
       mkdir -p "$out"
-      ln -s ${nixos-system.config.system.build.sdImage}/sd-image/*.img.zst $out/${nixos-system.config.setup.derivedHostName}.img.zst
+      ln -s ${nixos-system.config.system.build.sdImage}/sd-image/*.img.zst $out/${nixos-system.config.setup.hostName}.img.zst
     '';
 
   mkVboxImage =
     { pkgs, nixos-system }:
-    pkgs.runCommand "${nixos-system.config.setup.derivedHostName}_ova" { } ''
+    pkgs.runCommand "${nixos-system.config.setup.hostName}_ova" { } ''
       mkdir -p "$out"
-      ln -s ${nixos-system.config.formats.virtualbox}/*.ova $out/${nixos-system.config.setup.derivedHostName}.ova
+      ln -s ${nixos-system.config.formats.virtualbox}/*.ova $out/${nixos-system.config.setup.hostName}.ova
     '';
 
   list_machines =
