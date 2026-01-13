@@ -66,9 +66,12 @@ rec {
 
   list_machines =
     { pkgs, machines, ... }:
+    let
+      machinesWithDev = machines ++ (lib.map (m: "${m}dev") machines);
+    in
     pkgs.runCommand "list_machines" { } ''
       mkdir -p "$out/bin"
-      echo -e "#!/usr/bin/env bash\n\necho ${lib.strings.concatStringsSep " " machines}" > "$out/bin/list_machines";
+      echo -e '#!/usr/bin/env bash\n\necho -e "${lib.strings.concatStringsSep "\n" machinesWithDev}"' > "$out/bin/list_machines";
       chmod +x "$out/bin/list_machines";
     '';
 
