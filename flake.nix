@@ -90,7 +90,7 @@
             nixos-system = nixosConfigurations."nixos_virtualbox_${lib.strings.removeSuffix "-linux" system}";
           };
         };
-        devShells.default = self.nixosModules.lib.mkDevShell { inherit pkgs; };
+        devShells.default = self.nixosModules.lib.mkDevShell { inherit pkgs; inherit system; };
       }
     );
 }

@@ -78,6 +78,7 @@ rec {
   mkDevShell =
     {
       pkgs,
+      system,
       extraModules ? [ ],
     }:
     pkgs.mkShell {
@@ -85,13 +86,14 @@ rec {
       buildInputs =
         with pkgs;
         [
-          guestfs-tools
-          qemu-utils
-          yq-go
           util-linux
           sops
+        ] ++ (lib.optionals (system == "x86_64-linux") [
+          # these libs are used to build VirtualBox machines, not necessary in the RPi
+          guestfs-tools # not available in the RPi
+          qemu-utils
+          yq-go
           # virtualboxHeadless # see flake.nix comment
-        ]
-        ++ extraModules;
+        ]) ++ extraModules;
     };
 }
