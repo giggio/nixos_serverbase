@@ -55,7 +55,7 @@ try_mount_and_check() {
 
 search_for_key_in_drives() {
   # quick scan: partition device patterns (common on small drives)
-  for d in /dev/sd?1 /dev/sd?2 /dev/sd? /dev/nvme?n?p1 /dev/nvme?n?p2; do
+  for d in /dev/sd?1 /dev/sd?2 /dev/sd? /dev/nvme?n?p1 /dev/nvme?n?p2 /dev/sr?; do
     [ -e "$d" ] || continue
     try_mount_and_check "$d" && break
   done

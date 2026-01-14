@@ -20,6 +20,10 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     flake-utils.url = "github:numtide/flake-utils";
+    disko = {
+      url = "github:nix-community/disko/latest";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -35,23 +39,25 @@
     }:
     let
       lib = nixpkgs.lib;
-      machinesData = [
+      machines = [
         {
           name = "pi4";
           defaultArch = "aarch64";
           hardwareModule = self.nixosModules.hardware.pi4;
+          modules = [ ./configuration.nix ];
+          supportsIso = false;
+          supportsImg = true;
         }
         {
           name = "gmktec1";
           defaultArch = "x86_64";
           hardwareModule = self.nixosModules.hardware.gmktec;
+          modules = [ ./configuration.nix ];
+          supportsIso = true;
+          supportsImg = false;
         }
       ];
-      mkMachineModule = name: [
-        ./configuration.nix
-        { setup.hostName = name; }
-      ];
-      nixosConfigurations = self.nixosModules.lib.mkNixosConfigurations mkMachineModule machinesData;
+      nixosConfigurations = self.nixosModules.lib.mkNixosConfigurations machines;
     in
     {
       inherit nixosConfigurations;
@@ -71,18 +77,10 @@
           boot-test = pkgs.testers.nixosTest (import ./tests/default.nix { inherit pkgs inputs; });
         };
         packages = {
-          list_machines = self.nixosModules.lib.list_machines {
-            inherit pkgs;
-            machines = map (m: m.name) machinesData;
-          };
+          list_machines = self.nixosModules.lib.list_machines { inherit pkgs machines; };
         }
-        // self.nixosModules.lib.mkImagePackages {
-          inherit
-            nixosConfigurations
-            machinesData
-            system
-            pkgs
-            ;
+        // self.nixosModules.lib.mkInstallerPackages {
+          inherit nixosConfigurations machines;
         };
         devShells.default = self.nixosModules.lib.mkDevShell {
           inherit pkgs;

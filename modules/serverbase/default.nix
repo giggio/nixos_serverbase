@@ -49,6 +49,23 @@ in
 
   boot = {
     initrd = {
+      kernelModules = [
+        # allows mounting of USB storage so that secrets can be stored there
+        "usb_storage"
+        "uas"
+        "sd_mod"
+        "xhci_pci"
+        "ehci_pci"
+      ];
+      availableKernelModules = {
+        # allows file systems on initrd
+        vfat = true;
+        ext4 = true;
+        fuse = true;
+        nls_cp437 = true;
+        nls_iso8859_1 = true;
+        iso9660 = true;
+      };
       extraFiles."/bin/install_sops_key".source =
         (pkgs.writeShellApplication {
           name = "install-sops-key.sh";
@@ -76,7 +93,7 @@ in
       '';
     };
     loader = {
-      systemd-boot.enable = false; # using grub and not UEFI
+      systemd-boot.enable = lib.mkDefault false; # using grub and not UEFI
       timeout = lib.mkForce 10;
     };
   };

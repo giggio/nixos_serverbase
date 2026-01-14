@@ -1,58 +1,42 @@
-{
-  modulesPath,
-  inputs,
-  lib,
-  pkgs,
-  config,
-  ...
-}:
+{ inputs, ... }:
 
 {
   imports = [
-    # "${modulesPath}/installer/cd-dvd/installation-cd-minimal.nix"
-    "${modulesPath}/installer/cd-dvd/iso-image.nix"
-    "${modulesPath}/installer/cd-dvd/latest-kernel.nix"
     inputs.nixos-hardware.nixosModules.gmktec-nucbox-g3-plus
+    inputs.disko.nixosModules.disko
   ];
 
-  # EFI booting
-  isoImage.makeEfiBootable = true;
-  # USB booting
-  isoImage.makeUsbBootable = true;
-  # Add Memtest86+ to the CD.
-  boot.loader.grub.memtest86.enable = true;
-  # An installation media cannot tolerate a host config defined file
-  # system layout on a fresh machine, before it has been formatted.
-  swapDevices = lib.mkImageMediaOverride [ ];
-  fileSystems = lib.mkImageMediaOverride config.lib.isoFileSystems;
-  # boot.initrd.luks.devices = lib.mkImageMediaOverride { };
-  boot.postBootCommands = ''
-    for o in $(</proc/cmdline); do
-      case "$o" in
-        live.nixos.passwd=*)
-          set -- $(IFS==; echo $o)
-          echo "nixos:$2" | ${pkgs.shadow}/bin/chpasswd
-          ;;
-      esac
-    done
-  '';
+  boot.loader.systemd-boot.enable = true; # using UEFI and not GRUB
 
-  boot = {
-    # kernelPackages = pkgs.pkgs.linuxPackages_latest; # not necessary, the latest-kernel.nix already uses the latest kernel
-    initrd = {
-      kernelModules = [
-        "usb_storage"
-        "uas"
-        "sd_mod"
-        "xhci_pci"
-        "ehci_pci"
-      ];
-      availableKernelModules = {
-        vfat = true;
-        ext4 = true;
-        fuse = true;
-        nls_cp437 = true;
-        nls_iso8859_1 = true;
+  disko.devices.disk.main = {
+    device = "/dev/nvme0n1";
+    type = "disk";
+    content = {
+      type = "gpt";
+      partitions = {
+        ESP = {
+          type = "EF00";
+          size = "512M";
+          content = {
+            type = "filesystem";
+            format = "vfat";
+            mountpoint = "/boot";
+            mountOptions = [ "umask=0077" ];
+          };
+        };
+        swap = {
+          size = "4G";
+          type = "8200";
+          content.type = "swap";
+        };
+        nixos = {
+          size = "100%";
+          content = {
+            type = "filesystem";
+            format = "ext4";
+            mountpoint = "/";
+          };
+        };
       };
     };
   };

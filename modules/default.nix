@@ -7,9 +7,34 @@
 let
   myModules = {
     hardware = {
-      gmktec = ./config-physical-gmktec.nix;
-      pi4 = ./config-physical-pi4.nix;
-      virtualbox = ./config-virtual.nix;
+      gmktec = {
+        physical = {
+          imports = [
+            ./config-physical-gmktec.nix
+            ./config-gmktec.nix
+          ];
+        };
+        virtual = {
+          imports = [
+            ./config-virtual.nix
+            ./config-gmktec.nix
+          ];
+        };
+      };
+      pi4 = {
+        physical = {
+          imports = [
+            ./config-physical-pi4.nix
+            ./config-pi4.nix
+          ];
+        };
+        virtual = {
+          imports = [
+            ./config-virtual.nix
+            ./config-pi4.nix
+          ];
+        };
+      };
     };
     lib = import ./lib.nix {
       serverbaseModules = myModules;

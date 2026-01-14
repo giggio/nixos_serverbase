@@ -24,19 +24,7 @@
       "lsm=landlock,yama,bpf"
     ];
     initrd = {
-      kernelModules = [
-        "usb_storage"
-        "uas"
-        "sd_mod"
-        "xhci_pci"
-        "ehci_pci"
-      ];
       availableKernelModules = {
-        vfat = true;
-        ext4 = true;
-        fuse = true;
-        nls_cp437 = true;
-        nls_iso8859_1 = true;
         # todo: remove this when this is fixed: https://github.com/NixOS/nixpkgs/issues/154163
         # related: https://github.com/NixOS/nixpkgs/issues/109280
         # related: https://discourse.nixos.org/t/cannot-build-raspberry-pi-sdimage-module-dw-hdmi-not-found/71804
