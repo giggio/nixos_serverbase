@@ -1,4 +1,4 @@
-.PHONY: default start connect delete_old_vms
+.PHONY: default delete_old_vms
 
 .SECONDARY:
 .SUFFIXES:
@@ -17,14 +17,15 @@ machines = $(shell nix run .#list_machines)
 ova_with_agekey_files = $(shell for x in $(test_vms); do printf '$(out_dir)/nix/ova/%s-with-agekey.ova ' "$$x"; done)
 ova_files = $(shell for x in $(test_vms); do printf '$(out_dir)/nix/ova/%s.ova ' "$$x"; done)
 img_files = $(shell for x in $(test_vms); do printf '$(out_dir)/nix/img/%s.img.zst ' "$$x"; done)
+iso_files = $(shell for x in $(test_vms); do printf '$(out_dir)/nix/iso/%s.iso ' "$$x"; done)
 
 clean:
 	rm -rf "$(out_dir)" "$(result_dir)" result
 
 deps:
-	echo "These are the make build deps: $(nix_deps)"
+	@echo "These are the make build deps: $(nix_deps)"
 
-$(ova_with_agekey_files): $(out_dir)/nix/ova/%-with-agekey.ova: $(out_dir)/nix/ova/.%.ova.stamp $(nix_deps)
+$(ova_with_agekey_files): $(out_dir)/nix/ova/%-with-agekey.ova: $(out_dir)/nix/ova/.%.ova.stamp $(nix_deps) $(extra_vmdk)
 	./inject-agekey-into-ova.sh "$(out_dir)/nix/ova/$*.ova" "$(out_dir)/nix/ova"
 
 # The .stamp file is necessary because otherwise the timestamp of the ova file is the same as the
@@ -47,6 +48,60 @@ $(out_dir)/nix/img/.%.img.zst.stamp: $(nix_deps)
 	touch --date=@$$(stat -c '%Y' "$(out_dir)/nix/img/$*.img.zst") "$@"
 
 $(img_files): $(out_dir)/nix/img/%.img.zst: $(out_dir)/nix/img/.%.img.zst.stamp;
+
+# See the comment above about the .stamp file
+$(out_dir)/nix/iso/.%.iso.stamp: $(nix_deps)
+	nix build .\#$* --print-build-logs --out-link $(result_dir)/nix/iso/
+	mkdir -p "$(out_dir)/nix/iso/"
+	ln -sf "$$(realpath --no-symlinks "$(result_dir)/nix/iso/$*.iso")" "$(out_dir)/nix/iso/$*.iso"
+	touch --date=@$$(stat -c '%Y' "$(out_dir)/nix/iso/$*.iso") "$@"
+
+$(iso_files): $(out_dir)/nix/iso/%.iso: $(out_dir)/nix/iso/.%.iso.stamp;
+
+create_%: $(out_dir)/nix/iso/%.iso $(extra_vmdk)
+	up_if=$$(comm -12 <(ip -br link show up | awk '{ print $$1 }' | sort) <(for f in /sys/class/net/*/device; do echo $$f | awk -F/ '{ print $$5 }'; done | sort) | head -n1); \
+	[ -z "$$up_if" ] && echo "no network interface is up" && exit 1; \
+	vm_name="$*$$(($(call vm_count,$*)+1))"; \
+	echo "VM is $$vm_name"; \
+	VBoxManage createvm --name=$$vm_name --default --ostype=Linux26_64 --register; \
+	vm_dir="$$(dirname "$$(VBoxManage showvminfo $$vm_name --machinereadable | grep CfgFile | awk -F= '{ print $$2 }' | sed 's/^"//' | sed 's/"$$//')")"; \
+	VBoxManage modifyvm $$vm_name --nic1 bridged --bridge-adapter1=$$up_if --firmware=efi64 --cpus 4 --memory 4096 --audio-enabled=off; \
+	#VBoxManage modifyvm $$vm_name --uart1 0x3f8 4 --uartmode1 server /tmp/$$vm_name.sock; \
+	VBoxManage storagectl $$vm_name --name=IDE --controller=PIIX4 --remove; \
+	VBoxManage storagectl $$vm_name --name=NVMe --controller=NVMe --add=pcie --hostiocache=on; \
+	VBoxManage createmedium disk --filename $$vm_dir/$$vm_name.vmdk --size 20480; \
+	VBoxManage storageattach $$vm_name --storagectl=NVMe --port 0 --type=hdd --medium $$vm_dir/$$vm_name.vmdk; \
+	VBoxManage storageattach $$vm_name --storagectl=NVMe --port 1 --type=hdd --medium $(extra_vmdk); \
+	VBoxManage storageattach $$vm_name --storagectl=SATA --port 0 --type=dvddrive --medium $$(realpath "$(out_dir)/nix/iso/$*.iso")
+
+# optional: show discovered filesystems for debug: list-filesystems
+define guest_fish_create_disk
+run
+mount /dev/sda1 /
+mkdir-p /nixos-secrets
+upload "$(HOME)/.config/nixos-secrets/server.agekey" /nixos-secrets/server.agekey
+chmod 0400 /nixos-secrets/server.agekey
+sync
+exit
+endef
+
+export guest_fish_create_disk
+
+out_disk_dir = $(out_dir)/disks
+extra_raw = $(out_disk_dir)/secret-disk.raw
+extra_vmdk = $(out_disk_dir)/secret-disk.vmdk
+$(extra_raw):
+	@echo "Creating extra disk $@..."
+	mkdir -p "$(out_disk_dir)"
+	qemu-img create -f raw "$@_" 4M
+	virt-format -a "$@_" --filesystem=ext4
+	@echo "Injecting server.agekey..."
+	echo "$$guest_fish_create_disk" | sudo guestfish -a "$@_"
+	mv "$@_" "$@"
+
+$(extra_vmdk): $(extra_raw)
+	@echo "Converting to VMDK file $@..."
+	qemu-img convert -f raw -O vmdk "$(extra_raw)" "$@"
 
 import_%: $(out_dir)/nix/ova/%-with-agekey.ova
 	up_if=$$(comm -12 <(ip -br link show up | awk '{ print $$1 }' | sort) <(for f in /sys/class/net/*/device; do echo $$f | awk -F/ '{ print $$5 }'; done | sort) | head -n1); \
@@ -86,5 +141,5 @@ delete_old_vms_%:
 	done
 
 default:
-	echo "no default target"
+	@echo "no default target"
 	exit 1

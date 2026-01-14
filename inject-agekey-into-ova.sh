@@ -47,30 +47,8 @@ OVF="$(ls "$WORKDIR"/*.ovf)"
 echo "Using OVF: $OVF"
 
 # 2. Create extra disk
-EXTRA_RAW="$WORKDIR/secret-disk.raw"
-EXTRA_VMDK="$WORKDIR/secret-disk.vmdk"
-
-echo "Creating extra disk $EXTRA_RAW..."
-qemu-img create -f raw "$EXTRA_RAW" 4M
-virt-format -a "$EXTRA_RAW" --filesystem=ext4
-
-# 3. Copy the key into the disk
-echo "Injecting server.agekey..."
-sudo guestfish -a "$EXTRA_RAW" <<EOF
-run
-# optional: show discovered filesystems for debug
-# list-filesystems
-mount /dev/sda1 /
-mkdir-p /nixos-secrets
-upload "$HOME/.config/nixos-secrets/server.agekey" /nixos-secrets/server.agekey
-chmod 0400 /nixos-secrets/server.agekey
-sync
-exit
-EOF
-
-# 4. Convert to VMDK
-echo "Converting to VMDK file $EXTRA_VMDK..."
-qemu-img convert -f raw -O vmdk "$EXTRA_RAW" "$EXTRA_VMDK"
+EXTRA_VMDK=$DIR/out/disks/secret-disk.vmdk
+make "$EXTRA_VMDK"
 
 # 5. Patch the OVF to reference the new disk
 echo "Patching OVF..."

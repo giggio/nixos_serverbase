@@ -2,11 +2,13 @@
   config,
   pkgs,
   modulesPath,
+  inputs,
   ...
 }:
 
 {
   imports = [
+    inputs.nixos-generators.nixosModules.all-formats
     "${toString modulesPath}/virtualisation/virtualbox-image.nix"
   ];
 

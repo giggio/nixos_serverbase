@@ -6,8 +6,11 @@
 }:
 let
   myModules = {
-    pi4 = ./config-physical.nix;
-    virtualbox = ./config-virtual.nix;
+    hardware = {
+      gmktec = ./config-physical-gmktec.nix;
+      pi4 = ./config-physical-pi4.nix;
+      virtualbox = ./config-virtual.nix;
+    };
     lib = import ./lib.nix {
       serverbaseModules = myModules;
       inherit lib inputs;

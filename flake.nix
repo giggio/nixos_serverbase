@@ -34,33 +34,24 @@
       ...
     }:
     let
-      machines = [ "nixos" ];
       lib = nixpkgs.lib;
-      modules = [ ./configuration.nix ];
-      mkBaseConfig =
-        { system }:
+      machinesData = [
         {
-          system = if lib.strings.hasSuffix "-linux" system then system else "${system}-linux";
-          inherit modules;
-        };
-      nixosConfigurations = {
-        nixos = nixosConfigurations.nixos_aarch64;
-      }
-      // (lib.foldr (a: b: a // b) { } (
-        map
-          (system: {
-            "nixos_${system}" = self.nixosModules.lib.mkNixosSystem (mkBaseConfig {
-              inherit system;
-            });
-            "nixos_virtualbox_${system}" = self.nixosModules.lib.mkNixosSystem (
-              { virtualbox = true; } // (mkBaseConfig { inherit system; })
-            );
-          })
-          [
-            "x86_64"
-            "aarch64"
-          ]
-      ));
+          name = "pi4";
+          defaultArch = "aarch64";
+          hardwareModule = self.nixosModules.hardware.pi4;
+        }
+        {
+          name = "gmktec1";
+          defaultArch = "x86_64";
+          hardwareModule = self.nixosModules.hardware.gmktec;
+        }
+      ];
+      mkMachineModule = name: [
+        ./configuration.nix
+        { setup.hostName = name; }
+      ];
+      nixosConfigurations = self.nixosModules.lib.mkNixosConfigurations mkMachineModule machinesData;
     in
     {
       inherit nixosConfigurations;
@@ -80,17 +71,23 @@
           boot-test = pkgs.testers.nixosTest (import ./tests/default.nix { inherit pkgs inputs; });
         };
         packages = {
-          list_machines = self.nixosModules.lib.list_machines { inherit pkgs machines; };
-          nixos = self.nixosModules.lib.mkPi4Image {
+          list_machines = self.nixosModules.lib.list_machines {
             inherit pkgs;
-            nixos-system = nixosConfigurations.nixos_aarch64;
+            machines = map (m: m.name) machinesData;
           };
-          nixos_virtualbox = self.nixosModules.lib.mkVboxImage {
-            inherit pkgs;
-            nixos-system = nixosConfigurations."nixos_virtualbox_${lib.strings.removeSuffix "-linux" system}";
-          };
+        }
+        // self.nixosModules.lib.mkImagePackages {
+          inherit
+            nixosConfigurations
+            machinesData
+            system
+            pkgs
+            ;
         };
-        devShells.default = self.nixosModules.lib.mkDevShell { inherit pkgs; inherit system; };
+        devShells.default = self.nixosModules.lib.mkDevShell {
+          inherit pkgs;
+          inherit system;
+        };
       }
     );
 }
