@@ -1,5 +1,3 @@
-.PHONY: default delete_old_vms help
-
 .SECONDARY:
 .SUFFIXES:
 SHELL=bash
@@ -12,17 +10,39 @@ define vm_count
 $(shell (VBoxManage list vms | grep $(1) || true) | awk '{gsub(/"/,""); print $$1}' | sed 's/$(1)//' | sort --general-numeric-sort | tail -n-1)
 endef
 out_dir := out
-result_dir := .result
+out_dir_stamp := $(out_dir)/.stamp
+out_nix_dir := $(out_dir)/nix
+out_nix_dir_stamp := $(out_nix_dir)/.stamp
+out_ova_dir := $(out_nix_dir)/ova
+out_ova_dir_stamp := $(out_ova_dir)/.stamp
+out_iso_dir := $(out_nix_dir)/iso
+out_iso_dir_stamp := $(out_iso_dir)/.stamp
+out_img_dir := $(out_nix_dir)/img
+out_img_dir_stamp := $(out_img_dir)/.stamp
+out_system_dir := $(out_nix_dir)/system
+out_system_dir_stamp := $(out_system_dir)/.stamp
+result_dir := $(out_dir)/.result
+result_nix_dir := $(result_dir)/nix
+result_ova_dir := $(result_nix_dir)/ova
+result_iso_dir := $(result_nix_dir)/iso
+result_img_dir := $(result_nix_dir)/img
+result_system_dir := $(result_nix_dir)/system
+
+.PHONY: default help $(out_dir) $(out_nix_dir) $(out_ova_dir) $(out_iso_dir) $(out_img_dir) $(out_system_dir)
 
 machines_details = $(shell nix run .#list_machines)
 machines = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^machines ' | sed 's/^machines //'); do printf '%s ' "$$x"; done)
-ova_files = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^machines ' | sed 's/^machines //'); do printf '$(out_dir)/nix/ova/%s.ova ' "$$x"; done)
-img_files = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^imgs ' | sed 's/^imgs //'); do printf '$(out_dir)/nix/img/%s.img.zst ' "$$x"; done)
-iso_files = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^isos ' | sed 's/^isos //'); do printf '$(out_dir)/nix/iso/%s.iso ' "$$x"; done)
+ova_files = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^machines ' | sed 's/^machines //'); do printf '$(out_ova_dir)/%s.ova ' "$$x"; done)
+ova_file_stamps = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^machines ' | sed 's/^machines //'); do printf '$(out_ova_dir)/.%s.ova.stamp ' "$$x"; done)
+img_files = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^imgs ' | sed 's/^imgs //'); do printf '$(out_img_dir)/%s.img.zst ' "$$x"; done)
+img_file_stamps = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^imgs ' | sed 's/^imgs //'); do printf '$(out_img_dir)/.%s.img.zst.stamp ' "$$x"; done)
+iso_files = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^isos ' | sed 's/^isos //'); do printf '$(out_iso_dir)/%s.iso ' "$$x"; done)
+iso_file_stamps = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^isos ' | sed 's/^isos //'); do printf '$(out_iso_dir)/.%s.iso.stamp ' "$$x"; done)
+machine_systems = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^machines ' | sed 's/^machines //'); do printf '$(out_system_dir)/%s ' "$$x"; done)
+machine_system_stamps = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^machines ' | sed 's/^machines //'); do printf '$(out_system_dir)/.%s.stamp ' "$$x"; done)
 architecture = $(shell uname -m)
 
 out_disk_dir = $(out_dir)/disks
-extra_raw = $(out_disk_dir)/secret-disk.raw
 extra_iso = $(out_disk_dir)/secret-disk.iso
 
 virtualbox_default_install_dir = $(shell VBoxManage list systemproperties | grep 'Default machine folder' | awk -F: '{ print $$2 }' | xargs echo)
@@ -41,35 +61,50 @@ deps:
 # timestamp of the nix build, which is unix time, 1-1-1970
 # and making other targets depend on the .ova would always rebuild everything.
 # With the stamp file we have a file that has the correct date.
-$(out_dir)/nix/ova/.%.ova.stamp: $(nix_deps)
-	nix build .\#$*_virtualbox_$(architecture)_ova --print-build-logs --out-link "$(result_dir)/nix/ova/"
-	mkdir -p "$(out_dir)/nix/ova/"
-	ln -sf "$$(realpath "$(result_dir)/nix/ova/$*.ova")" "$(out_dir)/nix/ova/$*.ova"
-	touch --date=@$$(stat -c '%Y' "$(out_dir)/nix/ova/$*.ova") "$@"
+$(out_ova_dir)/.%.ova.stamp: $(nix_deps)
+	nix build .\#$*_virtualbox_$(architecture)_ova --print-build-logs --out-link "$(result_ova_dir)/"
+	mkdir -p "$(out_ova_dir)"
+	ln -sf "$$(realpath "$(result_ova_dir)/$*.ova")" "$(out_ova_dir)/$*.ova"
+	touch --date=@$$(stat -c '%Y' "$(out_ova_dir)/$*.ova") "$@"
+	rm -rf "$(result_dir)"
 
 ### Build Artifacts
 ## Builds the OVA files
-$(ova_files): $(out_dir)/nix/ova/%.ova: $(out_dir)/nix/ova/.%.ova.stamp;
+$(ova_files): $(out_ova_dir)/%.ova: $(out_ova_dir)/.%.ova.stamp;
 
 # See the comment above about the .stamp file
-$(out_dir)/nix/img/.%.img.zst.stamp: $(nix_deps)
-	nix build .\#$*_img --print-build-logs --out-link $(result_dir)/nix/img/
-	mkdir -p "$(out_dir)/nix/img/"
-	ln -sf "$$(realpath "$(result_dir)/nix/img/$*.img.zst")" "$(out_dir)/nix/img/$*.img.zst"
-	touch --date=@$$(stat -c '%Y' "$(out_dir)/nix/img/$*.img.zst") "$@"
+$(out_img_dir)/.%.img.zst.stamp: $(nix_deps)
+	nix build .\#$*_img --print-build-logs --out-link "$(result_img_dir)/"
+	mkdir -p "$(out_img_dir)"
+	ln -sf "$$(realpath "$(result_img_dir)/$*.img.zst")" "$(out_img_dir)/$*.img.zst"
+	touch --date=@$$(stat -c '%Y' "$(out_img_dir)/$*.img.zst") "$@"
+	rm -rf "$(result_dir)"
 
 ## Builds the image files
-$(img_files): $(out_dir)/nix/img/%.img.zst: $(out_dir)/nix/img/.%.img.zst.stamp;
+$(img_files): $(out_img_dir)/%.img.zst: $(out_img_dir)/.%.img.zst.stamp;
 
 # See the comment above about the .stamp file
-$(out_dir)/nix/iso/.%.iso.stamp: $(nix_deps)
-	nix build .\#$*_iso --print-build-logs --out-link $(result_dir)/nix/iso/
-	mkdir -p "$(out_dir)/nix/iso/"
-	ln -sf "$$(realpath "$(result_dir)/nix/iso/$*.iso")" "$(out_dir)/nix/iso/$*.iso"
-	touch --date=@$$(stat -c '%Y' "$(out_dir)/nix/iso/$*.iso") "$@"
+$(out_iso_dir)/.%.iso.stamp: $(nix_deps)
+	nix build .\#$*_iso --print-build-logs --out-link "$(result_iso_dir)/"
+	mkdir -p "$(out_iso_dir)"
+	ln -sf "$$(realpath "$(result_iso_dir)/$*.iso")" "$(out_iso_dir)/$*.iso"
+	touch --date=@$$(stat -c '%Y' "$(out_iso_dir)/$*.iso") "$@"
+	rm -rf "$(result_dir)"
 
 ## Builds the ISO files
-$(iso_files): $(out_dir)/nix/iso/%.iso: $(out_dir)/nix/iso/.%.iso.stamp;
+$(iso_files): $(out_iso_dir)/%.iso: $(out_iso_dir)/.%.iso.stamp;
+
+# See the comment above about the .stamp file
+$(out_system_dir)/.%.stamp: $(nix_deps)
+	nix build .\#nixosConfigurations.$*.config.system.build.toplevel --print-build-logs --out-link "$(result_system_dir)/$*"
+	mkdir -p "$(out_system_dir)"
+	rm -f "$(out_system_dir)/$*"
+	ln -sf "$$(realpath "$(result_system_dir)/$*")" "$(out_system_dir)/$*"
+	touch --date=@$$(stat -c '%Y' "$(out_system_dir)/$*") "$@"
+	rm -rf "$(result_dir)"
+
+## Builds the systems files
+$(machine_systems): $(out_system_dir)/%: $(out_system_dir)/.%.stamp;
 
 ## Create the cd disk ISO that holds the nixos secret key
 $(extra_iso):
@@ -77,15 +112,45 @@ $(extra_iso):
 	mkdir -p "$$(dirname "$@")"
 	xorriso -as mkisofs -o "$@" "$(HOME)/.config/nixos-secrets"
 
+$(out_system_dir_stamp): $(machine_system_stamps)
+	touch "$@"
+## Builds all systems
+$(out_system_dir) $(out_system_dir)/: $(out_system_dir_stamp)
+
+$(out_iso_dir_stamp): $(iso_file_stamps)
+	touch "$@"
+## Builds all ISOs
+$(out_iso_dir) $(out_iso_dir)/: $(out_iso_dir_stamp)
+
+$(out_img_dir_stamp): $(img_file_stamps)
+	touch "$@"
+## Builds all images
+$(out_img_dir) $(out_img_dir)/: $(out_img_dir_stamp)
+
+$(out_ova_dir_stamp): $(ova_file_stamps)
+	touch "$@"
+## Builds all OVA filestems
+$(out_ova_dir) $(out_ova_dir)/: $(out_ova_dir_stamp)
+
+$(out_nix_dir_stamp): $(out_system_dir_stamp) $(out_iso_dir_stamp) $(out_img_dir_stamp) $(out_ova_dir_stamp)
+	touch "$@"
+## Buils all nix artifacts
+$(out_nix_dir) $(out_nix_dir)/: $(out_nix_dir_stamp)
+
+$(out_dir_stamp): $(out_nix_dir_stamp) $(extra_iso)
+	touch "$@"
+## Build the output directory
+$(out_dir) $(out_dir)/: $(out_dir_stamp)
+
 ## Build all artifacts
-all: $(ova_files) $(iso_files) $(img_files)
+all: $(out_nix_dir)
 
 create_machines = $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'create_%s ' "$$x"; done)
 create_%: vm_name=$*$(shell expr $(call vm_count,$*) + 1)
 create_%: vm_dir=$(virtualbox_default_install_dir)/$(vm_name)
 ### VM Management
 ## Create a new VM
-$(create_machines): create_%: $(out_dir)/nix/iso/%.iso $(out_dir)/nix/iso/.%.iso.stamp $(extra_iso)
+$(create_machines): create_%: $(out_iso_dir)/%.iso $(out_iso_dir)/.%.iso.stamp $(extra_iso)
 	@echo "VM is $(vm_name)"
 	@echo "VM dir will be $(vm_dir)"
 	VBoxManage createvm --name=$(vm_name) --default --ostype=Linux26_64 --register
@@ -94,15 +159,15 @@ $(create_machines): create_%: $(out_dir)/nix/iso/%.iso $(out_dir)/nix/iso/.%.iso
 	VBoxManage storagectl $(vm_name) --name=NVMe --controller=NVMe --add=pcie --hostiocache=on
 	VBoxManage createmedium disk --filename $(vm_dir)/$(vm_name).vmdk --size 20480
 	VBoxManage storageattach $(vm_name) --storagectl=NVMe --port 0 --type=hdd --medium $(vm_dir)/$(vm_name).vmdk
-	VBoxManage storageattach $(vm_name) --storagectl=SATA --port 0 --type=dvddrive --medium $$(realpath "$(out_dir)/nix/iso/$*.iso")
+	VBoxManage storageattach $(vm_name) --storagectl=SATA --port 0 --type=dvddrive --medium $$(realpath "$(out_iso_dir)/$*.iso")
 	VBoxManage storageattach $(vm_name) --storagectl=SATA --port 1 --type=dvddrive --medium $(extra_iso)
 
 import_machines = $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'import_%s ' "$$x"; done)
 import_%: vm_name=$*$(shell expr $(call vm_count,$*) + 1)
 ## Import a VM from an OVA file
-$(import_machines): import_%: $(out_dir)/nix/ova/%.ova $(out_dir)/nix/ova/.%.ova.stamp $(extra_iso)
+$(import_machines): import_%: $(out_ova_dir)/%.ova $(out_ova_dir)/.%.ova.stamp $(extra_iso)
 	@echo "VM is $(vm_name)"
-	VBoxManage import $(out_dir)/nix/ova/$*.ova --vsys 0 --vmname=$(vm_name) --cpus 4 --unit 7 --ignore
+	VBoxManage import $(out_ova_dir)/$*.ova --vsys 0 --vmname=$(vm_name) --cpus 4 --unit 7 --ignore
 	VBoxManage modifyvm $(vm_name) --nic1 bridged --bridge-adapter1=$(up_if) --uart1 0x3f8 4 --uartmode1 server /tmp/$(vm_name).sock
 	VBoxManage storageattach $(vm_name) --storagectl=SATA --port 1 --type=dvddrive --medium $(extra_iso)
 
@@ -155,6 +220,7 @@ list_outputs:
 	@echo "ISOs:" $(iso_files)
 	@echo "Imgs:" $(img_files)
 	@echo "Disks:" $(extra_iso)
+	@echo "Systems:" $(machine_systems)
 
 ## Default target (do not use)
 default:

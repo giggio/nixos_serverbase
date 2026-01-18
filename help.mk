@@ -54,7 +54,7 @@ $(OUT_DIR)/.make_help_data: $(MAKEFILE_LIST)
 			split($$0, a, ":"); \
 			t = a[1]; \
 			gsub(/^[ \t]+|[ \t]+$$/, "", t); \
-			if (match(t, /^\$$\(([^)]+)\)$$/, m)) { \
+			if (match(t, /\$$\(([^)]+)\)/, m)) { \
 				print "VAR|" m[1] "|" h; \
 			} else { \
 				print "RAW|" t "|" h; \

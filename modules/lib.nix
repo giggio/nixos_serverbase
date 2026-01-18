@@ -99,7 +99,7 @@
           specialArgs = {
             inherit inputs;
           }
-          // combination.machine.specialArgs;
+          // (if combination.machine ? specialArgs then combination.machine.specialArgs else { });
           system = suffixedSystem;
           modules =
             serverbaseModules.default
