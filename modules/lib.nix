@@ -96,7 +96,10 @@
         inherit name;
         system = suffixedSystem;
         configuration = {
-          specialArgs = { inherit inputs; };
+          specialArgs = {
+            inherit inputs;
+          }
+          // combination.machine.specialArgs;
           system = suffixedSystem;
           modules =
             serverbaseModules.default
