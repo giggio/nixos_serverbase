@@ -20,12 +20,13 @@
         {
           description = "Gathers info from systemd and publishes it as YAML configuration in the Traefik format";
           wantedBy = [ "multi-user.target" ];
-          serviceConfig = helpers.systemd.restartServiceConfig;
+          serviceConfig = {
+            ExecStart = "${pkgs.systemd_traefik_configuration_provider}/bin/systemd_traefik_configuration_provider";
+          } // helpers.systemd.restartServiceConfig;
           environment = {
             TRAEFIK_OUT_DIR = "${config.services.systemd_traefik_configuration_provider.destinationDirectory}";
             RUST_LOG = "systemd_traefik_configuration_provider=trace";
           };
-          script = "${pkgs.systemd_traefik_configuration_provider}/bin/systemd_traefik_configuration_provider";
         };
   };
 }
