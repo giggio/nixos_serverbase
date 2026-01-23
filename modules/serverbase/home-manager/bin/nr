@@ -113,7 +113,7 @@ _nr() {
   cd "$nixos_config_dir"
   # getting profile
   local profile
-  machine_name="$(nix run ".#list_machines" | grep "^$(hostname)$" || true)"
+  machine_name="$(nix run ".#list_machines" | sed 's/|/\n/g' | grep '^machines ' | sed 's/^machines //' | sed 's/ /\n/g' | grep "^$(hostname)$" || true)"
   profile=$(get_generic_profile "$machine_name")
   if [ -z "$machine_name" ]; then
     if ! $get_profile; then
