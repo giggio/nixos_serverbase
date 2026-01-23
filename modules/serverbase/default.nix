@@ -206,6 +206,10 @@ in
         \e{green}Today is:\e{reset} \d \t
       '';
       "profile.d/xdg_dirs_extra.sh".source = ./scripts/xdg_dirs_extra.sh;
+      "isdev" = {
+        text = "true";
+        enable = config.setup.isDev;
+      };
     };
     extraInit = ''
       # read extra profile files in /etc/profile.d/
