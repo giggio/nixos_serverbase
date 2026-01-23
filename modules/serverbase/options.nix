@@ -47,6 +47,6 @@ with lib;
   config.setup = {
     isDev = config.setup.environment == "dev";
     isProd = config.setup.environment == "prod";
-    derivedHostName = "${config.setup.hostName}${if config.setup.isDev then "_dev" else ""}";
+    derivedHostName = "${config.setup.hostName}${if config.setup.isDev then "dev" else ""}";
   };
 }
