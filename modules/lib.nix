@@ -153,7 +153,9 @@
               "${serverbaseModules.lib.mkNixosModuleName combination}_ova" = serverbaseModules.lib.mkVboxImage {
                 pkgs = import inputs.nixpkgs { system = "${combination.system}-linux"; };
                 nixos-system =
-                  nixosConfigurations."${combination.machine.name}_virtualbox_${lib.strings.removeSuffix "-linux" combination.system}";
+                  nixosConfigurations."${combination.machine.name}${
+                    if combination.isDev then "dev" else ""
+                  }_virtualbox_${lib.strings.removeSuffix "-linux" combination.system}";
                 isDev = combination.isDev;
               };
             }
