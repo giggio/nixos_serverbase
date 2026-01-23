@@ -14,6 +14,7 @@ in
     ../../cachix.nix # ugly loading from the root folder, can we do something about it?
     ./clone-config.nix
     ./secrets.nix
+    ./services
     ./options.nix
   ];
 

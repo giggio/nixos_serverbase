@@ -15,4 +15,7 @@ with pkgs;
     )
   );
   rust-toolchain-fenix = fenix.stable.defaultToolchain; # or fenix.complete.defaultToolchain, or beta. Rust toolchains.
+  systemd_traefik_configuration_provider =
+    callPackage ./systemd_traefik_configuration_provider.nix
+      { };
 }
