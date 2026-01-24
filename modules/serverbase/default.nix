@@ -195,6 +195,7 @@ in
     tree
     bat
     jq
+    nil # Language server for Nix https://github.com/oxalica/nil
   ];
 
   environment = {
