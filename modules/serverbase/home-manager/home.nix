@@ -26,6 +26,11 @@ in
 
           # ending of .bashrc:
 
+          if [ "$TERM" == "xterm-kitty" ]; then
+            source "$(blesh-share)/ble.sh"
+            eval "$(atuin init bash)"
+          fi
+
           # end of .bashrc
 
           # beginning of configurations coming from other options, like gpg-agent, direnv and zoxide
@@ -128,6 +133,7 @@ in
                 bind '"jj":"\e"'
                 tabs -4
                 bind 'set completion-ignore-case on'
+                source ${pkgs.complete-alias}/bin/complete_alias
                 # make less more friendly for non-text input files, see lesspipe(1)
                 [ -x /usr/bin/lesspipe ] && eval "$(SHELL=/bin/sh lesspipe)"
 
@@ -164,13 +170,37 @@ in
       enable = true;
     };
 
+    atuin = {
+      enable = true;
+      enableBashIntegration = false; # only for TERM=xterm-kitty
+      daemon.enable = false;
+      settings = {
+        # https://docs.atuin.sh/configuration/config/
+        search_mode = "skim";
+        workspaces = true;
+        inline_height = 0;
+        enter_accept = true;
+        smart_sort = true;
+      };
+    };
+
   };
   home = {
     username = config.setup.username;
     inherit homeDirectory;
     stateVersion = "25.11"; # Check if there are state version changes before changing this fiels: https://nix-community.github.io/home-manager/release-notes.xhtml
     preferXdgDirectories = true;
-    # packages = import ./pkgs.nix { inherit config; inherit pkgs; inherit pkgs-stable; inherit lib; inherit setup; };
+
+    packages = with pkgs; [
+      (blesh.overrideAttrs {
+        # only enabled for TERM=xterm-kitty
+        version = "nightly-20250209+4338bbf";
+        src = fetchzip {
+          url = "https://github.com/akinomyoga/ble.sh/releases/download/nightly/ble-nightly-20260125+32bb63d.tar.xz";
+          sha256 = "sha256-11hfYAIBslBGmCj84lNv57DhBzUre+7hreMSz2YGzVQ=";
+        };
+      })
+    ];
 
     shell = {
       enableBashIntegration = true;
@@ -228,6 +258,19 @@ in
     configFile = {
       "starship.toml".source = ./config/starship.toml;
       "git".source = ./config/git;
+      "blesh/init.sh".text = ''
+        ble-import integration/zoxide
+        ble-import integration/nix-completion.bash
+        ble-import vim-airline
+        bleopt vim_airline_theme=raven
+        bleopt vim_airline_section_c=
+        bleopt vim_airline_section_b=
+        bleopt vim_airline_section_x=
+        bleopt vim_airline_section_y=
+        # ctrl+c to discard line
+        ble-bind -m vi_imap -f 'C-c' discard-line
+        ble-bind -m vi_nmap -f 'C-c' discard-line
+      '';
     };
   };
 
