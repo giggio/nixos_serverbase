@@ -55,6 +55,8 @@
           modules = [ ./configuration.nix ];
           supportsIso = true;
           supportsImg = false;
+          vmMemorySize = 8;
+          vmDiskSize = 30;
         }
       ];
       nixosConfigurations = self.nixosModules.lib.mkNixosConfigurations machines;

@@ -113,6 +113,8 @@
               {
                 nixpkgs.hostPlatform = suffixedSystem;
                 setup.hostName = combination.machine.name;
+                setup.vmMemorySize = lib.mkIf (combination.machine ? vmMemorySize) combination.machine.vmMemorySize;
+                setup.vmDiskSize = lib.mkIf (combination.machine ? vmDiskSize) combination.machine.vmDiskSize;
               }
               (lib.attrsets.optionalAttrs combination.isDev { config.setup.environment = "dev"; })
             ]

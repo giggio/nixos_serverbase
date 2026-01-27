@@ -43,6 +43,16 @@ with lib;
       default = "/home/${config.setup.username}/.config/nixos";
       description = "The directory to clone the configuration to";
     };
+    vmMemorySize = mkOption {
+      type = types.int;
+      default = 4;
+      description = "Virtual machine memory size in GB";
+    };
+    vmDiskSize = mkOption {
+      type = types.int;
+      default = 30;
+      description = "Virtual machine disk size in GB";
+    };
   };
   config.setup = {
     isDev = config.setup.environment == "dev";
