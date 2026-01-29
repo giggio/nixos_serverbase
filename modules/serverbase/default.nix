@@ -225,6 +225,34 @@ in
     '';
   };
 
+  security.pam.services.sshd.text =
+    let
+      pam_exec_ssh_session = pkgs.writeShellScript "pam_exec_ssh_session" ''
+        logger -t pam-exec-ssh-session "START: PAM_USER='$PAM_USER'"
+        USER_UID="$(id -u "$PAM_USER" 2>/dev/null)"
+        USER_GID="$(id -g "$PAM_USER" 2>/dev/null)"
+        logger -t pam-exec-ssh-session "PROGRESS: USER_UID='$USER_UID' USER_GID='$USER_GID'"
+        if [ -z "$USER_UID" ]; then
+          logger -t pam-exec-ssh-session "FAIL: USER_UID is not set"
+          exit 0
+        fi
+        if [ -z "$USER_GID" ]; then
+          logger -t pam-exec-ssh-session "FAIL: USER_GID is not set"
+          exit 0
+        fi
+        RUNDIR="/run/user/$USER_UID"
+        GNUPG_DIR="$RUNDIR/gnupg"
+        logger -t pam-exec-ssh-session "FINALIZING: Creating $GNUPG_DIR for UID=$USER_UID GID=$USER_GID"
+        mkdir -p -m 0700 "$GNUPG_DIR" && \
+          chown "$USER_UID:$USER_GID" "$GNUPG_DIR" && \
+          logger -t pam-exec-ssh-session "SUCCESS: $GNUPG_DIR created" || \
+          logger -t pam-exec-ssh-session "FAIL: could not create $GNUPG_DIR"
+      '';
+    in
+    lib.mkDefault (
+      lib.mkAfter "session optional ${pkgs.pam}/lib/security/pam_exec.so ${pam_exec_ssh_session}"
+    );
+
   programs = {
     neovim = {
       enable = true;
