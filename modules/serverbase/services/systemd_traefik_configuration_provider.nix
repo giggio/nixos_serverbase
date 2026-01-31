@@ -10,8 +10,8 @@
     enable = mkEnableOption "systemd_traefik_configuration_provider enabled";
     destinationDirectory = mkOption {
       type = types.str;
-      example = literalExpression "{ destinationDirectory = \"/etc/traefik/dynamic/units\"; }";
-      default = "/etc/traefik/dynamic/units";
+      example = literalExpression "{ destinationDirectory = \"/etc/traefik/dynamic\"; }";
+      default = "/etc/traefik/dynamic";
     };
   };
   config = {
