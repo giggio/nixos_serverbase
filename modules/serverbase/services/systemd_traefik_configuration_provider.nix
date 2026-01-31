@@ -23,7 +23,7 @@
           wantedBy = [ "multi-user.target" ];
           unitConfig = helpers.systemd.notifyUnitConfig;
           serviceConfig = helpers.systemd.restartServiceConfig // {
-            ExecStart = "${pkgs.systemd_traefik_configuration_provider}/bin/systemd_traefik_configuration_provider";
+            ExecStart = "${pkgs.systemd_traefik_configuration_provider}/bin/systemd_traefik_configuration_provider --log-hide-date";
             Group = [ "traefik" ];
           };
           environment = {

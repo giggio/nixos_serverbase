@@ -15,8 +15,8 @@
 
     src = fetchgit {
       url = "https://codeberg.org/giggio/systemd_traefik_configuration_provider.git";
-      rev = "4db2180bee7928e46ef783b89734bd1c99b058bd";
-      hash = "sha256-QJHGnQrQhIAZR+ko+8/orSoJh/+/3Iq+bkMK6N4GqG0=";
+      rev = "cef3f9873bcb73bfc979773a0e9e3420da83d529";
+      hash = "sha256-xLfPOWu6wnHfYuGhQcml2Fd4LG89ED5jkn20cgooq5M=";
     };
 
     cargoLock.lockFile = "${src}/Cargo.lock";
