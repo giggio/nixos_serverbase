@@ -98,6 +98,7 @@
         configuration = {
           specialArgs = {
             inherit inputs;
+            helpers = import ./helpers { inherit lib; };
           }
           // (if combination.machine ? specialArgs then combination.machine.specialArgs else { });
           system = suffixedSystem;
