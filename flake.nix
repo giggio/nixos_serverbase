@@ -7,10 +7,6 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     nixos-hardware.url = "github:NixOS/nixos-hardware/master";
-    nixos-generators = {
-      url = "github:nix-community/nixos-generators";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
     fenix = {
       url = "github:nix-community/fenix";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -30,10 +26,6 @@
     inputs@{
       self,
       nixpkgs,
-      home-manager,
-      nixos-hardware,
-      nixos-generators,
-      sops-nix,
       flake-utils,
       ...
     }:

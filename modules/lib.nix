@@ -336,7 +336,7 @@
     in
     pkgs.runCommand file { } ''
       mkdir -p "$out"
-      ln -s ${nixos-system.config.formats.virtualbox}/*.ova $out/${file}
+      ln -s ${nixos-system.config.system.build.virtualBoxOVA}/*.ova $out/${file}
     '';
 
   list_machines =

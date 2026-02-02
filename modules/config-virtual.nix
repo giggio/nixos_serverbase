@@ -23,7 +23,6 @@
   ];
 
   imports = [
-    inputs.nixos-generators.nixosModules.all-formats
     "${toString modulesPath}/virtualisation/virtualbox-image.nix"
   ];
 
