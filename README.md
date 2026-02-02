@@ -1,60 +1,108 @@
 # Reusable NixOS Server Configuration
 
+Main repo: [codeberg.org/giggio/nixos_serverbase](https://codeberg.org/giggio/nixos_serverbase)
+
 This project provides a modular and reusable NixOS configuration, primarily
-targeted at building server environments for Raspberry Pi 4 and VirtualBox
-(testing).
+targeted at building server environments for Raspberry Pi 4 and Gmktec G3 Plus,
+plus VirtualBox for testing.
 
 It is structured as a Nix Flake that can be consumed by other projects to
 inherit a base server configuration while allowing specific machine
 customizations.
 
-It can also run by itself for creating a default, base configuration.
+It can also run by itself for creating a default, base configuration, just to
+see how it works.
+
+This is my personal base environment and is very opinionated, it won't
+necessarily work for you. Use it as you will, or don't use it at all and just
+use it for some ideas that could be useful.
+
+**Warning**: Be careful with the ISO installer, it will overwrite the target
+system without prompting.
 
 ## Architecture
 
-- [modules/serverbase/](modules/serverbase/) (directory): The core reusable module (see [serverbase](serverbase)). It includes standard
-  packages, Home Manager integration, encryption setup (SOPS), and general system
-  settings.
-- [modules/lib.nix](./modules/lib.nix): Provides helper functions to build system artifacts (Pi4 images,
-  VBox OVAs) and development shells.
-- [configuration.nix](./configuration.nix): A specific machine configuration (example: `pitest`)
-  that imports the serverbase and applies host-specific settings.
+- [modules/serverbase/](modules/serverbase/) (directory): The core reusable
+  module. It includes standard packages, Home
+  Manager integration, encryption setup (SOPS), and general system settings.
+- [modules/lib.nix](./modules/lib.nix): Provides helper functions to build
+  system artifacts (Pi4 images, VBox OVAs) and development shells.
+- [configuration.nix](./configuration.nix): A specific machine configuration
+  (example: `pi4`) that imports the serverbase and applies host-specific settings.
 
 ## Usage as a flake (library)
 
 You can import this project in your own `flake.nix` to build your custom servers.
 
-### 1. In your `flake.nix` inputs
-
-```nix
-{
-  inputs.serverbase = {
-    url = "github:giggio/nixos_serverbase";
-    inputs.nixpkgs.follows = "nixpkgs";
-  };
-};
-```
-
-### 2. Creating NixOS Configurations
+### 1. In your `flake.nix`
 
 Use `nixosModules.default` to get the base configuration (includes serverbase,
 sops, and home-manager).
 
 ```nix
-outputs = { nixpkgs, serverbase, ... }: {
-  nixosConfigurations = {
-    nixos = serverbase.nixosModules.lib.mkNixosSystem {
-      system = "aarch64";
-      modules = [ ./configuration.nix ];
-      specialArgs = { }; # optional
-      extraConfiguration = { }; # optional
+{
+  description = "NixOS configuration";
+  inputs = {
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-25.11";
+    serverbase = {
+      url = "git+https://codeberg.org/giggio/nixos_serverbase.git?ref=main";
+      inputs.nixpkgs.follows = "nixpkgs";
     };
-    nixos_virtuabox = serverbase.nixosModules.lib.mkNixosSystem {
-      # .. the same as above, plus:
-      system = "x86_64-linux"; # or "aarch64" if you are on an ARM machine
-      virtualbox = true;
-    };
+    flake-utils.url = "github:numtide/flake-utils";
   };
+
+  outputs =
+    {
+      nixpkgs,
+      serverbase,
+      flake-utils,
+      ...
+    }:
+    let
+      machines = [
+        rec {
+          name = "pi4";
+          defaultArch = "aarch64";
+          hardwareModule = serverbase.nixosModules.hardware.pi4;
+          modules = [ ./machines/${name}/configuration.nix ];
+          supportsIso = false;
+          supportsImg = true;
+        }
+        rec {
+          name = "gmktec1";
+          defaultArch = "x86_64";
+          hardwareModule = serverbase.nixosModules.hardware.gmktec;
+          modules = [ ./machines/${name}/configuration.nix ];
+          supportsIso = true;
+          supportsImg = false;
+          vmMemorySize = 8;
+          vmDiskSize = 30;
+        }
+      ];
+      nixosConfigurations = serverbase.nixosModules.lib.mkNixosConfigurations machines;
+    in
+    {
+      inherit nixosConfigurations;
+    }
+    // flake-utils.lib.eachDefaultSystem (
+      system:
+      let
+        pkgs = import nixpkgs { inherit system; };
+      in
+      {
+        formatter = pkgs.nixfmt-tree;
+        packages = {
+          list_machines = serverbase.nixosModules.lib.list_machines { inherit pkgs machines; };
+        }
+        // serverbase.nixosModules.lib.mkInstallerPackages {
+          inherit nixosConfigurations machines;
+        };
+        devShells.default = serverbase.nixosModules.lib.mkDevShell {
+          inherit pkgs;
+          inherit system;
+        };
+      }
+    );
 }
 ```
 
@@ -62,57 +110,66 @@ Available modules in `nixosModules`:
 
 - `default`: Base list of modules (recommended).
 - `lib`: Useful helper functions.
-- `pi4`: Raspberry Pi 4 specific hardware config.
-- `virtualbox`: VirtualBox specific hardware config.
+- `hardware`: Configuration for known hardware, both physical and virtual.
 
 ### 3. Building Artifacts for deployment
 
-You can build a Raspberry Pi 4 image that can be used to create an installation SD card.
+You can build a Raspberry Pi 4 image that can be used to create an installation
+SD card, or an ISO that can be used to install on Gmktec G3 Plus.
 You can also build a VirtualBox OVA that can be imported into VirtualBox.
 
-```nix
-outputs = { nixpkgs, serverbase, ... }: {
-  packages.x86_64-linux = {
-    nixos = self.nixosModules.lib.mkPi4Image {
-      inherit pkgs;
-      nixos-system = nixosConfigurations.nixos;
-    };
-    nixos_virtualbox = self.nixosModules.lib.mkVboxImage {
-      inherit pkgs;
-      nixos-system = nixosConfigurations."nixos_virtualbox";
-    };
-  };
-}
-```
+See the above example with `mkInstallerPackages`.
 
-## Direct Usage: Building the Default Configs
+### 4. Using the Makefile
 
-If you are using this repository directly to build the default machine (e.g.,
-for testing or as a starting point):
+If you copy this project's [Makefile](./Makefile) to your project, you can use it
+to easily build the artifacts.
+Run `make help` for more information.
+
+It will take the information you add to the `machines` (see example above) to
+generate custom targets, so you could run `out/nix/ova/pi4.ova` to build the
+VirtualBox OVA, or `out/nix/img/pi4.img.zst` to build the Raspberry Pi 4 image,
+or `out/nix/iso/gmktec1.iso` to build the Gmktec G3 Plus ISO. You could also
+view the whole file system that will be generated by running `make
+out/nix/system/pi4`.
 
 ### Developing with VirtualBox
 
-1. Clone this repo and set up your secrets (see [Secrets](#secrets)).
-2. Build and import the VM with `make import`.
+All examples are with `gmktec1`, but you should replace with the name of your machine.
 
-The resulting OVA can be found in `out/nixos-with-agekey.ova`.
+1. Install VirtualBox;
+2. Set up your secrets (see [Secrets](#secrets));
+3. Build and import the VM with `make import_pi4`;
+4. Start the vm with `make start_gmktec1`. This will connect to the serial port
+  of the machine.
+5. After the machine boots, you can also connect to it via SSH.
 
-*Alternatively, import it manually.*
+The secrets will be automatically added to a separate disk in the VM during the
+build process if using the provided scripts.
 
-1. Build the vm with `make out/nixos-with-agekey.ova`.
-2. Import the result into VirtualBox (`File > Import Appliance`).
+If you have problems, inspect the virtual machine configuration with VirtualBox
+after you import it, make sure it matches your hardware.
 
-The secrets will be automatically added to a separate disk in the VM during
-the build process if using the provided scripts.
+You can also use `make create_gmktec1`, which will create an empty VM but
+connect an .iso to it, and when it boots it will install the OS. This is useful
+to test the .iso installer. There is no similar way to test the .img installer.
+
+## Building the Default Configs
+
+This is not very helpful (as the servers will not do anything useful),
+but will help you get a sense of what you can do with this library.
+
+You can use this repository directly to build the default machine (e.g.,
+for testing or as a starting point):
 
 ### Deploying to Raspberry Pi 4
 
 1. Clone this repo and set up your secrets (see [Secrets](#secrets)).
-2. Build it with `make out/nix/img/nixos.img.zst`.
+2. Build it with `make out/nix/img/pi4.img.zst`.
    Or build with nix:
 
    ```bash
-   nix build .#nixos --out-link out/nix/img/
+   nix build .#pi4_img
    ```
 
 3. Burn it into the SD card using the Raspberry Pi Imager. For the operating system,
@@ -120,6 +177,27 @@ the build process if using the provided scripts.
 4. Load the sd card into the Raspberry Pi 4.
 5. Copy the secret file `server.agekey` to the root of a USB flash drive and connect
    the device to the Pi 4.
+
+### Deploying to Gmktec G3 Plus
+
+1. Clone this repo and set up your secrets (see [Secrets](#secrets)).
+2. Build it with `make out/nix/iso/gmktec1.iso`.
+   Or build with nix:
+
+   ```bash
+   nix build .#gmktec1_iso
+   ```
+
+3. Burn it into the flash drive using your preferred tool. The easiest is to use
+   `dd` (change `sda` for your device):
+
+   ```bash
+   sudo dd if=out/nix/iso/gmktec1.iso of=/dev/sda bs=4M status=progress
+   ```
+
+4. Load the flash drive into the Gmktec G3 Plus.
+5. Copy the secret file `server.agekey` to the root of a USB flash drive and connect
+   the device to the Gmktec G3 Plus.
 
 ## Local Development Tools
 
@@ -141,7 +219,7 @@ Run the integrated NixOS verification tests (boots a VM and runs checks):
 nix flake check
 ```
 
----
+Tests need more work and probably not working.
 
 ## Secrets
 
@@ -179,7 +257,7 @@ that you need, or you can use all of them. Add the key to the
 
 ### Editing the secrets file
 
-The secrets file is at [./secrets/shared.yaml](./secrets/shared.yaml).
+The secrets file is at [./modules/serverbase/secrets/shared.yaml](./modules/serverbase/secrets/shared.yaml).
 You can edit it with:
 
 ```bash
@@ -191,8 +269,21 @@ nix run nixpkgs#sops secrets/shared.yaml # if not using the flake default shell
 You will need to use one of the keys listed in the [.sops.yaml](.sops.yaml) file.
 If you don't have it, remove the file and create a new one.
 
-You can find the file layout by looking at [./secrets.nix](./secrets.nix).
+You can find the file layout by looking at [./modules/serverbase/secrets.nix](./modules/serverbase/secrets.nix).
+
+## Contributing
+
+Questions, comments, bug reports, and pull requests are all welcome.  Submit
+them at [the project on Codeberg](https://codeberg.org/giggio/nixos_serverbase/).
+
+Bug reports that include steps-to-reproduce (including code) are the best. Even
+better, make them in the form of pull requests. Pull requests on Github will
+probably be ignored, so avoid them.
+
+## Author
+
+[Giovanni Bassi](https://links.giggio.net/bio)
 
 ## License
 
-TBD.
+Licensed under the MIT license.
