@@ -32,9 +32,9 @@ in
           serviceConfig = {
             Type = "oneshot";
             ExecStart = ''
-              ${clone_script}/bin/clone "https://github.com/${repo}" "${clone_dir}" \
+              ${clone_script}/bin/clone "https://codeberg.org/${repo}" "${clone_dir}" \
               --symlink "${home}/.config/nvim" \
-              --private-git-origin "git@github.com:${repo}" \
+              --private-git-origin "git@codeberg.org:${repo}" \
               --chown "${config.setup.username}"
             '';
             Restart = "on-failure";
@@ -45,8 +45,8 @@ in
         let
           clone_script = import ./clone-script.nix { inherit pkgs; };
           destination_dir = config.setup.nixosConfigDir;
-          https_repo = "https://github.com/${config.setup.configRepo}.git";
-          ssh_repo = "git@github.com:${config.setup.configRepo}.git";
+          https_repo = "https://codeberg.org/${config.setup.configRepo}.git";
+          ssh_repo = "git@codeberg.org:${config.setup.configRepo}.git";
           git_askpass = pkgs.writeShellScript "git_askpass" ''
             source "${config.sops.templates."git-askpass".path}"
             case "$1" in
@@ -84,8 +84,8 @@ in
   };
   sops.templates."git-askpass" = {
     content = ''
-      username=${config.sops.placeholder."gh_repo_clone/user"}
-      password=${config.sops.placeholder."gh_repo_clone/pat"}
+      username=${config.sops.placeholder."codeberg_repo_clone/user"}
+      password=${config.sops.placeholder."codeberg_repo_clone/pat"}
     '';
   };
 }

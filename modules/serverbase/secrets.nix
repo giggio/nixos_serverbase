@@ -6,8 +6,8 @@
       generateKey = false;
     };
     secrets = {
-      "gh_repo_clone/user" = { };
-      "gh_repo_clone/pat" = { };
+      "codeberg_repo_clone/user" = { };
+      "codeberg_repo_clone/pat" = { };
     };
   };
 }
