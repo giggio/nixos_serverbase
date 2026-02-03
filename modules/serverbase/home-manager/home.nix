@@ -27,7 +27,11 @@ in
           # ending of .bashrc:
 
           if [ "$TERM" == "xterm-kitty" ]; then
-            source "$(blesh-share)/ble.sh"
+            if ! [ -f $XDG_CONFIG_HOME/blesh/.skiprun ]; then
+              source "$(blesh-share)/ble.sh"
+            else
+              source "${pkgs.bash-preexec}/share/bash/bash-preexec.sh"
+            fi
             eval "$(atuin init bash)"
           fi
 
