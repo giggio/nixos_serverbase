@@ -261,9 +261,9 @@ The secrets file is at [./modules/serverbase/secrets/shared.yaml](./modules/serv
 You can edit it with:
 
 ```bash
-sops secrets/shared.yaml # if using the flake default shell with `nix develop` or `direnv`
+sops modules/serverbase/secrets/shared.yaml # if using the flake default shell with `nix develop` or `direnv`
 # or
-nix run nixpkgs#sops secrets/shared.yaml # if not using the flake default shell
+nix run nixpkgs#sops modules/serverbase/secrets/shared.yaml # if not using the flake default shell
 ```
 
 You will need to use one of the keys listed in the [.sops.yaml](.sops.yaml) file.
