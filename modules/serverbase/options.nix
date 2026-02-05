@@ -7,6 +7,7 @@ with lib;
       type = types.enum [
         "dev"
         "prod"
+        "test"
       ];
       default = "prod";
       example = literalExpression "{ environment = \"dev\"; }";
@@ -17,6 +18,11 @@ with lib;
       description = "Computed from setup.environment.";
     };
     isProd = mkOption {
+      type = types.bool;
+      readOnly = true;
+      description = "Computed from setup.environment.";
+    };
+    isTest = mkOption {
       type = types.bool;
       readOnly = true;
       description = "Computed from setup.environment.";
@@ -33,16 +39,6 @@ with lib;
       type = types.str;
       readOnly = true;
     };
-    configRepo = mkOption {
-      type = types.str;
-      default = "giggio/nixos_serverbase";
-      description = "The repository to clone the configuration from";
-    };
-    nixosConfigDir = mkOption {
-      type = types.str;
-      default = "/home/${config.setup.username}/.config/nixos";
-      description = "The directory to clone the configuration to";
-    };
     vmMemorySize = mkOption {
       type = types.int;
       default = 4;
@@ -55,8 +51,9 @@ with lib;
     };
   };
   config.setup = {
-    isDev = config.setup.environment == "dev";
+    isDev = (config.setup.environment == "dev") || (config.setup.environment == "test");
     isProd = config.setup.environment == "prod";
+    isTest = config.setup.environment == "test";
     derivedHostName = "${config.setup.hostName}${if config.setup.isDev then "dev" else ""}";
   };
 }

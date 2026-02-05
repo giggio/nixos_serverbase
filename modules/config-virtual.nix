@@ -1,7 +1,6 @@
 {
   config,
   modulesPath,
-  inputs,
   ...
 }:
 
@@ -34,7 +33,7 @@
       let
         memorySize = config.setup.vmMemorySize * 1024;
       in
-      builtins.trace "VM memory size: ${toString memorySize}" memorySize;
+      builtins.traceVerbose "VM memory size: ${toString memorySize}" memorySize;
     baseImageFreeSpace = 30 * 1024;
   };
 
@@ -44,7 +43,7 @@
       let
         diskSize = config.setup.vmDiskSize * 1024;
       in
-      builtins.trace "VM disk size: ${toString diskSize}" diskSize;
+      builtins.traceVerbose "VM disk size: ${toString diskSize}" diskSize;
   };
 
   boot = {

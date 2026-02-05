@@ -209,6 +209,11 @@ $(delete_old_vms_machines): delete_old_vms_%:
 	@echo "VMs left:"
 	@VBoxManage list vms
 
+### Tests
+## Runs a quick boot test
+test:
+	nix build .#checks.$(architecture)-linux.boot-test --print-build-logs --no-link
+
 ### Information
 ## List machines
 list_machines::
@@ -222,6 +227,11 @@ list_outputs:
 	@echo "Disks:" $(extra_iso)
 	@echo "Systems:" $(machine_systems)
 
+## Shows flake information
+flake_show:
+	nix flake show
+
+### Others
 ## Default target (do not use)
 default:
 	@echo "no default target"

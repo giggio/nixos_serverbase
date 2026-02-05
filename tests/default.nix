@@ -13,6 +13,7 @@ in
     }:
     {
       _module.args.inputs = inputs;
+      _module.args.helpers = import ../modules/helpers { inherit lib; };
       nixpkgs.pkgs = lib.mkForce (
         import inputs.nixpkgs {
           inherit (outerPkgs) system;
@@ -20,26 +21,26 @@ in
         }
       );
       nixpkgs.config = lib.mkForce { };
-      imports = [
-        ../serverbase.nix
-        inputs.sops-nix.nixosModules.sops
-        inputs.home-manager.nixosModules.home-manager
+      imports = inputs.self.nixosModules.default ++ [
         {
-          networking.hostName = "nixos";
-          setup.username = "giggio";
+          setup = {
+            hostName = "nixos";
+            username = "giggio";
+            nixosConfig.useCredentials = false;
+            environment = "test";
+          };
         }
       ];
-      # Use a dummy key path for sops to pass evaluation
-      sops.age.keyFile = lib.mkForce "/var/lib/sops/dummy.agekey";
-
-      # Needs to be a virtual machine
-      virtualisation.memorySize = 1024;
-      virtualisation.cores = 2;
     };
 
   testScript = ''
     machine.wait_for_unit("multi-user.target")
     machine.succeed("id giggio")
     machine.succeed("hostname | grep nixos")
+    machine.succeed("grep true /etc/isdev")
+    machine.succeed("grep true /etc/istest")
+    (_, failed) = machine.systemctl("--failed --quiet")
+    machine.log(f"systemctl --failed output: {failed}")
+    assert "" == failed, "Expected no failed units and got: " + failed
   '';
 }

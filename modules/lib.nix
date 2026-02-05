@@ -151,7 +151,8 @@
         lib.lists.fold (packageAccumulator: newPackage: packageAccumulator // newPackage) { } (
           map (
             combination:
-            {
+            # VirtualBox is not available for aarch64 (at least in NixOS)
+            lib.attrsets.optionalAttrs (combination.system == "x86_64") {
               # machine isVirtualBox isDev system
               "${serverbaseModules.lib.mkNixosModuleName combination}_ova" = serverbaseModules.lib.mkVboxImage {
                 pkgs = import inputs.nixpkgs { system = "${combination.system}-linux"; };
@@ -162,21 +163,23 @@
                 isDev = combination.isDev;
               };
             }
-            // lib.attrsets.optionalAttrs combination.machine.supportsIso {
-              "${serverbaseModules.lib.mkNixosModuleName combination}_iso" =
-                let
-                  configName = serverbaseModules.lib.mkNixosModuleName combination;
-                  theConfiguration = lib.lists.findFirst (
-                    module: module.name == configName
-                  ) "unexpected module name" nixosModules;
-                in
-                serverbaseModules.lib.mkIsoPackage {
-                  pkgs = import inputs.nixpkgs { system = theConfiguration.system; };
-                  isDev = combination.isDev;
-                  isVirtualBox = combination.isVirtualBox;
-                  installedSystem = evalConfig theConfiguration.configuration;
-                };
-            }
+            //
+              lib.attrsets.optionalAttrs (combination.machine.supportsIso && combination.isVirtualBox == false)
+                {
+                  "${serverbaseModules.lib.mkNixosModuleName combination}_iso" =
+                    let
+                      configName = serverbaseModules.lib.mkNixosModuleName combination;
+                      theConfiguration = lib.lists.findFirst (
+                        module: module.name == configName
+                      ) "unexpected module name" nixosModules;
+                    in
+                    serverbaseModules.lib.mkIsoPackage {
+                      pkgs = import inputs.nixpkgs { system = theConfiguration.system; };
+                      isDev = combination.isDev;
+                      isVirtualBox = combination.isVirtualBox;
+                      installedSystem = evalConfig theConfiguration.configuration;
+                    };
+                }
           ) combinations
         )
         // lib.fold (machine_accumulator: new_machine: machine_accumulator // new_machine) { } (

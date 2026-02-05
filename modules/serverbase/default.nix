@@ -86,12 +86,16 @@ in
               ln -s "${./scripts/initrd-nice-bash.sh}" "$out/bin/initrd-nice-bash.sh"
             '';
           });
-      postMountCommands = ''
-        # run the script we placed into the initrd
-        if [ -x /bin/install_sops_key/bin/install-sops-key.sh ]; then
-          ${pkgs.bashInteractive}/bin/bash /bin/install_sops_key/bin/install-sops-key.sh || true
-        fi
-      '';
+      postMountCommands =
+        if config.setup.isTest then
+          ""
+        else
+          ''
+            # run the script we placed into the initrd
+            if [ -x /bin/install_sops_key/bin/install-sops-key.sh ]; then
+              ${pkgs.bashInteractive}/bin/bash /bin/install_sops_key/bin/install-sops-key.sh || true
+            fi
+          '';
     };
     loader = {
       systemd-boot.enable = lib.mkDefault false; # using grub and not UEFI
@@ -210,6 +214,10 @@ in
       "isdev" = {
         text = "true";
         enable = config.setup.isDev;
+      };
+      "istest" = {
+        text = "true";
+        enable = config.setup.isTest;
       };
     };
     extraInit = ''
