@@ -200,6 +200,7 @@ in
     bat
     jq
     nil # Language server for Nix https://github.com/oxalica/nil
+    ghostty.terminfo
   ];
 
   environment = {
@@ -267,6 +268,14 @@ in
       defaultEditor = true;
     };
     git.enable = true;
+
+    bash = {
+      interactiveShellInit = ''
+        if [[ "$TERM" == "xterm-ghostty" ]]; then
+          builtin source ${pkgs.ghostty.shell_integration}/bash/ghostty.bash
+        fi
+      '';
+    };
   };
 
   services = {

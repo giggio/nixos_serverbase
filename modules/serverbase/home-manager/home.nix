@@ -26,7 +26,7 @@ in
 
           # ending of .bashrc:
 
-          if [ "$TERM" == "xterm-kitty" ]; then
+          if [ "$TERM" == "xterm-kitty" ] || [ "$TERM" == "xterm-ghostty" ]; then
             if ! [ -f $XDG_CONFIG_HOME/blesh/.skiprun ]; then
               source "$(blesh-share)/ble.sh"
             else
