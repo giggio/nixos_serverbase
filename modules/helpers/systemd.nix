@@ -4,12 +4,29 @@
     notifyUnitConfig = {
       OnFailure = "notify_telegram@%N.service";
     };
+    infiniteRetriesUnitConfig = {
+      StartLimitIntervalSec = "0"; # Allow infinite retries
+    };
     restartServiceConfig = {
       Restart = lib.mkForce "always";
       RestartMaxDelaySec = lib.mkForce "10m";
       RestartSec = lib.mkForce 20;
       RestartSteps = lib.mkForce 3;
     };
+    checkMountScript =
+      mounts:
+      lib.strings.concatStrings (
+        lib.map (mount: ''
+          if ! grep -q ${mount} /proc/mounts; then
+            echo "The mount at ${mount} is not mounted."
+            exit 1
+          fi
+          if ! timeout 3 stat ${mount} >/dev/null; then
+            echo "The mount at ${mount} is hanged."
+            exit 1
+          fi
+        '') mounts
+      );
     mkSystemdPackageForTraefik =
       {
         pkgs,
