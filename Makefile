@@ -1,39 +1,44 @@
 .SECONDARY:
 .SUFFIXES:
 SHELL=bash
+ifndef VMS_DIR
+  $(error VMS_DIR is undefined)
+endif
 
 # Include help system
 include $(dir $(lastword $(MAKEFILE_LIST)))help.mk
 
 nix_deps = $(shell git ls-files --cached --modified --others --exclude-standard | sort | uniq | grep -v -e '^\..*' -e '.*\.md' -e Makefile | while IFS= read -r f; do [ -e "$$f" ] && echo "$$f"; done)
 define vm_count
-$(shell (VBoxManage list vms | grep $(1) || true) | awk '{gsub(/"/,""); print $$1}' | sed 's/$(1)//' | sort --general-numeric-sort | tail -n-1)
+$(shell find $(VMS_DIR) -type d -name '$(1)*' -printf '%f\n' | sed 's/$(1)//' | sort --general-numeric-sort | tail -n-1)
 endef
 out_dir := out
 out_dir_stamp := $(out_dir)/.stamp
 out_nix_dir := $(out_dir)/nix
 out_nix_dir_stamp := $(out_nix_dir)/.stamp
-out_ova_dir := $(out_nix_dir)/ova
-out_ova_dir_stamp := $(out_ova_dir)/.stamp
+out_vm_dir := $(out_nix_dir)/vm
+out_vm_dir_stamp := $(out_vm_dir)/.stamp
 out_iso_dir := $(out_nix_dir)/iso
 out_iso_dir_stamp := $(out_iso_dir)/.stamp
 out_img_dir := $(out_nix_dir)/img
 out_img_dir_stamp := $(out_img_dir)/.stamp
 out_system_dir := $(out_nix_dir)/system
 out_system_dir_stamp := $(out_system_dir)/.stamp
+out_disks_dir := $(out_dir)/disks
+out_disks_dir_stamp := $(out_disks_dir)/.stamp
 result_dir := $(out_dir)/.result
 result_nix_dir := $(result_dir)/nix
-result_ova_dir := $(result_nix_dir)/ova
+result_vm_dir := $(result_nix_dir)/vm
 result_iso_dir := $(result_nix_dir)/iso
 result_img_dir := $(result_nix_dir)/img
 result_system_dir := $(result_nix_dir)/system
 
-.PHONY: default help $(out_dir) $(out_nix_dir) $(out_ova_dir) $(out_iso_dir) $(out_img_dir) $(out_system_dir)
+.PHONY: default help $(out_dir) $(out_nix_dir) $(out_iso_dir) $(out_img_dir) $(out_system_dir)
 
 machines_details = $(shell nix run .#list_machines)
 machines = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^machines ' | sed 's/^machines //'); do printf '%s ' "$$x"; done)
-ova_files = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^machines ' | sed 's/^machines //'); do printf '$(out_ova_dir)/%s.ova ' "$$x"; done)
-ova_file_stamps = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^machines ' | sed 's/^machines //'); do printf '$(out_ova_dir)/.%s.ova.stamp ' "$$x"; done)
+vm_files = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^machines ' | sed 's/^machines //'); do printf '$(out_vm_dir)/run-%s-vm ' "$$x"; done)
+vm_file_stamps = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^machines ' | sed 's/^machines //'); do printf '$(out_vm_dir)/.run-%s-vm.stamp ' "$$x"; done)
 img_files = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^imgs ' | sed 's/^imgs //'); do printf '$(out_img_dir)/%s.img.zst ' "$$x"; done)
 img_file_stamps = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^imgs ' | sed 's/^imgs //'); do printf '$(out_img_dir)/.%s.img.zst.stamp ' "$$x"; done)
 iso_files = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^isos ' | sed 's/^isos //'); do printf '$(out_iso_dir)/%s.iso ' "$$x"; done)
@@ -43,9 +48,10 @@ machine_system_stamps = $(shell for x in $$(echo "$(machines_details)" | sed 's/
 architecture = $(shell uname -m)
 
 out_disk_dir = $(out_dir)/disks
-extra_iso = $(out_disk_dir)/secret-disk.iso
+secrets_qcow2 = $(out_disk_dir)/secret-disk.qcow2
+empty_qcow2 = $(out_disk_dir)/empty.qcow2
 
-virtualbox_default_install_dir = $(shell VBoxManage list systemproperties | grep 'Default machine folder' | awk -F: '{ print $$2 }' | xargs echo)
+vms_dir = $(shell echo $$VMS_DIR)
 up_if = $(shell up_if=$$(comm -12 <(ip -br link show up | awk '{ print $$1 }' | sort) <(for f in /sys/class/net/*/device; do echo $$f | awk -F/ '{ print $$5 }'; done | sort) | head -n1); if [ -z "$$up_if" ]; then echo "no network interface is up"; exit 1; else echo "$$up_if"; fi)
 
 ### Global Commands
@@ -57,20 +63,21 @@ clean:
 deps:
 	@echo "These are the make build deps: $(nix_deps)"
 
-# The .stamp file is necessary because otherwise the timestamp of the ova file is the same as the
+### Build Artifacts
+
+# The .stamp file is necessary because otherwise the timestamp of the run-...-vm file is the same as the
 # timestamp of the nix build, which is unix time, 1-1-1970
-# and making other targets depend on the .ova would always rebuild everything.
+# and making other targets depend on the run-...-vm file would always rebuild everything.
 # With the stamp file we have a file that has the correct date.
-$(out_ova_dir)/.%.ova.stamp: $(nix_deps)
-	nix build .\#$*_virtualbox_$(architecture)_ova --print-build-logs --out-link "$(result_ova_dir)/"
-	mkdir -p "$(out_ova_dir)"
-	ln -sf "$$(realpath "$(result_ova_dir)/$*.ova")" "$(out_ova_dir)/$*.ova"
-	touch --date=@$$(stat -c '%Y' "$(out_ova_dir)/$*.ova") "$@"
+$(out_vm_dir)/.run-%-vm.stamp: $(nix_deps)
+	nix build .\#$*_$(architecture)_vm --print-build-logs --out-link "$(result_vm_dir)/"
+	mkdir -p "$(out_vm_dir)"
+	ln -sf "$$(realpath "$(result_vm_dir)/run-$*-vm")" "$(out_vm_dir)/run-$*-vm"
+	touch --date=@$$(stat -c '%Y' "$(out_vm_dir)/run-$*-vm") "$@"
 	rm -rf "$(result_dir)"
 
-### Build Artifacts
-## Builds the OVA files
-$(ova_files): $(out_ova_dir)/%.ova: $(out_ova_dir)/.%.ova.stamp;
+## Builds the vm files
+$(vm_files): $(out_vm_dir)/run-%-vm: $(out_vm_dir)/.run-%-vm.stamp;
 
 # See the comment above about the .stamp file
 $(out_img_dir)/.%.img.zst.stamp: $(nix_deps)
@@ -106,11 +113,26 @@ $(out_system_dir)/.%.stamp: $(nix_deps)
 ## Builds the systems files
 $(machine_systems): $(out_system_dir)/%: $(out_system_dir)/.%.stamp;
 
-## Create the cd disk ISO that holds the nixos secret key
-$(extra_iso):
-	@echo "Creating ISO $@..."
+## Create the qcow2 disk that holds the nixos secret key
+GUESTFISH_CMD="run;\
+mount /dev/sda1 /;\
+mkdir-p /nixos-secrets;\
+upload $(HOME)/.config/nixos-secrets/server.agekey /nixos-secrets/server.agekey;\
+chmod 0400 /nixos-secrets/server.agekey;\
+sync;\
+exit"
+$(secrets_qcow2):
+	@echo "Creating secrets qcow2 $@..."
 	mkdir -p "$$(dirname "$@")"
-	xorriso -as mkisofs -o "$@" "$(HOME)/.config/nixos-secrets"
+	qemu-img create -f qcow2 $@ 4M
+	virt-format -a $@ --filesystem=ext4
+	echo -e $(subst ;,\n,${GUESTFISH_CMD}) | sudo guestfish -a $@
+
+$(empty_qcow2):
+	@echo "Creating empty qcow2 $@..."
+	mkdir -p "$$(dirname "$@")"
+	qemu-img create -f qcow2 "$@" 48G
+	# virt-format -a "$@" --filesystem=ext4
 
 $(out_system_dir_stamp): $(machine_system_stamps)
 	touch "$@"
@@ -127,59 +149,124 @@ $(out_img_dir_stamp): $(img_file_stamps)
 ## Builds all images
 $(out_img_dir) $(out_img_dir)/: $(out_img_dir_stamp)
 
-$(out_ova_dir_stamp): $(ova_file_stamps)
+$(out_vm_dir_stamp): $(vm_file_stamps)
 	touch "$@"
-## Builds all OVA filestems
-$(out_ova_dir) $(out_ova_dir)/: $(out_ova_dir_stamp)
+## Builds all VM filestems
+$(out_vm_dir) $(out_vm_dir)/: $(out_vm_dir_stamp)
 
-$(out_nix_dir_stamp): $(out_system_dir_stamp) $(out_iso_dir_stamp) $(out_img_dir_stamp) $(out_ova_dir_stamp)
+$(out_nix_dir_stamp): $(out_system_dir_stamp) $(out_iso_dir_stamp) $(out_img_dir_stamp) $(out_vm_dir_stamp)
 	touch "$@"
 ## Buils all nix artifacts
 $(out_nix_dir) $(out_nix_dir)/: $(out_nix_dir_stamp)
 
-$(out_dir_stamp): $(out_nix_dir_stamp) $(extra_iso)
+$(out_disks_dir_stamp): $(empty_qcow2) $(secrets_qcow2)
+	touch "$@"
+## Buils all disks
+$(out_disks_dir) $(out_disks_dir)/: $(out_disks_dir_stamp)
+
+$(out_dir_stamp): $(out_nix_dir_stamp) $(out_disks_dir_stamp)
 	touch "$@"
 ## Build the output directory
 $(out_dir) $(out_dir)/: $(out_dir_stamp)
 
 ## Build all artifacts
-all: $(out_nix_dir)
+all: $(out_dir)
+
+start_new_from_iso_machines = $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'start_new_from_iso_%s ' "$$x"; done)
+start_new_from_iso_%: vm_name=$*$(shell expr $(call vm_count,$*) + 1)
+start_new_from_iso_%: vm_dir=$(VMS_DIR)/$(vm_name)
+start_new_from_iso_%: TMPDIR:=$(shell mktemp -d nix-vm.XXXXXXXXXX --tmpdir)
+start_new_from_iso_%: disk_path=$(vm_dir)/$(vm_name).qcow2
+start_new_from_iso_%:
+### VM Management
+## Create and starts a new VM that does not yet have an installation and will be installed via ISO (slower)
+$(start_new_from_iso_machines): start_new_from_iso_%: $(out_iso_dir)/%.iso $(out_iso_dir)/.%.iso.stamp $(secrets_qcow2) $(empty_qcow2)
+	@echo -e "VM is \e[32m$(vm_name)\e[0m (at \e[32m$(vm_dir)\e[0m)"
+	mkdir -p "$(vm_dir)"
+	cp $(secrets_qcow2) "$(vm_dir)/secret-disk.qcow2"
+	cp $(empty_qcow2) $(disk_path)
+	mkdir -p "$(TMPDIR)/xchg"
+	dd if=/dev/zero of=$(vm_dir)/ovmf_vars_$(vm_name).fd bs=64K count=1
+	cp "$$(realpath $$(dirname $$(realpath $$(which qemu-system-x86_64)))/../share/qemu)/edk2-x86_64-code.fd" $(vm_dir)/edk2-x86_64-code.fd
+	@echo -e "Stop the VM when the installation is done and then run with \e[32mmake start_$*\e[0m."
+	@echo "#!/bin/bash\nqemu-system-x86_64 -machine type=q35 -machine accel=kvm -cpu max \\\n\
+	  -name $* \\\n\
+	  -m 8192 \\\n\
+	  -enable-kvm \\\n\
+	  -smp 4 \\\n\
+	  -drive if=pflash,format=raw,unit=0,file="$(vm_dir)/edk2-x86_64-code.fd",readonly=on \\\n\
+	  -drive if=pflash,format=raw,unit=1,file="$(vm_dir)/ovmf_vars_$(vm_name).fd" \\\n\
+	  -device virtio-rng-pci \\\n\
+	  -nic user,ipv6=off,model=virtio,mac=52:54:00:CA:FE:EE,hostfwd=tcp::2222-:22,"$QEMU_NET_OPTS" \\\n\
+	  -virtfs local,path=$(TMPDIR)/xchg,security_model=none,mount_tag=shared \\\n\
+	  -virtfs local,path=$(TMPDIR)/xchg,security_model=none,mount_tag=xchg \\\n\
+	  -blockdev driver=file,filename="$(disk_path)",node-name=file1 \\\n\
+	  -blockdev driver=qcow2,file=file1,node-name=hd0 \\\n\
+	  -blockdev driver=file,filename=$(vm_dir)/secret-disk.qcow2,node-name=secretsfile \\\n\
+	  -blockdev driver=qcow2,file=secretsfile,node-name=hd_secrets \\\n\
+	  -device nvme,id=nvme0,serial=1234 \\\n\
+	  -device nvme-ns,drive=hd0,nsid=1,bus=nvme0 \\\n\
+	  -device nvme-ns,drive=hd_secrets,nsid=2,bus=nvme0 \\\n\
+	  -device virtio-keyboard \\\n\
+	  -usb \\\n\
+	  -device usb-tablet,bus=usb-bus.0 \\\n\
+	  -serial unix:/tmp/$(vm_name).sock,server,nowait \\\n\
+	  \$$QEMU_OPTS" > "$(vm_dir)/run-$*-vm"
+	sed -i 's/\\n/\n/g' "$(vm_dir)/run-$*-vm"
+	chmod +x "$(vm_dir)/run-$*-vm"
+	qemu-system-x86_64 -machine type=q35 -machine accel=kvm -cpu max \
+	  -name $* \
+	  -m 8192 \
+	  -enable-kvm \
+	  -cdrom $$(realpath "$(out_iso_dir)/$*.iso") \
+	  -boot order=c,once=d \
+	  -smp 4 \
+	  -drive if=pflash,format=raw,unit=0,file="$(vm_dir)/edk2-x86_64-code.fd",readonly=on \
+	  -drive if=pflash,format=raw,unit=1,file="$(vm_dir)/ovmf_vars_$(vm_name).fd" \
+	  -device virtio-rng-pci \
+	  -nic user,ipv6=off,model=virtio,mac=52:54:00:CA:FE:EE,hostfwd=tcp::2222-:22,"$QEMU_NET_OPTS" \
+	  -virtfs local,path=$(TMPDIR)/xchg,security_model=none,mount_tag=shared \
+	  -virtfs local,path=$(TMPDIR)/xchg,security_model=none,mount_tag=xchg \
+	  -blockdev driver=file,filename="$(disk_path)",node-name=file1 \
+	  -blockdev driver=qcow2,file=file1,node-name=hd0 \
+	  -device nvme,id=nvme0,serial=1234 \
+	  -device nvme-ns,drive=hd0,nsid=1,bus=nvme0 \
+	  -device virtio-keyboard \
+	  -usb \
+	  -device usb-tablet,bus=usb-bus.0 \
+	  -serial unix:/tmp/$(vm_name).sock,server,nowait \
+	  $$QEMU_OPTS
 
 create_machines = $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'create_%s ' "$$x"; done)
 create_%: vm_name=$*$(shell expr $(call vm_count,$*) + 1)
-create_%: vm_dir=$(virtualbox_default_install_dir)/$(vm_name)
-### VM Management
+create_%: vm_dir=$(VMS_DIR)/$(vm_name)
 ## Create a new VM
-$(create_machines): create_%: $(out_iso_dir)/%.iso $(out_iso_dir)/.%.iso.stamp $(extra_iso)
-	@echo "VM is $(vm_name)"
-	@echo "VM dir will be $(vm_dir)"
-	VBoxManage createvm --name=$(vm_name) --default --ostype=Linux26_64 --register
-	VBoxManage modifyvm $(vm_name) --nic1 bridged --bridge-adapter1=$(up_if) --firmware=efi64 --cpus 4 --memory 4096 --audio-enabled=off
-	VBoxManage storagectl $(vm_name) --name=IDE --controller=PIIX4 --remove
-	VBoxManage storagectl $(vm_name) --name=NVMe --controller=NVMe --add=pcie --hostiocache=on
-	VBoxManage createmedium disk --filename $(vm_dir)/$(vm_name).vmdk --size 20480
-	VBoxManage storageattach $(vm_name) --storagectl=NVMe --port 0 --type=hdd --medium $(vm_dir)/$(vm_name).vmdk
-	VBoxManage storageattach $(vm_name) --storagectl=SATA --port 0 --type=dvddrive --medium $$(realpath "$(out_iso_dir)/$*.iso")
-	VBoxManage storageattach $(vm_name) --storagectl=SATA --port 1 --type=dvddrive --medium $(extra_iso)
+$(create_machines): create_%: $(out_vm_dir)/run-%-vm $(out_vm_dir)/.run-%-vm.stamp $(secrets_qcow2)
+	@echo -e "VM is \e[32m$(vm_name)\e[0m (at \e[32m$(vm_dir)\e[0m)"
+	mkdir -p "$(vm_dir)"
+	cp $(secrets_qcow2) "$(vm_dir)/secret-disk.qcow2"
+	cp $(out_vm_dir)/run-$*-vm "$(vm_dir)/run-$*-vm"
+	sed -i -e 's|QEMU_OPTS|QEMU_OPTS -drive file=$(vm_dir)/secret-disk.qcow2,id=drive2,if=none,index=2,werror=report -device virtio-blk-pci,drive=drive2 -serial unix:/tmp/$(vm_name).sock,server,nowait|' \
+	  -e '3i export NIX_DISK_IMAGE="$(vm_dir)/$(vm_name).qcow2"' \
+	  -e '3i export NIX_EFI_VARS="$(vm_dir)/$(vm_name)-efi-vars.fd"' \
+	  "$(vm_dir)/run-$*-vm"
 
-import_machines = $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'import_%s ' "$$x"; done)
-import_%: vm_name=$*$(shell expr $(call vm_count,$*) + 1)
-## Import a VM from an OVA file
-$(import_machines): import_%: $(out_ova_dir)/%.ova $(out_ova_dir)/.%.ova.stamp $(extra_iso)
-	@echo "VM is $(vm_name)"
-	VBoxManage import $(out_ova_dir)/$*.ova --vsys 0 --vmname=$(vm_name) --cpus 4 --unit 7 --ignore
-	VBoxManage modifyvm $(vm_name) --nic1 bridged --bridge-adapter1=$(up_if) --uart1 0x3f8 4 --uartmode1 server /tmp/$(vm_name).sock
-	VBoxManage storageattach $(vm_name) --storagectl=SATA --port 1 --type=dvddrive --medium $(extra_iso)
+create_and_start_machines = $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'create_and_start_%s ' "$$x"; done)
+## Create, starts and connect to a new VM
+$(create_and_start_machines): create_and_start_%: create_% start_%
 
 start_machines = $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'start_%s ' "$$x"; done)
 start_%: vm_name=$*$(call vm_count,$*)
-start_%: has_socket=$(shell VBoxManage showvminfo $(vm_name) --machinereadable | grep -q uartmode1= && echo true || echo false)
-## Start a VM
+start_%: vm_dir=$(VMS_DIR)/$(vm_name)
+## Start and connects the last existing VM
 $(start_machines): start_%:
-	if [ "$*" == "$(vm_name)" ]; then echo "no VMs found" && exit 1; fi
+	@echo -e "VM is \e[32m$(vm_name)\e[0m (at \e[32m$(vm_dir)\e[0m)"
+	if [ "$*" == "$(vm_name)" ]; then echo "No VMs found" && exit 1; fi
+	if ps | grep [q]emu &>/dev/null; then echo "There is already a VM running" && exit 1; fi
 	rm -f /tmp/$(vm_name).sock
-	VBoxManage startvm $(vm_name) $$($(has_socket) && echo '--type headless' || echo '')
-	if $(has_socket); then $(MAKE) connect_$*; fi
+	zellij run --name $(vm_name) --close-on-exit --floating -y0 -x80% --height=20% -- "$(vm_dir)/run-$*-vm"
+	zellij action toggle-floating-panes
+	$(MAKE) connect_$*
 
 connect_machines = $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'connect_%s ' "$$x"; done)
 connect_%: vm_name=$*$(call vm_count,$*)
@@ -194,20 +281,20 @@ $(connect_machines): connect_%:
 	socat STDIO,raw,echo=0,escape=0x1d UNIX-CONNECT:$(socket)
 
 delete_old_vms_machines = $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'delete_old_vms_%s ' "$$x"; done)
-delete_old_vms_%: vm_numbers=$(shell (VBoxManage list vms | grep $*) | awk '{gsub(/"/,""); print $$1}' | sed 's/$*//' | sort --general-numeric-sort)
-## This will delete old vms.
-## It reads VMs with VBoxManage and deletes all but the last one.
+delete_old_vms_%: vm_numbers=$(shell find $(VMS_DIR) -type d -name '$(*)*' -printf '%f\n' | sed 's/$*//' | sort --general-numeric-sort)
+## Delete old vms. It reads VM directories in the VMs dir and deletes all but the last one.
 $(delete_old_vms_machines): delete_old_vms_%:
-	echo "$(vm_numbers)"
-	if [ $$(echo "$(vm_numbers)" | wc -w) -lt 2 ]; then echo "No VMs to delete"; exit; fi;
-	for vm_number in $$(echo "$(vm_numbers)" | sed 's/ /\n/g' | head -n-1); do \
-	  vm=$$(printf '$*%s' "$$vm_number"); \
-	  echo "Deleting VirtualBox VM: $$vm"; \
-	  VBoxManage controlvm $$vm poweroff 2>/dev/null || true; \
-	  VBoxManage unregistervm $$vm --delete-all; \
-	done
-	@echo "VMs left:"
-	@VBoxManage list vms
+	if [ $$(echo "$(vm_numbers)" | wc -w) -lt 2 ]; then \
+	  echo "No VMs to delete"; \
+	else \
+	  for vm_number in $$(echo "$(vm_numbers)" | sed 's/ /\n/g' | head -n-1); do \
+	    vm=$$(printf '$*%s' "$$vm_number"); \
+	    echo "Deleting VM: $$vm"; \
+	    rm -rf "$(VMS_DIR)/$$vm"; \
+	  done; \
+	  printf "VMs left: "; \
+	  find $(VMS_DIR) -type d -name '$(*)*' -printf '%f '; \
+	fi;
 
 ### Tests
 ## Runs a quick boot test
@@ -221,11 +308,11 @@ list_machines::
 
 ## List outputs
 list_outputs:
-	@echo "OVAs:" $(ova_files)
+	@echo "VMs:" $(vm_files)
 	@echo "ISOs:" $(iso_files)
 	@echo "Imgs:" $(img_files)
-	@echo "Disks:" $(extra_iso)
 	@echo "Systems:" $(machine_systems)
+	@echo "Disks:" $(empty_qcow2) $(secrets_qcow2)
 
 ## Shows flake information
 flake_show:

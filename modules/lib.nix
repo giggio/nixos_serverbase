@@ -27,14 +27,14 @@
       combinations =
         builtins.filter
           # only build if architecture matches or it is a vm
-          (combination: (combination.isVirtualBox || combination.machine.defaultArch == combination.system))
+          (combination: (combination.isVM || combination.machine.defaultArch == combination.system))
           (
             lib.lists.flatten (
               map (
                 machine:
                 map
                   (
-                    isVirtualBox:
+                    isVM:
                     map
                       (
                         isDev:
@@ -42,7 +42,7 @@
                           (system: {
                             inherit
                               machine
-                              isVirtualBox
+                              isVM
                               isDev
                               system
                               ;
@@ -75,17 +75,7 @@
     map (
       combination:
       let
-        name = serverbaseModules.lib.mkNixosModuleName (
-          with combination;
-          {
-            inherit
-              machine
-              isDev
-              isVirtualBox
-              system
-              ;
-          }
-        );
+        name = serverbaseModules.lib.mkNixosModuleName combination;
         suffixedSystem =
           if lib.strings.hasSuffix "-linux" combination.system then
             combination.system
@@ -106,7 +96,7 @@
             serverbaseModules.default
             ++ [
               (
-                if combination.isVirtualBox then
+                if combination.isVM then
                   combination.machine.hardwareModule.virtual
                 else
                   combination.machine.hardwareModule.physical
@@ -114,8 +104,12 @@
               {
                 nixpkgs.hostPlatform = suffixedSystem;
                 setup.hostName = combination.machine.name;
-                setup.vmMemorySize = lib.mkIf (combination.machine ? vmMemorySize) combination.machine.vmMemorySize;
-                setup.vmDiskSize = lib.mkIf (combination.machine ? vmDiskSize) combination.machine.vmDiskSize;
+                setup.vm.memorySize = lib.mkIf (
+                  combination.machine ? vmMemorySize
+                ) combination.machine.vmMemorySize;
+                setup.vm.diskSize = lib.mkIf (combination.machine ? vmDiskSize) combination.machine.vmDiskSize;
+                setup.vm.useEFIBoot =
+                  if (combination.machine ? useEFIBoot) then combination.machine.useEFIBoot else false;
               }
               (lib.attrsets.optionalAttrs combination.isDev { config.setup.environment = "dev"; })
             ]
@@ -128,12 +122,11 @@
     {
       machine,
       isDev,
-      isVirtualBox,
+      isVM,
       system,
+      ...
     }:
-    "${machine.name}${if isDev then "dev" else ""}${
-      if isVirtualBox then "_virtualbox" else ""
-    }_${lib.strings.removeSuffix "-linux" system}";
+    "${machine.name}${if isDev then "dev" else ""}_${lib.strings.removeSuffix "-linux" system}${if isVM then "_vm" else ""}";
 
   mkInstallerPackages =
     {
@@ -151,35 +144,29 @@
         lib.lists.fold (packageAccumulator: newPackage: packageAccumulator // newPackage) { } (
           map (
             combination:
-            # VirtualBox is not available for aarch64 (at least in NixOS)
-            lib.attrsets.optionalAttrs (combination.system == "x86_64") {
-              # machine isVirtualBox isDev system
-              "${serverbaseModules.lib.mkNixosModuleName combination}_ova" = serverbaseModules.lib.mkVboxImage {
+            lib.attrsets.optionalAttrs combination.isVM {
+              # machine isVM isDev system
+              "${serverbaseModules.lib.mkNixosModuleName combination}" = serverbaseModules.lib.mkVmImage {
                 pkgs = import inputs.nixpkgs { system = "${combination.system}-linux"; };
-                nixos-system =
-                  nixosConfigurations."${combination.machine.name}${
-                    if combination.isDev then "dev" else ""
-                  }_virtualbox_${lib.strings.removeSuffix "-linux" combination.system}";
+                nixos-system = nixosConfigurations."${serverbaseModules.lib.mkNixosModuleName combination}";
                 isDev = combination.isDev;
               };
             }
-            //
-              lib.attrsets.optionalAttrs (combination.machine.supportsIso && combination.isVirtualBox == false)
-                {
-                  "${serverbaseModules.lib.mkNixosModuleName combination}_iso" =
-                    let
-                      configName = serverbaseModules.lib.mkNixosModuleName combination;
-                      theConfiguration = lib.lists.findFirst (
-                        module: module.name == configName
-                      ) "unexpected module name" nixosModules;
-                    in
-                    serverbaseModules.lib.mkIsoPackage {
-                      pkgs = import inputs.nixpkgs { system = theConfiguration.system; };
-                      isDev = combination.isDev;
-                      isVirtualBox = combination.isVirtualBox;
-                      installedSystem = evalConfig theConfiguration.configuration;
-                    };
-                }
+            // lib.attrsets.optionalAttrs (combination.machine.supportsIso && combination.isVM == false) {
+              "${serverbaseModules.lib.mkNixosModuleName combination}_iso" =
+                let
+                  configName = serverbaseModules.lib.mkNixosModuleName combination;
+                  theConfiguration = lib.lists.findFirst (
+                    module: module.name == configName
+                  ) "unexpected module name" nixosModules;
+                in
+                serverbaseModules.lib.mkIsoPackage {
+                  pkgs = import inputs.nixpkgs { system = theConfiguration.system; };
+                  isDev = combination.isDev;
+                  isVM = combination.isVM;
+                  installedSystem = evalConfig theConfiguration.configuration;
+                };
+            }
           ) combinations
         )
         // lib.fold (machine_accumulator: new_machine: machine_accumulator // new_machine) { } (
@@ -205,7 +192,7 @@
             serverbaseModules.lib.mkNixosModuleName {
               inherit machine;
               isDev = false;
-              isVirtualBox = false;
+              isVM = false;
               system = machine.defaultArch;
             }
           }_iso";
@@ -214,7 +201,7 @@
             serverbaseModules.lib.mkNixosModuleName {
               inherit machine;
               isDev = true;
-              isVirtualBox = false;
+              isVM = false;
               system = machine.defaultArch;
             }
           }_iso";
@@ -225,7 +212,7 @@
     {
       installedSystem,
       pkgs,
-      isVirtualBox,
+      isVM,
       isDev,
     }:
     let
@@ -305,9 +292,7 @@
           )
         ];
       };
-      file = "${installedSystem.config.setup.hostName}${if isDev then "dev" else ""}${
-        if isVirtualBox then "_virtualbox" else ""
-      }.iso";
+      file = "${installedSystem.config.setup.hostName}${if isDev then "dev" else ""}${if isVM then "_vm" else ""}.iso";
     in
     pkgs.runCommand file { } ''
       mkdir -p "$out"
@@ -328,18 +313,18 @@
       ln -s ${nixos-system.config.system.build.sdImage}/sd-image/*.img.zst $out/${file}
     '';
 
-  mkVboxImage =
+  mkVmImage =
     {
       pkgs,
       nixos-system,
       isDev,
     }:
     let
-      file = "${nixos-system.config.setup.hostName}${if isDev then "dev" else ""}.ova";
+      file = "run-${nixos-system.config.setup.derivedHostName}-vm";
     in
     pkgs.runCommand file { } ''
       mkdir -p "$out"
-      ln -s ${nixos-system.config.system.build.virtualBoxOVA}/*.ova $out/${file}
+      ln -s ${nixos-system.config.system.build.vm}/bin/${file} $out/${file}
     '';
 
   list_machines =
@@ -373,13 +358,17 @@
         [
           util-linux
           sops
+          zellij
+          qemu
         ]
         ++ (lib.optionals (system == "x86_64-linux") [
-          # these libs are used to build VirtualBox machines, not necessary in the RPi
-          yq-go
-          libisoburn
-          # virtualboxHeadless # see flake.nix comment
+          # these libs are used to build VMs, not necessary in the RPi
+          guestfs-tools
+          qemu-utils
         ])
         ++ extraModules;
+      shellHook = ''
+        export VMS_DIR=/mnt/data/vms
+      '';
     };
 }

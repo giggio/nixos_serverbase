@@ -2,7 +2,6 @@
 with lib;
 {
   options.setup = {
-    virtualbox = mkEnableOption "Virtualbox enabled";
     environment = mkOption {
       type = types.enum [
         "dev"
@@ -39,15 +38,19 @@ with lib;
       type = types.str;
       readOnly = true;
     };
-    vmMemorySize = mkOption {
-      type = types.int;
-      default = 4;
-      description = "Virtual machine memory size in GB";
-    };
-    vmDiskSize = mkOption {
-      type = types.int;
-      default = 30;
-      description = "Virtual machine disk size in GB";
+    vm = {
+      enable = mkEnableOption "VM enabled";
+      memorySize = mkOption {
+        type = types.int;
+        default = 4;
+        description = "Virtual machine memory size in GB";
+      };
+      diskSize = mkOption {
+        type = types.int;
+        default = 48;
+        description = "Virtual machine disk size in GB";
+      };
+      useEFIBoot = mkEnableOption "EFI boot enabled";
     };
   };
   config.setup = {

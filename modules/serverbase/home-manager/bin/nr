@@ -23,26 +23,19 @@ run_checks() {
 }
 
 get_generic_profile() {
-  local product_name
-  if [ -f /sys/devices/virtual/dmi/id/product_name ]; then
-    local product_name
-    product_name=$(cat /sys/devices/virtual/dmi/id/product_name)
-    if [ "$product_name" == "VirtualBox" ]; then
-      local is_virtualbox=true
-    else
-      local is_virtualbox=false
-    fi
+  if systemd-detect-virt &>/dev/null; then
+    local is_vm=true
   else
-    local is_virtualbox=false
+    local is_vm=false
   fi
-  # available profiles: nixos, nixos_virtualbox
+  # available profiles: nixos, nixos_vm
   local profile=${1:-nixos}
-  if $is_virtualbox; then
-    profile+=_virtualbox
-  fi
   host_platform="$(uname -m)"
   profile+=_$host_platform
-  echo $profile
+  if $is_vm; then
+    profile+=_vm
+  fi
+  echo "$profile"
 }
 
 get_config_dir() {

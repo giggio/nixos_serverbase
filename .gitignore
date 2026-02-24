@@ -6,5 +6,5 @@
 .result
 result
 out
-*.ova
 .direnv
+*.qcow2

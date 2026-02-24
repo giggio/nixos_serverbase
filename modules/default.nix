@@ -10,6 +10,7 @@ let
       gmktec = {
         physical = {
           imports = [
+            ./config-physical.nix
             ./config-physical-gmktec.nix
             ./config-gmktec.nix
           ];
@@ -24,6 +25,7 @@ let
       pi4 = {
         physical = {
           imports = [
+            ./config-physical.nix
             ./config-physical-pi4.nix
             ./config-pi4.nix
           ];

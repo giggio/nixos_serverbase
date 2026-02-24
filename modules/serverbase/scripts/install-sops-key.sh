@@ -37,8 +37,8 @@ try_mount_and_check() {
 
   if [ -n "$mountpoint" ]; then
     if copy_if_has_key "$mountpoint"; then
-       echo "sops key found on $dev (already mounted at $mountpoint) and copied"
-       return 0
+      echo "sops key found on $dev (already mounted at $mountpoint) and copied"
+      return 0
     fi
   else
     if mount -o ro "$dev" "$tmpmnt" 2>/dev/null; then
@@ -55,7 +55,7 @@ try_mount_and_check() {
 
 search_for_key_in_drives() {
   # quick scan: partition device patterns (common on small drives)
-  for d in /dev/sd?1 /dev/sd?2 /dev/sd? /dev/nvme?n?p1 /dev/nvme?n?p2 /dev/sr?; do
+  for d in /dev/sd?1 /dev/sd?2 /dev/sd? /dev/vd?1 /dev/vd?2 /dev/nvme?n?p1 /dev/nvme?n?p2 /dev/sr?; do
     [ -e "$d" ] || continue
     try_mount_and_check "$d" && break
   done
@@ -88,7 +88,7 @@ for i in $(seq 1 6); do
   if [ "$found" -eq 1 ]; then
     break
   fi
-  if [ "$(cat /sys/devices/virtual/dmi/id/product_name 2> /dev/null)" == "VirtualBox" ]; then
+  if systemd-detect-virt &>/dev/null; then # todo: check if systemd-detect-virt works in initrd
     sleep 1
   else
     sleep 5

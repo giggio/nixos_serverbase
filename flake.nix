@@ -48,7 +48,8 @@
           supportsIso = true;
           supportsImg = false;
           vmMemorySize = 8;
-          vmDiskSize = 30;
+          vmDiskSize = 48;
+          useEFIBoot = true;
         }
       ];
       nixosConfigurations = self.nixosModules.lib.mkNixosConfigurations machines;
