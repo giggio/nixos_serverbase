@@ -303,8 +303,14 @@ test:
 
 ### Information
 ## List machines
-list_machines::
+list_machines:
 	@echo "Machines: $(machines)"
+
+## List VMs
+list_vms:
+	@machines="$(machines)"; \
+	machines="$${machines% }"; \
+	echo -e "VMs created: \n""$$(find /mnt/data/vms -maxdepth 1 -type d -regex ".*/\($${machines// /\\|}\)[^/]*" -printf '%f\n' | sort --version-sort)"
 
 ## List outputs
 list_outputs:
