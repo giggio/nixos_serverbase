@@ -77,7 +77,7 @@
         // self.nixosModules.lib.mkInstallerPackages {
           inherit nixosConfigurations machines;
         };
-        devShells.default = self.nixosModules.lib.mkDevShell {
+        devShells = self.nixosModules.lib.mkDevShells {
           inherit pkgs;
           inherit system;
         };

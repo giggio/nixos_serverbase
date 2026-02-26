@@ -345,30 +345,42 @@
       chmod +x "$out/bin/list_machines";
     '';
 
-  mkDevShell =
+  mkDevShells =
     {
       pkgs,
       system,
       extraModules ? [ ],
     }:
-    pkgs.mkShell {
-      name = "Image build environment";
-      buildInputs =
-        with pkgs;
-        [
-          util-linux
-          sops
-          zellij
-          qemu
-        ]
-        ++ (lib.optionals (system == "x86_64-linux") [
-          # these libs are used to build VMs, not necessary in the RPi
-          guestfs-tools
-          qemu-utils
-        ])
-        ++ extraModules;
-      shellHook = ''
-        export VMS_DIR=/mnt/data/vms
-      '';
+    let
+      baseShell = {
+        name = "Image build environment";
+        buildInputs =
+          with pkgs;
+          [
+            util-linux
+            sops
+          ]
+          ++ extraModules;
+        shellHook = ''
+          export VMS_DIR=/mnt/data/vms
+        '';
+      };
+      defaultShell = baseShell // {
+        buildInputs =
+          baseShell.buildInputs
+          ++ (lib.optionals (system == "x86_64-linux") (
+            with pkgs;
+            [
+              # these libs are used to build VMs, not necessary in the RPi or inside VMs
+              zellij
+              qemu
+              libguestfs
+            ]
+          ));
+      };
+    in
+    {
+      vm = pkgs.mkShell baseShell;
+      default = pkgs.mkShell defaultShell;
     };
 }
