@@ -104,6 +104,7 @@ in
   };
 
   networking = {
+    usePredictableInterfaceNames = false; # use eth0 instead of topology based name (like enp3s0), as I only have one network interface
     firewall.enable = true;
     hostName = config.setup.derivedHostName;
     wireless.enable = false; # enables/disables wireless support via wpa_supplicant.
@@ -287,8 +288,6 @@ in
     };
     logind.settings.Login.KillUserProcesses = true;
   };
-
-  virtualisation.docker.enable = true;
 
   # This value determines the NixOS release from which the default
   # settings for stateful data, like file locations and database versions
