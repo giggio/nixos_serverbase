@@ -9,8 +9,26 @@
   options = {
     setup.docker = with lib; {
       extra-daemons = mkOption {
-        type = types.int;
-        default = 0;
+        type = types.listOf (
+          types.submodule {
+            options = {
+              kata-runtime.enable = mkEnableOption "Use kata runtime in this daemon";
+              name = mkOption {
+                type = types.nullOr types.str;
+                default = null;
+                example = literalExpression "{ name = \"kata\"; }";
+              };
+              network.disableICC = mkEnableOption "Disable inter container communication in this daemon";
+              configuration = mkOption {
+                type = types.attrs;
+                default = { };
+                example = literalExpression "{ tls = true; }";
+                description = "Extra configuration for the daemon. See the dockerd documentation at https://docs.docker.com/reference/cli/dockerd/.";
+              };
+            };
+          }
+        );
+        default = [ ];
         description = "Extra docker daemons to run.";
       };
     };
@@ -20,31 +38,57 @@
     let
       cfg = config.virtualisation.docker;
       settingsFormat = pkgs.formats.json { };
-      extraDaemons = lib.lists.range 2 (config.setup.docker.extra-daemons + 1);
+      mkSuffix =
+        n: daemon:
+        if ((daemon ? name) && !builtins.isNull (daemon.name)) then
+          "${daemon.name}"
+        else
+          (toString (n + 2));
+      mkInterfaceName =
+        n: daemon:
+        let
+          name = "container-${mkSuffix n daemon}";
+          smallerName = "ctn-${mkSuffix n daemon}";
+          smallestName = "container-${toString (n + 2)}";
+        in
+        if (builtins.stringLength name) < 16 then
+          name
+        else if (builtins.stringLength smallerName) < 16 then
+          smallerName
+        else
+          smallestName;
     in
     {
       virtualisation.docker.enable = true;
       systemd.services = lib.foldr (a: b: a // b) { } (
-        lib.map (
-          i:
+        lib.lists.imap0 (
+          n: daemon:
           let
-            dockerService = "docker${toString i}";
-            containerdService = "containerd${toString i}";
+            suffix = "-${mkSuffix n daemon}";
+            dockerService = "docker${suffix}";
+            containerdService = "containerd${suffix}";
             containerdSocket = "${exec-root}/containerd/containerd.sock";
             data-root = "/var/lib/${dockerService}";
             exec-root = "/var/run/${dockerService}";
-            daemonSettingsFile = settingsFormat.generate "daemon${toString i}.json" (
+            daemonSettingsFile = settingsFormat.generate "daemon${suffix}.json" (
               cfg.daemon.settings
               // {
                 # see: https://docs.docker.com/reference/cli/dockerd/#run-multiple-daemons
                 inherit data-root exec-root;
-                bridge = "container${toString i}";
+                bridge = mkInterfaceName n daemon;
                 pidfile = "${exec-root}.pid";
                 containerd = containerdSocket;
                 iptables = false;
                 ip6tables = false;
                 ip-masq = false;
+                default-runtime = if daemon.kata-runtime.enable then "kata" else "runc";
+                runtimes = lib.attrsets.optionalAttrs daemon.kata-runtime.enable {
+                  kata = {
+                    runtimeType = "${pkgs.kata-runtime}/bin/containerd-shim-kata-v2";
+                  };
+                };
               }
+              // daemon.configuration
             );
           in
           {
@@ -63,7 +107,11 @@
               serviceConfig = {
                 Type = "notify";
                 ExecStart = [
-                  "${cfg.package}/bin/dockerd --config-file=${daemonSettingsFile} ${cfg.extraOptions}"
+                  # todo: kata-runtime network is broken with docker 28+: https://github.com/kata-containers/kata-containers/issues/9340
+                  # PR: https://github.com/kata-containers/kata-containers/pull/11749
+                  "${
+                    if daemon.kata-runtime.enable then pkgs.docker_25 else cfg.package
+                  }/bin/dockerd --config-file=${daemonSettingsFile} ${cfg.extraOptions}"
                 ];
                 ExecReload = [ "${pkgs.procps}/bin/kill -s HUP $MAINPID" ];
               };
@@ -74,7 +122,7 @@
             "${containerdService}" = {
               # this is an adaptation of the containerd service https://github.com/NixOS/nixpkgs/blob/1267bb4/nixos/modules/virtualisation/containerd.nix
               # The default docker daemon starts its own containerd, extra daemons need to create their own containerd service
-              description = "containerd - container runtime (${toString i})";
+              description = "containerd - container runtime (${mkSuffix n daemon})";
               wantedBy = [ "multi-user.target" ];
               after = [
                 "network.target"
@@ -138,20 +186,21 @@
             };
 
           }
-        ) extraDaemons
+        ) config.setup.docker.extra-daemons
       );
 
       systemd.sockets = lib.foldr (a: b: a // b) { } (
-        lib.map (
-          i:
+        lib.lists.imap0 (
+          n: daemon:
           let
-            dockerSocket = "docker${toString i}";
-            containerdSocket = "containerd${toString i}";
+            suffix = "-${mkSuffix n daemon}";
+            dockerSocket = "docker${suffix}";
+            containerdSocket = "containerd${suffix}";
             exec-root = "/var/run/${dockerSocket}";
           in
           {
             "${dockerSocket}" = {
-              description = "Docker Socket for the API (${toString i})";
+              description = "Docker Socket for the API (${suffix})";
               wantedBy = [ "sockets.target" ];
               socketConfig = {
                 ListenStream = [ "/run/${dockerSocket}.sock" ];
@@ -161,7 +210,7 @@
               };
             };
             "${containerdSocket}" = {
-              description = "Containerd Socket for the Docker (${toString i})";
+              description = "Containerd Socket for the Docker (${suffix})";
               wantedBy = [ "sockets.target" ];
               socketConfig = {
                 ListenStream = [ "${exec-root}/containerd/containerd.sock" ];
@@ -171,45 +220,58 @@
               };
             };
           }
-        ) extraDaemons
+        ) config.setup.docker.extra-daemons
       );
 
       # New interface and bridge are required, with NAT, so network works as expected
       systemd.network.networks = lib.foldr (a: b: a // b) { } (
-        lib.map (i: {
-          "40-container${toString i}" = {
+        lib.lists.imap0 (n: daemon: {
+          "40-${mkInterfaceName n daemon}" = {
             networkConfig.ConfigureWithoutCarrier = "yes";
             linkConfig.RequiredForOnline = "no";
           };
-        }) extraDaemons
+        }) config.setup.docker.extra-daemons
       );
 
       networking = {
         bridges = lib.foldr (a: b: a // b) { } (
-          lib.map (i: {
-            "container${toString i}" = {
+          lib.lists.imap0 (n: daemon: {
+            "${mkInterfaceName n daemon}" = {
               interfaces = [ ];
             };
-          }) extraDaemons
+          }) config.setup.docker.extra-daemons
         );
         interfaces = lib.foldr (a: b: a // b) { } (
-          lib.map (i: {
-            "container${toString i}" = {
+          lib.lists.imap0 (n: daemon: {
+            "${mkInterfaceName n daemon}" = {
               ipv4.addresses = [
                 {
-                  address = "172.${toString (37 + i)}.0.1";
+                  address = "172.${toString (39 + n)}.0.1";
                   prefixLength = 16;
                 }
               ];
               useDHCP = false;
             };
-          }) extraDaemons
+          }) config.setup.docker.extra-daemons
         );
         nat = {
           enable = true;
           externalInterface = "eth0";
-          internalInterfaces = lib.map (i: "container${toString i}") extraDaemons;
+          internalInterfaces = lib.lists.imap0 (
+            n: daemon: mkInterfaceName n daemon
+          ) config.setup.docker.extra-daemons;
         };
+        firewall.extraCommands = builtins.concatStringsSep "\n" (
+          lib.lists.imap0 (
+            n: daemon:
+            let
+              dockerHostNetInterfaceName = mkInterfaceName n daemon;
+            in
+            ''
+              iptables -A FORWARD -i ${dockerHostNetInterfaceName} -o ${dockerHostNetInterfaceName} -j DROP
+            ''
+          ) (builtins.filter (daemon: daemon.network.disableICC) config.setup.docker.extra-daemons)
+        );
       };
     };
 }
