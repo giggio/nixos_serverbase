@@ -26,6 +26,7 @@
 
   virtualisation = {
     useEFIBoot = config.setup.vm.useEFIBoot;
+    writableStoreUseTmpfs = false; # allows to save changes to the nix store and get it to working when rebooted
     qemu = {
       guestAgent.enable = true;
       virtioKeyboard = false; # connections go through serial port
