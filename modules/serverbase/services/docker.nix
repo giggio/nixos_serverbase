@@ -19,6 +19,16 @@
                   type = types.str;
                   readOnly = true;
                 };
+                socket = {
+                  user = mkOption {
+                    type = types.str;
+                    default = "root";
+                  };
+                  group = mkOption {
+                    type = types.str;
+                    default = "docker";
+                  };
+                };
                 network = {
                   disableICC = mkEnableOption "Disable inter container communication in this daemon";
                   interfaceName = mkOption {
@@ -220,8 +230,8 @@
               socketConfig = {
                 ListenStream = [ "/run/${dockerSocket}.sock" ];
                 SocketMode = "0660";
-                SocketUser = "root";
-                SocketGroup = "docker";
+                SocketUser = daemon.socket.user;
+                SocketGroup = daemon.socket.group;
               };
             };
             "${containerdSocket}" = {
