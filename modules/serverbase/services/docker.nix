@@ -55,7 +55,7 @@
             }
           )
         );
-        default = [ ];
+        default = { };
         description = "Extra docker daemons to run.";
       };
     };
