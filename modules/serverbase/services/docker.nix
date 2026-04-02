@@ -14,7 +14,19 @@
             { name, ... }:
             {
               options = {
-                kata-runtime.enable = mkEnableOption "Use kata runtime in this daemon";
+                kata-runtime = {
+                  enable = mkEnableOption "Use kata runtime in this daemon";
+                  memory = mkOption {
+                    type = types.int;
+                    default = 4096;
+                    description = "Memory available to the VM in MiB";
+                  };
+                  cpus = mkOption {
+                    type = types.int;
+                    default = -1;
+                    description = "Number of cpus available to the VM (<0 == number of hosts CPU)";
+                  };
+                };
                 name = mkOption {
                   type = types.str;
                   readOnly = true;
@@ -64,7 +76,8 @@
   config =
     let
       cfg = config.virtualisation.docker;
-      settingsFormat = pkgs.formats.json { };
+      settingsFormatToml = pkgs.formats.toml { };
+      settingsFormatJson = pkgs.formats.json { };
       daemonsWithIndex =
         lib.attrsets.attrValues
           (lib.foldlAttrs
@@ -85,6 +98,34 @@
     in
     {
       virtualisation.docker.enable = true;
+      environment.etc = lib.foldr (a: b: a // b) { } (
+        builtins.map (
+          daemon:
+          let
+            suffix = "-${daemon.name}";
+            defaultConfig = (
+              builtins.fromTOML (
+                builtins.unsafeDiscardStringContext (
+                  builtins.readFile "${pkgs.kata-runtime}/share/defaults/kata-containers/configuration.toml"
+                )
+              )
+            );
+          in
+          lib.attrsets.optionalAttrs daemon.kata-runtime.enable {
+            "docker-kata${suffix}/configuration.toml".source = (
+              settingsFormatToml.generate "configuration${suffix}.toml" (
+                defaultConfig
+                // {
+                  hypervisor.qemu = defaultConfig.hypervisor.qemu // {
+                    default_vcpus = daemon.kata-runtime.cpus;
+                    default_memory = daemon.kata-runtime.memory;
+                  };
+                }
+              )
+            );
+          }
+        ) daemonsWithIndex
+      );
       systemd.services = lib.foldr (a: b: a // b) { } (
         builtins.map (
           daemon:
@@ -95,7 +136,7 @@
             containerdSocket = "${exec-root}/containerd/containerd.sock";
             data-root = "/var/lib/${dockerService}";
             exec-root = "/var/run/${dockerService}";
-            daemonSettingsFile = settingsFormat.generate "daemon${suffix}.json" (
+            daemonSettingsFile = settingsFormatJson.generate "daemon${suffix}.json" (
               cfg.daemon.settings
               // {
                 # see: https://docs.docker.com/reference/cli/dockerd/#run-multiple-daemons
@@ -110,6 +151,9 @@
                 runtimes = lib.attrsets.optionalAttrs daemon.kata-runtime.enable {
                   kata = {
                     runtimeType = "${pkgs.kata-runtime}/bin/containerd-shim-kata-v2";
+                    options = {
+                      ConfigPath = "/etc/docker-kata${suffix}/configuration.toml";
+                    };
                   };
                 };
               }
@@ -165,8 +209,7 @@
               };
               serviceConfig =
                 let
-                  settingsFormat = pkgs.formats.toml { };
-                  configFile = settingsFormat.generate "containerd.toml" {
+                  configFile = settingsFormatToml.generate "containerd.toml" {
                     disabled_plugins = [ "io.containerd.grpc.v1.cri" ];
                     imports = [ ];
                     oom_score = 0;
