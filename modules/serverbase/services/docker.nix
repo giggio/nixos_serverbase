@@ -42,7 +42,15 @@
                   };
                 };
                 network = {
-                  disableICC = mkEnableOption "Disable inter container communication in this daemon";
+                  disableICC = {
+                    enable = mkEnableOption "Disable inter container communication in this daemon";
+                    portExceptions = mkOption {
+                      type = types.listOf types.int;
+                      description = "Ports to allow";
+                      default = [ ];
+                      example = literalExpression "[ 1234 5678 ]";
+                    };
+                  };
                   interfaceName = mkOption {
                     type = types.str;
                     readOnly = true;
@@ -335,11 +343,17 @@
                 let
                   dockerHostNetInterfaceName = daemon.network.interfaceName;
                 in
-                ''
+                (builtins.concatStringsSep "\n" (
+                  builtins.map (port: ''
+                    # allowing port ${toString port} for docker daemon ${daemon.name} containers
+                    iptables -I INPUT -i ${dockerHostNetInterfaceName} -p tcp --dport ${toString port} -j ACCEPT
+                  '') daemon.network.disableICC.portExceptions
+                ))
+                + ''
                   # Disabling ICC (inter container communication) for docker daemon ${daemon.name} containers
                   iptables -A FORWARD -i ${dockerHostNetInterfaceName} -o ${dockerHostNetInterfaceName} -j DROP
                 ''
-              ) (builtins.filter (daemon: daemon.network.disableICC) daemonsWithIndex)
+              ) (builtins.filter (daemon: daemon.network.disableICC.enable) daemonsWithIndex)
             );
           in
           {

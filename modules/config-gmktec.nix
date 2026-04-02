@@ -5,7 +5,7 @@
   setup.docker.extra-daemons = lib.mkDefault {
     kata = {
       kata-runtime.enable = true;
-      network.disableICC = true;
+      network.disableICC.enable = true;
     };
     other = { };
   };
