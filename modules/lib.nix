@@ -89,6 +89,7 @@
           specialArgs = {
             inherit inputs;
             helpers = import ./helpers { inherit lib; };
+            pkgs-unstable = inputs.nixpkgs-unstable.legacyPackages.${suffixedSystem};
           }
           // (if combination.machine ? specialArgs then combination.machine.specialArgs else { });
           system = suffixedSystem;
@@ -372,7 +373,7 @@
             with pkgs;
             [
               # these libs are used to build VMs, not necessary in the RPi or inside VMs
-              zellij
+              inputs.nixpkgs-unstable.legacyPackages.${system}.zellij
               qemu
               libguestfs
             ]

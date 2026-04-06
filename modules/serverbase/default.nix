@@ -1,6 +1,7 @@
 {
   config,
   pkgs,
+  pkgs-unstable,
   lib,
   inputs,
   ...
@@ -22,7 +23,7 @@ in
     useGlobalPkgs = true;
     useUserPackages = true;
     users.${config.setup.username} = ./home-manager/home.nix;
-    extraSpecialArgs = { inherit inputs; };
+    extraSpecialArgs = { inherit inputs pkgs-unstable; };
     sharedModules = [
       ./options.nix
       { setup.username = config.setup.username; }
@@ -202,6 +203,7 @@ in
     jq
     nil # Language server for Nix https://github.com/oxalica/nil
     ghostty.terminfo
+    pkgs-unstable.zellij
   ];
 
   environment = {

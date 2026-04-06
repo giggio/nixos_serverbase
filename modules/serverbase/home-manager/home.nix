@@ -1,6 +1,7 @@
 {
   config,
   pkgs,
+  pkgs-unstable,
   lib,
   ...
 }:
@@ -14,6 +15,11 @@ let
     FZF_CTRL_T_COMMAND = ''"$FZF_DEFAULT_COMMAND"'';
   };
   homeDirectory = "/home/${config.setup.username}";
+  homeManagerConfigPath = "${homeDirectory}/.config/nixos/nixos_serverbase/modules/serverbase/home-manager/";
+  mkHomeManagerRelativePath = path: "${homeManagerConfigPath}/${path}";
+  mkOutOfStoreSymlinkRelative =
+    path: config.lib.file.mkOutOfStoreSymlink (mkHomeManagerRelativePath path);
+
 in
 {
   imports = [ ];
@@ -21,19 +27,20 @@ in
     bash = {
       enable = true;
       initExtra = lib.mkMerge [
-        ''
+        /* bash */ ''
           # end of nix configuration
 
           # ending of .bashrc:
-
-          if [ "$TERM" == "xterm-kitty" ] || [ "$TERM" == "xterm-ghostty" ]; then
-            if ! [ -f $XDG_CONFIG_HOME/blesh/.skiprun ]; then
-              source "$(blesh-share)/ble.sh"
-            else
-              source "${pkgs.bash-preexec}/share/bash/bash-preexec.sh"
-            fi
-            eval "$(atuin init bash)"
-          fi
+          source "${
+            (pkgs.writeShellApplication {
+              name = "aliases-and-functions.bash";
+              bashOptions = [ ];
+              text = ''
+                # shellcheck disable=SC1090
+                source <(sed 's|zellij |${pkgs-unstable.zellij}/bin/zellij |g' "${mkOutOfStoreSymlinkRelative "bash/aliases-and-functions.bash"}")
+              '';
+            })
+          }/bin/aliases-and-functions.bash"
 
           # end of .bashrc
 
@@ -41,6 +48,23 @@ in
         ''
         (lib.mkOrder 10000 ''
           # very end of .bashrc
+
+          # This is coming after everything otherwise bash-preexec conflicts with the direnv hook
+          if [ "$TERM" == "xterm-kitty" ] || [ "$TERM" == "xterm-ghostty" ]; then
+            if ! [ -f $XDG_CONFIG_HOME/blesh/.skiprun ]; then
+              source "$(blesh-share)/ble.sh"
+            else
+              source "${pkgs.bash-preexec}/share/bash/bash-preexec.sh"
+              if [ -v ZELLIJ ]; then
+                precmd_functions+='my/ble-hook/rename-zellij-tab-after'
+                preexec_functions+='my/ble-hook/rename-zellij-tab-before'
+              fi
+            fi
+            if ! [ -f $XDG_CONFIG_HOME/atuin/.skiprun ]; then
+              eval "$(atuin init bash)"
+            fi
+          fi
+
           export PATH="$(printf '%s\n' "$HOME/.local/bin:$PATH" | tr ':' '\n' | awk '!seen[$0]++' | paste -sd: -)"
         '')
       ];
@@ -262,7 +286,7 @@ in
     configFile = {
       "starship.toml".source = ./config/starship.toml;
       "git".source = ./config/git;
-      "blesh/init.sh".text = ''
+      "blesh/init.sh".text = /* bash */ ''
         ble-import integration/zoxide
         ble-import integration/nix-completion.bash
         ble-import vim-airline
@@ -274,7 +298,12 @@ in
         # ctrl+c to discard line
         ble-bind -m vi_imap -f 'C-c' discard-line
         ble-bind -m vi_nmap -f 'C-c' discard-line
+        if [ -v ZELLIJ ]; then
+          blehook POSTEXEC+='my/ble-hook/rename-zellij-tab-after'
+          blehook PREEXEC+='my/ble-hook/rename-zellij-tab-before'
+        fi
       '';
+      "zellij".source = mkOutOfStoreSymlinkRelative "config/zellij";
     };
   };
 
