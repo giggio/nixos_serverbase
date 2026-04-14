@@ -203,6 +203,7 @@ in
     jq
     nil # Language server for Nix https://github.com/oxalica/nil
     ghostty.terminfo
+    lm_sensors
     pkgs-unstable.zellij
   ];
 
