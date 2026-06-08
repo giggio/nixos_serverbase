@@ -136,7 +136,7 @@ out/nix/system/pi4`.
 ### Developing with QEMU
 
 **Note**: set the `VMS_DIR` environment variable to the directory where you
-want to store the VMs. By default it will use `/mnt/data/vms`, set by the flake
+want to store the VMs. By default it will use `$HOME/vms`, set by the flake
 dev shell.
 
 All examples are with `gmktec1dev`, but you should replace with the name of

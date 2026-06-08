@@ -362,8 +362,8 @@
             sops
           ]
           ++ extraModules;
-        shellHook = ''
-          export VMS_DIR=/mnt/data/vms
+        shellHook = /* bash */ ''
+          export VMS_DIR=$HOME/vms
         '';
       };
       defaultShell = baseShell // {

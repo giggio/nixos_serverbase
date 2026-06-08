@@ -8,7 +8,7 @@ endif
 # Include help system
 include $(dir $(lastword $(MAKEFILE_LIST)))help.mk
 
-nix_deps = $(shell git ls-files --cached --modified --others --exclude-standard | sort | uniq | grep -v -e '^\..*' -e '.*\.md' -e Makefile | while IFS= read -r f; do [ -e "$$f" ] && echo "$$f"; done)
+nix_deps := $(shell git ls-files --cached --modified --others --exclude-standard | sort | uniq | grep -v -e '^\..*' -e '.*\.md' -e Makefile | while IFS= read -r f; do [ -e "$$f" ] && echo "$$f"; done)
 define vm_count
 $(shell find $(VMS_DIR) -type d -name '$(1)*' -printf '%f\n' | sed 's/$(1)//' | sort --general-numeric-sort | tail -n-1)
 endef
@@ -35,24 +35,24 @@ result_system_dir := $(result_nix_dir)/system
 
 .PHONY: default help $(out_dir) $(out_nix_dir) $(out_iso_dir) $(out_img_dir) $(out_system_dir)
 
-machines_details = $(shell nix run .#list_machines)
-machines = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^machines ' | sed 's/^machines //'); do printf '%s ' "$$x"; done)
-vm_files = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^machines ' | sed 's/^machines //'); do printf '$(out_vm_dir)/run-%s-vm ' "$$x"; done)
-vm_file_stamps = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^machines ' | sed 's/^machines //'); do printf '$(out_vm_dir)/.run-%s-vm.stamp ' "$$x"; done)
-img_files = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^imgs ' | sed 's/^imgs //'); do printf '$(out_img_dir)/%s.img.zst ' "$$x"; done)
-img_file_stamps = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^imgs ' | sed 's/^imgs //'); do printf '$(out_img_dir)/.%s.img.zst.stamp ' "$$x"; done)
-iso_files = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^isos ' | sed 's/^isos //'); do printf '$(out_iso_dir)/%s.iso ' "$$x"; done)
-iso_file_stamps = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^isos ' | sed 's/^isos //'); do printf '$(out_iso_dir)/.%s.iso.stamp ' "$$x"; done)
-machine_systems = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^machines ' | sed 's/^machines //'); do printf '$(out_system_dir)/%s ' "$$x"; done)
-machine_system_stamps = $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^machines ' | sed 's/^machines //'); do printf '$(out_system_dir)/.%s.stamp ' "$$x"; done)
-architecture = $(shell uname -m)
+machines_details := $(shell nix run .#list_machines)
+machines := $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^machines ' | sed 's/^machines //'); do printf '%s ' "$$x"; done)
+vm_files := $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^machines ' | sed 's/^machines //'); do printf '$(out_vm_dir)/run-%s-vm ' "$$x"; done)
+vm_file_stamps := $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^machines ' | sed 's/^machines //'); do printf '$(out_vm_dir)/.run-%s-vm.stamp ' "$$x"; done)
+img_files := $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^imgs ' | sed 's/^imgs //'); do printf '$(out_img_dir)/%s.img.zst ' "$$x"; done)
+img_file_stamps := $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^imgs ' | sed 's/^imgs //'); do printf '$(out_img_dir)/.%s.img.zst.stamp ' "$$x"; done)
+iso_files := $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^isos ' | sed 's/^isos //'); do printf '$(out_iso_dir)/%s.iso ' "$$x"; done)
+iso_file_stamps := $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^isos ' | sed 's/^isos //'); do printf '$(out_iso_dir)/.%s.iso.stamp ' "$$x"; done)
+machine_systems := $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^machines ' | sed 's/^machines //'); do printf '$(out_system_dir)/%s ' "$$x"; done)
+machine_system_stamps := $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^machines ' | sed 's/^machines //'); do printf '$(out_system_dir)/.%s.stamp ' "$$x"; done)
+architecture := $(shell uname -m)
 
-out_disk_dir = $(out_dir)/disks
-secrets_qcow2 = $(out_disk_dir)/secret-disk.qcow2
-empty_qcow2 = $(out_disk_dir)/empty.qcow2
+out_disk_dir := $(out_dir)/disks
+secrets_qcow2 := $(out_disk_dir)/secret-disk.qcow2
+empty_qcow2 := $(out_disk_dir)/empty.qcow2
 
-vms_dir = $(shell echo $$VMS_DIR)
-up_if = $(shell up_if=$$(comm -12 <(ip -br link show up | awk '{ print $$1 }' | sort) <(for f in /sys/class/net/*/device; do echo $$f | awk -F/ '{ print $$5 }'; done | sort) | head -n1); if [ -z "$$up_if" ]; then echo "no network interface is up"; exit 1; else echo "$$up_if"; fi)
+vms_dir := $(shell echo $$VMS_DIR)
+up_if := $(shell up_if=$$(comm -12 <(ip -br link show up | awk '{ print $$1 }' | sort) <(for f in /sys/class/net/*/device; do echo $$f | awk -F/ '{ print $$5 }'; done | sort) | head -n1); if [ -z "$$up_if" ]; then echo "no network interface is up"; exit 1; else echo "$$up_if"; fi)
 
 ### Global Commands
 ## Clean all artifacts
@@ -172,7 +172,7 @@ $(out_dir) $(out_dir)/: $(out_dir_stamp)
 ## Build all artifacts
 all: $(out_dir)
 
-start_new_from_iso_machines = $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'start_new_from_iso_%s ' "$$x"; done)
+start_new_from_iso_machines := $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'start_new_from_iso_%s ' "$$x"; done)
 start_new_from_iso_%: vm_name=$*$(shell expr $(call vm_count,$*) + 1)
 start_new_from_iso_%: vm_dir=$(VMS_DIR)/$(vm_name)
 start_new_from_iso_%: TMPDIR:=$(shell mktemp -d nix-vm.XXXXXXXXXX --tmpdir)
@@ -237,7 +237,7 @@ $(start_new_from_iso_machines): start_new_from_iso_%: $(out_iso_dir)/%.iso $(out
 	  -serial unix:/tmp/$(vm_name).sock,server,nowait \
 	  $$QEMU_OPTS
 
-create_machines = $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'create_%s ' "$$x"; done)
+create_machines := $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'create_%s ' "$$x"; done)
 create_%: vm_name=$*$(shell expr $(call vm_count,$*) + 1)
 create_%: vm_dir=$(VMS_DIR)/$(vm_name)
 ## Create a new VM
@@ -251,11 +251,11 @@ $(create_machines): create_%: $(out_vm_dir)/run-%-vm $(out_vm_dir)/.run-%-vm.sta
 	  -e '3i export NIX_EFI_VARS="$(vm_dir)/$(vm_name)-efi-vars.fd"' \
 	  "$(vm_dir)/run-$*-vm"
 
-create_and_start_machines = $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'create_and_start_%s ' "$$x"; done)
+create_and_start_machines := $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'create_and_start_%s ' "$$x"; done)
 ## Create, starts and connect to a new VM
 $(create_and_start_machines): create_and_start_%: create_% start_%
 
-start_machines = $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'start_%s ' "$$x"; done)
+start_machines := $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'start_%s ' "$$x"; done)
 start_%: vm_name=$*$(call vm_count,$*)
 start_%: vm_dir=$(VMS_DIR)/$(vm_name)
 ## Start and connects the last existing VM
@@ -268,7 +268,7 @@ $(start_machines): start_%:
 	zellij action toggle-floating-panes
 	$(MAKE) connect_$*
 
-connect_machines = $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'connect_%s ' "$$x"; done)
+connect_machines := $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'connect_%s ' "$$x"; done)
 connect_%: vm_name=$*$(call vm_count,$*)
 connect_%: socket=/tmp/$(vm_name).sock
 ## Connect to a VM
@@ -280,7 +280,7 @@ $(connect_machines): connect_%:
 	echo -e "\e[1;32m*** Exit with Ctrl + ] ***\e[0m"
 	socat STDIO,raw,echo=0,escape=0x1d UNIX-CONNECT:$(socket)
 
-delete_old_vms_machines = $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'delete_old_vms_%s ' "$$x"; done)
+delete_old_vms_machines := $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'delete_old_vms_%s ' "$$x"; done)
 delete_old_vms_%: vm_numbers=$(shell find $(VMS_DIR) -type d -name '$(*)*' -printf '%f\n' | sed 's/$*//' | sort --general-numeric-sort)
 ## Delete old vms. It reads VM directories in the VMs dir and deletes all but the last one.
 $(delete_old_vms_machines): delete_old_vms_%:
@@ -310,7 +310,7 @@ list_machines:
 list_vms:
 	@machines="$(machines)"; \
 	machines="$${machines% }"; \
-	echo -e "VMs created: \n""$$(find /mnt/data/vms -maxdepth 1 -type d -regex ".*/\($${machines// /\\|}\)[^/]*" -printf '%f\n' | sort --version-sort)"
+	echo -e "VMs created: \n""$$(find $(VMS_DIR) -maxdepth 1 -type d -regex ".*/\($${machines// /\\|}\)[^/]*" -printf '%f\n' | sort --version-sort)"
 
 ## List outputs
 list_outputs:
