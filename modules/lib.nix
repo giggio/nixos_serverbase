@@ -8,7 +8,7 @@
     machines:
     let
       nixosConfigurations =
-        lib.lists.fold (newConfig: configAccumulator: configAccumulator // newConfig) { }
+        lib.lists.foldr (newConfig: configAccumulator: configAccumulator // newConfig) { }
           (
             (map (machine: ({
               "${machine.name}" = nixosConfigurations."${machine.name}_${machine.defaultArch}";
@@ -142,7 +142,7 @@
         machine: machine.hardwareModule == serverbaseModules.hardware.pi4
       ) machines;
       installerPackages =
-        lib.lists.fold (packageAccumulator: newPackage: packageAccumulator // newPackage) { } (
+        lib.lists.foldr (packageAccumulator: newPackage: packageAccumulator // newPackage) { } (
           map (
             combination:
             lib.attrsets.optionalAttrs combination.isVM {
@@ -170,7 +170,7 @@
             }
           ) combinations
         )
-        // lib.fold (machine_accumulator: new_machine: machine_accumulator // new_machine) { } (
+        // lib.foldr (machine_accumulator: new_machine: machine_accumulator // new_machine) { } (
           map (machine: {
             "${machine.name}_img" = serverbaseModules.lib.mkPi4Image {
               pkgs = import inputs.nixpkgs { system = "${machine.defaultArch}-linux"; };
@@ -186,7 +186,7 @@
         );
     in
     installerPackages
-    // lib.fold (machine_accumulator: new_machine: machine_accumulator // new_machine) { } (
+    // lib.foldr (machine_accumulator: new_machine: machine_accumulator // new_machine) { } (
       map (machine: {
         "${machine.name}_iso" =
           installerPackages."${
@@ -373,7 +373,7 @@
             with pkgs;
             [
               # these libs are used to build VMs, not necessary in the RPi or inside VMs
-              inputs.nixpkgs-unstable.legacyPackages.${system}.zellij
+              zellij
               qemu
               libguestfs-with-appliance
               guestfs-tools

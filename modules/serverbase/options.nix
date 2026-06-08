@@ -26,6 +26,11 @@ with lib;
       readOnly = true;
       description = "Computed from setup.environment.";
     };
+    isVM = mkOption {
+      type = types.bool;
+      readOnly = true;
+      description = "Computed from setup.vm.enable";
+    };
     username = mkOption {
       type = types.str;
       example = literalExpression "{ username = \"giggio\"; }";
@@ -57,6 +62,7 @@ with lib;
     isDev = (config.setup.environment == "dev") || (config.setup.environment == "test");
     isProd = config.setup.environment == "prod";
     isTest = config.setup.environment == "test";
+    isVM = config.setup.vm.enable;
     derivedHostName = "${config.setup.hostName}${if config.setup.isDev then "dev" else ""}";
   };
 }

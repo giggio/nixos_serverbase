@@ -1,7 +1,7 @@
 {
   config,
   pkgs,
-  pkgs-unstable,
+  # pkgs-unstable,
   lib,
   ...
 }:
@@ -37,7 +37,7 @@ in
               bashOptions = [ ];
               text = ''
                 # shellcheck disable=SC1090
-                source <(sed 's|zellij |${pkgs-unstable.zellij}/bin/zellij |g' "${mkOutOfStoreSymlinkRelative "bash/aliases-and-functions.bash"}")
+                source <(sed 's|zellij |${pkgs.zellij}/bin/zellij |g' "${mkOutOfStoreSymlinkRelative "bash/aliases-and-functions.bash"}")
               '';
             })
           }/bin/aliases-and-functions.bash"

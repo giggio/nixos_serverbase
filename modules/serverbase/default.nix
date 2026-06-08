@@ -51,6 +51,7 @@ in
 
   boot = {
     initrd = {
+      systemd.enable = false; # todo: enable systemd boot before 26.11, as it is now on by default (synce 26.05), but it does not allow postMountCommands (below)
       kernelModules = [
         # allows mounting of USB storage so that secrets can be stored there
         "usb_storage"
@@ -91,7 +92,7 @@ in
         if config.setup.isTest then
           ""
         else
-          ''
+          /* bash */ ''
             # run the script we placed into the initrd
             if [ -x /bin/install_sops_key/bin/install-sops-key.sh ]; then
               ${pkgs.bashInteractive}/bin/bash /bin/install_sops_key/bin/install-sops-key.sh || true
@@ -204,7 +205,7 @@ in
     nil # Language server for Nix https://github.com/oxalica/nil
     ghostty.terminfo
     lm_sensors
-    pkgs-unstable.zellij
+    zellij
   ];
 
   environment = {

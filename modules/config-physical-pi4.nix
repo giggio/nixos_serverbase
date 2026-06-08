@@ -1,5 +1,4 @@
 {
-  pkgs,
   lib,
   modulesPath,
   inputs,
@@ -13,7 +12,7 @@
   ];
 
   boot = {
-    kernelPackages = pkgs.pkgs.linuxPackages_rpi4; # vendored kernel
+    # kernelPackages is being set by nixos-hardware
     supportedFilesystems.zfs = lib.mkForce false; # todo: remove this when zfs is supported
     kernelModules = [ "bcm2835-v4l2" ]; # originally missing, as we are not using the vendored kernel
     kernelParams = lib.mkForce [

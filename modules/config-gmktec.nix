@@ -1,7 +1,7 @@
 { pkgs, lib, ... }:
 
 {
-  boot.kernelPackages = pkgs.linuxKernel.packages.linux_hardened; # using hardened kernel, which is not the latest kernel (at the moment)
+  boot.kernelPackages = pkgs.linuxPackages_latest;
   setup.docker.extra-daemons = lib.mkDefault {
     kata = {
       kata-runtime.enable = true;
