@@ -197,7 +197,8 @@ $(start_new_from_iso_machines): start_new_from_iso_%: $(out_iso_dir)/%.iso $(out
 	  -drive if=pflash,format=raw,unit=0,file="$(vm_dir)/edk2-x86_64-code.fd",readonly=on \\\n\
 	  -drive if=pflash,format=raw,unit=1,file="$(vm_dir)/ovmf_vars_$(vm_name).fd" \\\n\
 	  -device virtio-rng-pci \\\n\
-	  -nic user,ipv6=off,model=virtio,mac=52:54:00:CA:FE:EE,hostfwd=tcp::2222-:22,"$QEMU_NET_OPTS" \\\n\
+    -netdev user,id=mynet0,ipv6=off,hostfwd=tcp::8888-:80,hostfwd=tcp::4443-:443,hostfwd=tcp::2222-:22,"\$$QEMU_NET_OPTS" \\\n\
+    -device virtio-net-pci,netdev=mynet0,mac=52:54:00:CA:FE:EE \\\n\
 	  -virtfs local,path=$(TMPDIR)/xchg,security_model=none,mount_tag=shared \\\n\
 	  -virtfs local,path=$(TMPDIR)/xchg,security_model=none,mount_tag=xchg \\\n\
 	  -blockdev driver=file,filename="$(disk_path)",node-name=file1 \\\n\
@@ -224,7 +225,8 @@ $(start_new_from_iso_machines): start_new_from_iso_%: $(out_iso_dir)/%.iso $(out
 	  -drive if=pflash,format=raw,unit=0,file="$(vm_dir)/edk2-x86_64-code.fd",readonly=on \
 	  -drive if=pflash,format=raw,unit=1,file="$(vm_dir)/ovmf_vars_$(vm_name).fd" \
 	  -device virtio-rng-pci \
-	  -nic user,ipv6=off,model=virtio,mac=52:54:00:CA:FE:EE,hostfwd=tcp::2222-:22,"$QEMU_NET_OPTS" \
+    -netdev user,id=mynet0,ipv6=off,hostfwd=tcp::8888-:80,hostfwd=tcp::4443-:443,hostfwd=tcp::2222-:22,"$QEMU_NET_OPTS" \
+    -device virtio-net-pci,netdev=mynet0,mac=52:54:00:CA:FE:EE \
 	  -virtfs local,path=$(TMPDIR)/xchg,security_model=none,mount_tag=shared \
 	  -virtfs local,path=$(TMPDIR)/xchg,security_model=none,mount_tag=xchg \
 	  -blockdev driver=file,filename="$(disk_path)",node-name=file1 \
