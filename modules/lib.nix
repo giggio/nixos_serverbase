@@ -375,7 +375,8 @@
               # these libs are used to build VMs, not necessary in the RPi or inside VMs
               inputs.nixpkgs-unstable.legacyPackages.${system}.zellij
               qemu
-              libguestfs
+              libguestfs-with-appliance
+              guestfs-tools
             ]
           ));
       };

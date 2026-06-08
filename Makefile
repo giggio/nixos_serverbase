@@ -126,7 +126,7 @@ $(secrets_qcow2):
 	mkdir -p "$$(dirname "$@")"
 	qemu-img create -f qcow2 $@ 4M
 	virt-format -a $@ --filesystem=ext4
-	echo -e $(subst ;,\n,${GUESTFISH_CMD}) | sudo guestfish -a $@
+	echo -e $(subst ;,\n,${GUESTFISH_CMD}) | guestfish -a $@
 
 $(empty_qcow2):
 	@echo "Creating empty qcow2 $@..."
