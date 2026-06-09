@@ -327,6 +327,13 @@ flake_show:
 	nix flake show
 
 ### Others
+
+cache_machines := $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'cache_%s ' "$$x"; done)
+## Push to cache
+$(cache_machines): cache_%:
+	@echo -e "Pushing cache for machine \e[32m$*\e[0m"
+	nix build .#nixosConfigurations.$*.config.system.build.toplevel --no-link --print-out-paths | attic push servers --stdin
+
 ## Default target (do not use)
 default:
 	@echo "no default target"
