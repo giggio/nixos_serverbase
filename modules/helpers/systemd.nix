@@ -33,6 +33,7 @@
         host,
         port,
         serviceName,
+        domain,
         isDev ? false,
       }:
       let
@@ -45,10 +46,10 @@
           [X-Traefik]
           Label=${traefikServiceRouterBase}.service=${host}
           Label=${traefikServiceRouterBase}.entrypoints=websecure
-          Label=${traefikServiceRouterBase}.rule=Host(`${host}.giggio.dev`)
+          Label=${traefikServiceRouterBase}.rule=Host(`${host}.${domain}`)
           Label=${traefikServiceRouterBase}.tls=true
           Label=${traefikServiceRouterBase}.tls.certresolver=le
-          Label=${traefikServiceRouterBase}.tls.domains[0].main=*.giggio.dev
+          Label=${traefikServiceRouterBase}.tls.domains[0].main=*.${domain}
           Label=traefik.http.services.${host}.loadbalancer.servers[0].url=http://127.0.0.1:${toString port}
           EOF
         '')
@@ -57,7 +58,7 @@
           [X-Traefik]
           Label=${traefikServiceRouterBase}_insecure.service=${host}
           Label=${traefikServiceRouterBase}_insecure.entrypoints=web
-          Label=${traefikServiceRouterBase}_insecure.rule=Host(`${host}.giggio.dev`)
+          Label=${traefikServiceRouterBase}_insecure.rule=Host(`${host}.${domain}`)
           EOF
         '')
       );
