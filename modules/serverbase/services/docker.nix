@@ -184,11 +184,7 @@
               serviceConfig = {
                 Type = "notify";
                 ExecStart = [
-                  # todo: kata-runtime network is broken with docker 28+: https://github.com/kata-containers/kata-containers/issues/9340
-                  # PR: https://github.com/kata-containers/kata-containers/pull/11749
-                  "${
-                    if daemon.kata-runtime.enable then pkgs.docker_25 else cfg.package
-                  }/bin/dockerd --config-file=${daemonSettingsFile} ${cfg.extraOptions}"
+                  "${cfg.package}/bin/dockerd --config-file=${daemonSettingsFile} ${cfg.extraOptions}"
                 ];
                 ExecReload = [ "${pkgs.procps}/bin/kill -s HUP $MAINPID" ];
               };
