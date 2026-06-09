@@ -30,11 +30,16 @@
     qemu = {
       guestAgent.enable = true;
       virtioKeyboard = false; # connections go through serial port
-      networkingOptions = lib.mkForce [
-        # remove other nic options with lib.mkForce
-        ''-netdev user,id=mynet0,ipv6=off,hostfwd=tcp::8888-:80,hostfwd=tcp::4443-:443,hostfwd=tcp::2222-:22,"$QEMU_NET_OPTS"''
-        "-device virtio-net-pci,netdev=mynet0,mac=52:54:00:CA:FE:EE"
-      ];
+      networkingOptions =
+        let
+          httpPort = if config.setup.isDev then 8888 else 80;
+          httpsPort = if config.setup.isDev then 4443 else 443;
+        in
+        lib.mkForce [
+          # remove other nic options with lib.mkForce
+          ''-netdev user,id=mynet0,ipv6=off,hostfwd=tcp::8888-:${toString httpPort},hostfwd=tcp::4443-:${toString httpsPort},hostfwd=tcp::2222-:22,"$QEMU_NET_OPTS"''
+          "-device virtio-net-pci,netdev=mynet0,mac=52:54:00:CA:FE:EE"
+        ];
       options = [
         "-enable-kvm"
       ];
