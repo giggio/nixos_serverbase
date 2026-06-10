@@ -189,7 +189,8 @@ $(start_new_from_iso_machines): start_new_from_iso_%: $(out_iso_dir)/%.iso $(out
 	dd if=/dev/zero of=$(vm_dir)/ovmf_vars_$(vm_name).fd bs=64K count=1
 	cp "$$(realpath $$(dirname $$(realpath $$(which qemu-system-x86_64)))/../share/qemu)/edk2-x86_64-code.fd" $(vm_dir)/edk2-x86_64-code.fd
 	@echo -e "Stop the VM when the installation is done and then run with \e[32mmake start_$*\e[0m."
-	@echo "#!/bin/bash\nqemu-system-x86_64 -machine type=q35 -machine accel=kvm -cpu max \\\n\
+	@echo "#!/usr/bin/env bash\n\
+	qemu-system-x86_64 -machine type=q35 -machine accel=kvm -cpu max \\\n\
 	  -name $* \\\n\
 	  -m 8192 \\\n\
 	  -enable-kvm \\\n\
@@ -197,8 +198,8 @@ $(start_new_from_iso_machines): start_new_from_iso_%: $(out_iso_dir)/%.iso $(out
 	  -drive if=pflash,format=raw,unit=0,file="$(vm_dir)/edk2-x86_64-code.fd",readonly=on \\\n\
 	  -drive if=pflash,format=raw,unit=1,file="$(vm_dir)/ovmf_vars_$(vm_name).fd" \\\n\
 	  -device virtio-rng-pci \\\n\
-    -netdev user,id=mynet0,ipv6=off,hostfwd=tcp::8888-:80,hostfwd=tcp::4443-:443,hostfwd=tcp::2222-:22,"\$$QEMU_NET_OPTS" \\\n\
-    -device virtio-net-pci,netdev=mynet0,mac=52:54:00:CA:FE:EE \\\n\
+	  -netdev user,id=mynet0,ipv6=off,hostfwd=tcp::8888-:80,hostfwd=tcp::4443-:443,hostfwd=tcp::2222-:22,"\$$QEMU_NET_OPTS" \\\n\
+	  -device virtio-net-pci,netdev=mynet0,mac=52:54:00:CA:FE:EE \\\n\
 	  -virtfs local,path=$(TMPDIR)/xchg,security_model=none,mount_tag=shared \\\n\
 	  -virtfs local,path=$(TMPDIR)/xchg,security_model=none,mount_tag=xchg \\\n\
 	  -blockdev driver=file,filename="$(disk_path)",node-name=file1 \\\n\
@@ -225,8 +226,8 @@ $(start_new_from_iso_machines): start_new_from_iso_%: $(out_iso_dir)/%.iso $(out
 	  -drive if=pflash,format=raw,unit=0,file="$(vm_dir)/edk2-x86_64-code.fd",readonly=on \
 	  -drive if=pflash,format=raw,unit=1,file="$(vm_dir)/ovmf_vars_$(vm_name).fd" \
 	  -device virtio-rng-pci \
-    -netdev user,id=mynet0,ipv6=off,hostfwd=tcp::8888-:80,hostfwd=tcp::4443-:443,hostfwd=tcp::2222-:22,"$QEMU_NET_OPTS" \
-    -device virtio-net-pci,netdev=mynet0,mac=52:54:00:CA:FE:EE \
+	  -netdev user,id=mynet0,ipv6=off,hostfwd=tcp::8888-:80,hostfwd=tcp::4443-:443,hostfwd=tcp::2222-:22,"$$QEMU_NET_OPTS" \
+	  -device virtio-net-pci,netdev=mynet0,mac=52:54:00:CA:FE:EE \
 	  -virtfs local,path=$(TMPDIR)/xchg,security_model=none,mount_tag=shared \
 	  -virtfs local,path=$(TMPDIR)/xchg,security_model=none,mount_tag=xchg \
 	  -blockdev driver=file,filename="$(disk_path)",node-name=file1 \
