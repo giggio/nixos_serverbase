@@ -237,10 +237,10 @@ $(create_and_start_from_iso_machines): create_and_start_from_iso_%: $(out_iso_di
 	    -virtfs local,path=$(TMPDIR)/xchg,security_model=none,mount_tag=xchg \
 	    -blockdev driver=file,filename="$(disk_path)",node-name=file1 \
 	    -blockdev driver=qcow2,file=file1,node-name=hd0 \
-	    -blockdev driver=file,filename=$(vm_dir)/secret-disk.qcow2,node-name=secretsfile \
-	    -blockdev driver=qcow2,file=secretsfile,node-name=hd_secrets \
 	    -device nvme,id=nvme0,serial=1234 \
 	    -device nvme-ns,drive=hd0,nsid=1,bus=nvme0 \
+	    -blockdev driver=file,filename=$(vm_dir)/secret-disk.qcow2,node-name=secretsfile \
+	    -blockdev driver=qcow2,file=secretsfile,node-name=hd_secrets \
 	    -device nvme,id=nvme1,serial=4567 \
 	    -device nvme-ns,drive=hd_secrets,nsid=1,bus=nvme1 \
 	    -serial unix:/tmp/$(vm_name).sock,server,nowait \

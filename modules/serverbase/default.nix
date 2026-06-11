@@ -51,7 +51,6 @@ in
 
   boot = {
     initrd = {
-      systemd.enable = false; # todo: enable systemd boot before 26.11, as it is now on by default (synce 26.05), but it does not allow postMountCommands (below)
       kernelModules = [
         # allows mounting of USB storage so that secrets can be stored there
         "usb_storage"
@@ -69,35 +68,52 @@ in
         nls_iso8859_1 = true;
         iso9660 = true;
       };
-      extraFiles."/bin/install_sops_key".source =
-        (pkgs.writeShellApplication {
-          name = "install-sops-key.sh";
-          runtimeInputs = with pkgs; [
-            coreutils
-            bashInteractive
-            util-linux
-            procps
-            iproute2
-            ncurses
-            python3
-          ];
-          text = (builtins.readFile ./scripts/install-sops-key.sh);
-        }).overrideAttrs
-          (oldAttrs: {
-            buildCommand = oldAttrs.buildCommand + ''
-              ln -s "${./scripts/initrd-nice-bash.sh}" "$out/bin/initrd-nice-bash.sh"
-            '';
-          });
-      postMountCommands =
-        if config.setup.isTest then
-          ""
-        else
-          /* bash */ ''
-            # run the script we placed into the initrd
-            if [ -x /bin/install_sops_key/bin/install-sops-key.sh ]; then
-              ${pkgs.bashInteractive}/bin/bash /bin/install_sops_key/bin/install-sops-key.sh || true
+
+      systemd = {
+        initrdBin = with pkgs; [
+          coreutils
+          bashInteractive
+          util-linux
+          procps
+          iproute2
+          ncurses
+          python3
+          which
+          (pkgs.writeShellApplication {
+            name = "install_sops_key";
+            text = (builtins.readFile ./scripts/install-sops-key.sh);
+          })
+          (pkgs.writeShellApplication {
+            name = "initrd_nice_bash";
+            text = (builtins.readFile ./scripts/initrd-nice-bash.sh);
+          })
+        ];
+        services.install_sops_key = {
+          enable = !config.setup.isTest;
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+            # route standard input/output directly to the boot console
+            StandardInput = "tty";
+            StandardOutput = "tty";
+            StandardError = "tty";
+            TTYPath = "/dev/console";
+            TTYReset = true;
+            TTYVHangup = true;
+          };
+          unitConfig.DefaultDependencies = "no";
+          after = [ "initrd-fs.target" ];
+          before = [ "initrd.target" ];
+          wantedBy = [ "initrd.target" ];
+
+          script = ''
+            logger -t install_sops_key "Starting to search for sops key"
+            if ! ${pkgs.bashInteractive}/bin/bash /bin/install_sops_key; then
+              logger -t install_sops_key "Failed to run install_sops_key"
             fi
           '';
+        };
+      };
     };
     loader = {
       systemd-boot.enable = lib.mkDefault false; # using grub and not UEFI

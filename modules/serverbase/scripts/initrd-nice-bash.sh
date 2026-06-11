@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 set -eu
 
 # ensure basic tools available on PATH (these come from boot.initrd.packages)
@@ -102,6 +103,7 @@ set -m
 # Reset signals that might have been ignored by the init system
 trap - INT QUIT TSTP
 
+# shellcheck disable=SC2094
 if ! exec setsid -c "$BASH" -i <"$TTY" >"$TTY" 2>&1; then
   echo "Failed to use 'setsid', falling back to calling bash directly"
   # handoff to an interactive bash; -i forces interactive so readline is enabled

@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
 set -eu
 
-DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
 copy_if_has_key() {
   # $1 is mounted path
   if [ -f "$1/nixos-secrets/$key_file_name" ]; then
@@ -37,13 +35,13 @@ try_mount_and_check() {
 
   if [ -n "$mountpoint" ]; then
     if copy_if_has_key "$mountpoint"; then
-      echo "sops key found on $dev (already mounted at $mountpoint) and copied"
+      echo -e "\e[32mSops key found on $dev (already mounted at $mountpoint) and copied\e[0m"
       return 0
     fi
   else
     if mount -o ro "$dev" "$tmpmnt" 2>/dev/null; then
       if copy_if_has_key "$tmpmnt"; then
-        echo "sops key found on $dev and copied"
+        echo -e "\e[32mSops key found on $dev and copied\e[0m"
         umount "$tmpmnt" || true
         return 0
       fi
@@ -69,11 +67,11 @@ search_for_key_in_drives() {
 }
 
 key_file_name=server.agekey
-install_dir="/mnt-root/etc/sops/age" # target root (stage-1 exposes /mnt-root)
+install_dir="/sysroot/etc/sops/age" # target root (stage-1 exposes /mnt-root)
 key_file_destination="$install_dir/$key_file_name"
 echo "Starting search for sops key at $key_file_name or to install it there"
 if [ -f "$key_file_destination" ]; then
-  echo "sops key already installed to $key_file_destination"
+  echo -e "\e[32mSops key already installed to $key_file_destination\e[0m"
   exit 0
 fi
 mkdir -p "$install_dir"
@@ -96,33 +94,33 @@ for i in $(seq 1 6); do
 done
 
 if [ "$found" -eq 1 ]; then
-  echo "sops key installed to $key_file_destination"
+  echo -e "\e[32mSops key installed to $key_file_destination\e[0m"
   exit 0
 else
-  echo "sops key not found on removable media."
+  echo -e "\e[31mSops key not found on removable media.\e[0m"
 fi
 
 # interactive fallback loop (useful for manual installs)
 while true; do
-  echo "$key_file_name not found on removable media."
+  echo -e "\e[31m$key_file_name not found on removable media.\e[0m"
   echo "Insert USB with 'nixos-secrets/$key_file_name' (or '$key_file_name') then press ENTER to retry."
   echo "Type:"
-  echo "* 'shell' to get an interactive shell to copy the file manually."
-  echo "* 'sh' to get a bare shell to copy the file manually."
-  echo "* 'q' to stop trying to find the keys and continue to boot."
+  echo -e "* '\e[32mshell\e[0m' to get an interactive shell to copy the file manually."
+  echo -e "* '\e[32msh\e[0m' to get a bare shell to copy the file manually."
+  echo -e "* '\e[32mq\e[0m' to stop trying to find the keys and continue to boot."
   printf "> "
   if ! read -r line; then
     echo "Select an option:"
     continue
   fi
   if [ "$line" = "q" ]; then
-    echo "sops key not found on removable media, exiting..."
+    echo "Sops key not found on removable media, exiting..."
     break
   elif [ "$line" = "shell" ]; then
-    "$DIR"/initrd-nice-bash.sh || true
+    $BASH initrd_nice_bash || echo -e '\e[31mError starting nice bash\e[0m'
     # after shell returns, re-run the scanning logic
   elif [ "$line" = "sh" ]; then
-    "$BASH" -i || true
+    "$BASH" -i || echo -e '\e[31mError starting simple bash\e[0m'
     # after shell returns, re-run the scanning logic
   fi
 
@@ -131,7 +129,7 @@ while true; do
   search_for_key_in_drives || true
 
   if [ "$found" -eq 1 ]; then
-    echo "sops key installed."
+    echo "Sops key installed."
     break
   fi
   echo -e "Still not found. Insert media then press ENTER, or type shell or exit.\n"
