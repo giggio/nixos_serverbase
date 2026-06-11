@@ -21,6 +21,14 @@ let
             ./config-gmktec.nix
           ];
         };
+        virtualboot = {
+          imports = [
+            ./config-physical.nix
+            ./config-physical-gmktec.nix
+            ./config-gmktec.nix
+            ./config-virtual-boot.nix
+          ];
+        };
       };
       pi4 = {
         physical = {

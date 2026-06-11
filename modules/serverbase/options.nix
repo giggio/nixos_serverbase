@@ -31,6 +31,11 @@ with lib;
       readOnly = true;
       description = "Computed from setup.vm.enable";
     };
+    isVMBoot = mkOption {
+      type = types.bool;
+      readOnly = true;
+      description = "Computed from setup.vm.boot.enable";
+    };
     username = mkOption {
       type = types.str;
       example = literalExpression "{ username = \"giggio\"; }";
@@ -45,6 +50,7 @@ with lib;
     };
     vm = {
       enable = mkEnableOption "VM enabled";
+      boot.enable = mkEnableOption "VM boot enabled";
       memorySize = mkOption {
         type = types.int;
         default = 4;
@@ -63,6 +69,10 @@ with lib;
     isProd = config.setup.environment == "prod";
     isTest = config.setup.environment == "test";
     isVM = config.setup.vm.enable;
-    derivedHostName = "${config.setup.hostName}${if config.setup.isDev then "dev" else ""}";
+    isVMBoot = config.setup.vm.boot.enable;
+    derivedHostName = "${config.setup.hostName}${if config.setup.isDev then "dev" else ""}${
+      if config.setup.isVM then "vm${if config.setup.isVMBoot then "boot" else ""}" else ""
+    }";
+
   };
 }

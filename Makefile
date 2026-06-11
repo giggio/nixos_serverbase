@@ -8,7 +8,7 @@ endif
 # Include help system
 include $(dir $(lastword $(MAKEFILE_LIST)))help.mk
 
-nix_deps := $(shell git ls-files --cached --modified --others --exclude-standard | sort | uniq | grep -v -e '^\..*' -e '.*\.md' -e Makefile | while IFS= read -r f; do [ -e "$$f" ] && echo "$$f"; done)
+nix_deps := $(shell { git ls-files --cached --modified --others --exclude-standard --deduplicate & git submodule foreach --recursive -q 'git ls-files --cached --modified --others --exclude-standard --deduplicate | sed "s,^,$$displaypath/,"'; } | sort | uniq | grep -v -e '^\..*' -e '.*\.md' -e Makefile -e '.*\.mk' | while IFS= read -r f; do [ -e "$$f" ] && echo "$$f"; done)
 define vm_count
 $(shell find $(VMS_DIR) -type d -name '$(1)*' -printf '%f\n' | sed 's/$(1)//' | sort --general-numeric-sort | tail -n-1)
 endef
@@ -172,29 +172,33 @@ $(out_dir) $(out_dir)/: $(out_dir_stamp)
 ## Build all artifacts
 all: $(out_dir)
 
-start_new_from_iso_machines := $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'start_new_from_iso_%s ' "$$x"; done)
-start_new_from_iso_%: vm_name=$*$(shell expr $(call vm_count,$*) + 1)
-start_new_from_iso_%: vm_dir=$(VMS_DIR)/$(vm_name)
-start_new_from_iso_%: TMPDIR:=$(shell mktemp -d nix-vm.XXXXXXXXXX --tmpdir)
-start_new_from_iso_%: disk_path=$(vm_dir)/$(vm_name).qcow2
-start_new_from_iso_%:
+create_and_start_from_iso_machines := $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'create_and_start_from_iso_%s ' "$$x"; done)
+create_and_start_from_iso_%: vm_name=$*$(shell expr $(call vm_count,$*) + 1)
+create_and_start_from_iso_%: vm_dir=$(VMS_DIR)/$(vm_name)
+create_and_start_from_iso_%: TMPDIR:=$(shell mktemp -d nix-vm.XXXXXXXXXX --tmpdir)
+create_and_start_from_iso_%: disk_path=$(vm_dir)/$(vm_name).qcow2
+create_and_start_from_iso_%:
 ### VM Management
 ## Create and starts a new VM that does not yet have an installation and will be installed via ISO (slower)
-$(start_new_from_iso_machines): start_new_from_iso_%: $(out_iso_dir)/%.iso $(out_iso_dir)/.%.iso.stamp $(secrets_qcow2) $(empty_qcow2)
+$(create_and_start_from_iso_machines): create_and_start_from_iso_%: $(out_iso_dir)/%.iso $(out_iso_dir)/.%.iso.stamp $(secrets_qcow2) $(empty_qcow2)
 	@echo -e "VM is \e[32m$(vm_name)\e[0m (at \e[32m$(vm_dir)\e[0m)"
 	mkdir -p "$(vm_dir)"
 	cp $(secrets_qcow2) "$(vm_dir)/secret-disk.qcow2"
 	cp $(empty_qcow2) $(disk_path)
 	mkdir -p "$(TMPDIR)/xchg"
-	dd if=/dev/zero of=$(vm_dir)/ovmf_vars_$(vm_name).fd bs=64K count=1
+	cp "$$(nix-build -E 'with import <nixpkgs> {}; OVMFFull.fd' --no-out-link)/FV/OVMF_VARS.fd" "$(vm_dir)/ovmf_vars_$(vm_name).fd"
+	chmod u+w "$(vm_dir)/ovmf_vars_$(vm_name).fd"
 	cp "$$(realpath $$(dirname $$(realpath $$(which qemu-system-x86_64)))/../share/qemu)/edk2-x86_64-code.fd" $(vm_dir)/edk2-x86_64-code.fd
 	@echo -e "Stop the VM when the installation is done and then run with \e[32mmake start_$*\e[0m."
+	@echo -e "Writing start file at \e[32m$(vm_dir)/run-$*-vm\e[0m."
 	@echo "#!/usr/bin/env bash\n\
+	mkdir -p "$(TMPDIR)/xchg" \n\
 	qemu-system-x86_64 -machine type=q35 -machine accel=kvm -cpu max \\\n\
 	  -name $* \\\n\
 	  -m 8192 \\\n\
-	  -enable-kvm \\\n\
 	  -smp 4 \\\n\
+	  -nographic \\\n\
+	  -enable-kvm \\\n\
 	  -drive if=pflash,format=raw,unit=0,file="$(vm_dir)/edk2-x86_64-code.fd",readonly=on \\\n\
 	  -drive if=pflash,format=raw,unit=1,file="$(vm_dir)/ovmf_vars_$(vm_name).fd" \\\n\
 	  -device virtio-rng-pci \\\n\
@@ -209,36 +213,39 @@ $(start_new_from_iso_machines): start_new_from_iso_%: $(out_iso_dir)/%.iso $(out
 	  -device nvme,id=nvme0,serial=1234 \\\n\
 	  -device nvme-ns,drive=hd0,nsid=1,bus=nvme0 \\\n\
 	  -device nvme-ns,drive=hd_secrets,nsid=2,bus=nvme0 \\\n\
-	  -device virtio-keyboard \\\n\
-	  -usb \\\n\
-	  -device usb-tablet,bus=usb-bus.0 \\\n\
 	  -serial unix:/tmp/$(vm_name).sock,server,nowait \\\n\
 	  \$$QEMU_OPTS" > "$(vm_dir)/run-$*-vm"
 	sed -i 's/\\n/\n/g' "$(vm_dir)/run-$*-vm"
 	chmod +x "$(vm_dir)/run-$*-vm"
-	qemu-system-x86_64 -machine type=q35 -machine accel=kvm -cpu max \
-	  -name $* \
-	  -m 8192 \
-	  -enable-kvm \
-	  -cdrom $$(realpath "$(out_iso_dir)/$*.iso") \
-	  -boot order=c,once=d \
-	  -smp 4 \
-	  -drive if=pflash,format=raw,unit=0,file="$(vm_dir)/edk2-x86_64-code.fd",readonly=on \
-	  -drive if=pflash,format=raw,unit=1,file="$(vm_dir)/ovmf_vars_$(vm_name).fd" \
-	  -device virtio-rng-pci \
-	  -netdev user,id=mynet0,ipv6=off,hostfwd=tcp::8888-:80,hostfwd=tcp::4443-:443,hostfwd=tcp::2222-:22,"$$QEMU_NET_OPTS" \
-	  -device virtio-net-pci,netdev=mynet0,mac=52:54:00:CA:FE:EE \
-	  -virtfs local,path=$(TMPDIR)/xchg,security_model=none,mount_tag=shared \
-	  -virtfs local,path=$(TMPDIR)/xchg,security_model=none,mount_tag=xchg \
-	  -blockdev driver=file,filename="$(disk_path)",node-name=file1 \
-	  -blockdev driver=qcow2,file=file1,node-name=hd0 \
-	  -device nvme,id=nvme0,serial=1234 \
-	  -device nvme-ns,drive=hd0,nsid=1,bus=nvme0 \
-	  -device virtio-keyboard \
-	  -usb \
-	  -device usb-tablet,bus=usb-bus.0 \
-	  -serial unix:/tmp/$(vm_name).sock,server,nowait \
-	  $$QEMU_OPTS
+	if ps | grep [q]emu &>/dev/null; then echo "There is already a VM running" && exit 1; fi
+	rm -f /tmp/$(vm_name).sock
+	zellij run --name $(vm_name) --close-on-exit --floating -y0 -x80% --height=20% -- env PATH="$$PATH" \
+	  qemu-system-x86_64 -machine type=q35 -machine accel=kvm -cpu max \
+	    -name $* \
+	    -m 8192 \
+	    -enable-kvm \
+	    -cdrom $$(realpath "$(out_iso_dir)/$*.iso") \
+	    -boot order=c,once=d \
+	    -smp 4 \
+	    -nographic \
+	    -drive if=pflash,format=raw,unit=0,file="$(vm_dir)/edk2-x86_64-code.fd",readonly=on \
+	    -drive if=pflash,format=raw,unit=1,file="$(vm_dir)/ovmf_vars_$(vm_name).fd" \
+	    -device virtio-rng-pci \
+	    -netdev user,id=mynet0,ipv6=off,hostfwd=tcp::8888-:80,hostfwd=tcp::4443-:443,hostfwd=tcp::2222-:22,"$$QEMU_NET_OPTS" \
+	    -device virtio-net-pci,netdev=mynet0,mac=52:54:00:CA:FE:EE \
+	    -virtfs local,path=$(TMPDIR)/xchg,security_model=none,mount_tag=shared \
+	    -virtfs local,path=$(TMPDIR)/xchg,security_model=none,mount_tag=xchg \
+	    -blockdev driver=file,filename="$(disk_path)",node-name=file1 \
+	    -blockdev driver=qcow2,file=file1,node-name=hd0 \
+	    -blockdev driver=file,filename=$(vm_dir)/secret-disk.qcow2,node-name=secretsfile \
+	    -blockdev driver=qcow2,file=secretsfile,node-name=hd_secrets \
+	    -device nvme,id=nvme0,serial=1234 \
+	    -device nvme-ns,drive=hd0,nsid=1,bus=nvme0 \
+			-device nvme-ns,drive=hd_secrets,nsid=2,bus=nvme0 \
+	    -serial unix:/tmp/$(vm_name).sock,server,nowait \
+	    $$QEMU_OPTS
+	zellij action toggle-floating-panes
+	$(MAKE) connect_$*
 
 create_machines := $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'create_%s ' "$$x"; done)
 create_%: vm_name=$*$(shell expr $(call vm_count,$*) + 1)
@@ -267,7 +274,7 @@ $(start_machines): start_%:
 	if [ "$*" == "$(vm_name)" ]; then echo "No VMs found" && exit 1; fi
 	if ps | grep [q]emu &>/dev/null; then echo "There is already a VM running" && exit 1; fi
 	rm -f /tmp/$(vm_name).sock
-	zellij run --name $(vm_name) --close-on-exit --floating -y0 -x80% --height=20% -- "$(vm_dir)/run-$*-vm"
+	zellij run --name $(vm_name) --close-on-exit --floating -y0 -x80% --height=20% -- env PATH="$$PATH" "$(vm_dir)/run-$*-vm"
 	zellij action toggle-floating-panes
 	$(MAKE) connect_$*
 
@@ -326,6 +333,10 @@ list_outputs:
 ## Shows flake information
 flake_show:
 	nix flake show
+
+## Shows build dependencies
+nixdeps_show:
+	@echo "Build dependencies: $(nix_deps)"
 
 ### Others
 

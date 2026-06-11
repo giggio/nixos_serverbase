@@ -43,7 +43,7 @@ sops, and home-manager).
 {
   description = "NixOS configuration";
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs/nixos-25.11";
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
     serverbase = {
       url = "git+https://codeberg.org/giggio/nixos_serverbase.git?ref=main";
       inputs.nixpkgs.follows = "nixpkgs";
