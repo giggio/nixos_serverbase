@@ -241,7 +241,8 @@ $(create_and_start_from_iso_machines): create_and_start_from_iso_%: $(out_iso_di
 	    -blockdev driver=qcow2,file=secretsfile,node-name=hd_secrets \
 	    -device nvme,id=nvme0,serial=1234 \
 	    -device nvme-ns,drive=hd0,nsid=1,bus=nvme0 \
-			-device nvme-ns,drive=hd_secrets,nsid=2,bus=nvme0 \
+	    -device nvme,id=nvme1,serial=4567 \
+	    -device nvme-ns,drive=hd_secrets,nsid=1,bus=nvme1 \
 	    -serial unix:/tmp/$(vm_name).sock,server,nowait \
 	    $$QEMU_OPTS
 	zellij action toggle-floating-panes
