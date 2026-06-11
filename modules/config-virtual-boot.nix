@@ -19,8 +19,13 @@
     useDefaultFilesystems = false;
     fileSystems = config.disko.devices._config.fileSystems;
     writableStoreUseTmpfs = false; # allows to save changes to the nix store and get it to working when rebooted
-    qemu = {
-      guestAgent.enable = true;
-    };
+    qemu.guestAgent.enable = true;
+  };
+
+  boot = {
+    kernelParams = [
+      "console=tty0"
+      "console=ttyS0,115200n8" # this is for the serial console so connections with socat work
+    ];
   };
 }

@@ -70,9 +70,9 @@ deps:
 # and making other targets depend on the run-...-vm file would always rebuild everything.
 # With the stamp file we have a file that has the correct date.
 $(out_vm_dir)/.run-%-vm.stamp: $(nix_deps)
-	nix build .\#$*_$(architecture)_vm --print-build-logs --out-link "$(result_vm_dir)/"
+	nix build .#$*$(subst _,,$(architecture))vm --print-build-logs --out-link "$(result_vm_dir)/"
 	mkdir -p "$(out_vm_dir)"
-	ln -sf "$$(realpath "$(result_vm_dir)/run-$*-vm")" "$(out_vm_dir)/run-$*-vm"
+	ln -sf "$$(realpath "$(result_vm_dir)/"run*)" "$(out_vm_dir)/run-$*-vm"
 	touch --date=@$$(stat -c '%Y' "$(out_vm_dir)/run-$*-vm") "$@"
 	rm -rf "$(result_dir)"
 
