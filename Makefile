@@ -81,7 +81,7 @@ $(vm_files): $(out_vm_dir)/run-%-vm: $(out_vm_dir)/.run-%-vm.stamp;
 
 # See the comment above about the .stamp file
 $(out_img_dir)/.%.img.zst.stamp: $(nix_deps)
-	nix build .\#$*_img --print-build-logs --out-link "$(result_img_dir)/"
+	nix build .#$*_img --print-build-logs --out-link "$(result_img_dir)/"
 	mkdir -p "$(out_img_dir)"
 	ln -sf "$$(realpath "$(result_img_dir)/$*.img.zst")" "$(out_img_dir)/$*.img.zst"
 	touch --date=@$$(stat -c '%Y' "$(out_img_dir)/$*.img.zst") "$@"
@@ -92,7 +92,7 @@ $(img_files): $(out_img_dir)/%.img.zst: $(out_img_dir)/.%.img.zst.stamp;
 
 # See the comment above about the .stamp file
 $(out_iso_dir)/.%.iso.stamp: $(nix_deps)
-	nix build .\#$*_iso --print-build-logs --out-link "$(result_iso_dir)/"
+	nix build .#$*_iso --print-build-logs --out-link "$(result_iso_dir)/"
 	mkdir -p "$(out_iso_dir)"
 	ln -sf "$$(realpath "$(result_iso_dir)/$*.iso")" "$(out_iso_dir)/$*.iso"
 	touch --date=@$$(stat -c '%Y' "$(out_iso_dir)/$*.iso") "$@"

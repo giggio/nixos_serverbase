@@ -6,46 +6,66 @@
 }:
 let
   myModules = {
-    hardware = {
-      gmktec = {
-        physical = {
-          imports = [
-            ./config-physical.nix
-            ./config-physical-gmktec.nix
-            ./config-gmktec.nix
-          ];
-        };
-        virtual = {
-          imports = [
-            ./config-virtual.nix
-            ./config-gmktec.nix
-          ];
-        };
-        virtualboot = {
-          imports = [
-            ./config-physical.nix
-            ./config-physical-gmktec.nix
-            ./config-gmktec.nix
-            ./config-virtual-boot.nix
-          ];
-        };
+    hardware =
+
+      {
+        gmktec =
+          {
+            physical ? [ ],
+            virtual ? [ ],
+            virtualboot ? [ ],
+            ...
+          }:
+          {
+            physical = {
+              imports = [
+                ./config-physical.nix
+                ./config-physical-gmktec.nix
+                ./config-gmktec.nix
+              ]
+              ++ physical;
+            };
+            virtual = {
+              imports = [
+                ./config-virtual.nix
+                ./config-gmktec.nix
+              ]
+              ++ virtual;
+            };
+            virtualboot = {
+              imports = [
+                ./config-physical.nix
+                ./config-physical-gmktec.nix
+                ./config-gmktec.nix
+                ./config-virtual-boot.nix
+              ]
+              ++ virtualboot;
+            };
+          };
+        pi4 =
+          {
+            physical ? [ ],
+            virtual ? [ ],
+            ...
+          }:
+          {
+            physical = {
+              imports = [
+                ./config-physical.nix
+                ./config-physical-pi4.nix
+                ./config-pi4.nix
+              ]
+              ++ physical;
+            };
+            virtual = {
+              imports = [
+                ./config-virtual.nix
+                ./config-pi4.nix
+              ]
+              ++ virtual;
+            };
+          };
       };
-      pi4 = {
-        physical = {
-          imports = [
-            ./config-physical.nix
-            ./config-physical-pi4.nix
-            ./config-pi4.nix
-          ];
-        };
-        virtual = {
-          imports = [
-            ./config-virtual.nix
-            ./config-pi4.nix
-          ];
-        };
-      };
-    };
     lib = import ./lib.nix {
       serverbaseModules = myModules;
       inherit lib inputs;

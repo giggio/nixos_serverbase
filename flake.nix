@@ -36,7 +36,7 @@
         {
           name = "pi4";
           defaultArch = "aarch64";
-          hardwareModule = self.nixosModules.hardware.pi4;
+          hardwareModule = self.nixosModules.hardware.pi4 { };
           modules = [ ./configuration.nix ];
           supportsIso = false;
           supportsImg = true;
@@ -44,7 +44,7 @@
         {
           name = "gmktec1";
           defaultArch = "x86_64";
-          hardwareModule = self.nixosModules.hardware.gmktec;
+          hardwareModule = self.nixosModules.hardware.gmktec { };
           modules = [ ./configuration.nix ];
           supportsIso = true;
           supportsImg = false;

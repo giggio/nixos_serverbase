@@ -156,7 +156,7 @@
       nixosModules = serverbaseModules.lib.mkNixosModulesCombinations machines;
       evalConfig = import "${inputs.nixpkgs}/nixos/lib/eval-config.nix";
       pi4Machines = builtins.filter (
-        machine: machine.hardwareModule == serverbaseModules.hardware.pi4
+        machine: machine.hardwareModule == serverbaseModules.hardware.pi4 { }
       ) machines;
       installerPackages =
         lib.lists.foldr (packageAccumulator: newPackage: packageAccumulator // newPackage) { } (
