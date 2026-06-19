@@ -156,12 +156,11 @@
                 ip6tables = false;
                 ip-masq = false;
                 default-runtime = if daemon.kata-runtime.enable then "kata" else "runc";
+                features.time-namespaces = false; # todo: remove when kata-runtime releases this (greater than 3.31.0): https://github.com/kata-containers/kata-containers/issues/13080#issuecomment-4501602114
                 runtimes = lib.attrsets.optionalAttrs daemon.kata-runtime.enable {
                   kata = {
                     runtimeType = "${pkgs.kata-runtime}/bin/containerd-shim-kata-v2";
-                    options = {
-                      ConfigPath = "/etc/docker-kata${suffix}/configuration.toml";
-                    };
+                    options.ConfigPath = "/etc/docker-kata${suffix}/configuration.toml";
                   };
                 };
               }
