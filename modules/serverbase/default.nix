@@ -124,6 +124,7 @@ in
   networking = {
     usePredictableInterfaceNames = false; # use eth0 instead of topology based name (like enp3s0), as I only have one network interface
     firewall.enable = true;
+    firewall.allowPing = true;
     hostName = config.setup.derivedHostName;
     wireless.enable = false; # enables/disables wireless support via wpa_supplicant.
     useNetworkd = true;
