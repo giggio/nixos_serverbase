@@ -186,6 +186,20 @@ for testing or as a starting point):
 5. Copy the secret file `server.agekey` to the root of a USB flash drive and connect
    the device to the Pi 4.
 
+You can also burn by running (replace `/dev/sdX` by the appropriate drive):
+
+```bash
+zstdcat out/nix/img/pi4.img.zst | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
+```
+
+### Deploying to the Orange Pi 4 Pro
+
+It is very similar to the Raspberry Pi 4 above, just change the out file to:
+
+```bash
+zstdcat out/nix/img/opi4pro.img.zst | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
+```
+
 ### Deploying to Gmktec G3 Plus
 
 1. Clone this repo and set up your secrets (see [Secrets](#secrets)).

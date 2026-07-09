@@ -155,9 +155,7 @@
       combinations = serverbaseModules.lib.mkNixosMachineCombinations machines;
       nixosModules = serverbaseModules.lib.mkNixosModulesCombinations machines;
       evalConfig = import "${inputs.nixpkgs}/nixos/lib/eval-config.nix";
-      pi4Machines = builtins.filter (
-        machine: machine.hardwareModule == serverbaseModules.hardware.pi4 { }
-      ) machines;
+      imageSupportingMachines = builtins.filter (machine: machine.supportsImg) machines;
       installerPackages =
         lib.lists.foldr (packageAccumulator: newPackage: packageAccumulator // newPackage) { } (
           map (
@@ -193,17 +191,17 @@
         )
         // lib.foldr (machine_accumulator: new_machine: machine_accumulator // new_machine) { } (
           map (machine: {
-            "${machine.name}_img" = serverbaseModules.lib.mkPi4Image {
+            "${machine.name}_img" = serverbaseModules.lib.mkSdCardImage {
               pkgs = import inputs.nixpkgs { system = "${machine.defaultArch}-linux"; };
               nixos-system = nixosConfigurations."${machine.name}";
               isDev = false;
             };
-            "${machine.name}dev_img" = serverbaseModules.lib.mkPi4Image {
+            "${machine.name}dev_img" = serverbaseModules.lib.mkSdCardImage {
               pkgs = import inputs.nixpkgs { system = "${machine.defaultArch}-linux"; };
               nixos-system = nixosConfigurations."${machine.name}dev";
               isDev = true;
             };
-          }) pi4Machines
+          }) imageSupportingMachines
         );
     in
     installerPackages
@@ -363,7 +361,7 @@
       ln -s ${nixos-system.config.system.build.isoImage}/iso/*.iso $out/${file}
     '';
 
-  mkPi4Image =
+  mkSdCardImage =
     {
       pkgs,
       nixos-system,
@@ -421,6 +419,7 @@
         buildInputs =
           with pkgs;
           [
+            zstd
             util-linux
             sops
           ]

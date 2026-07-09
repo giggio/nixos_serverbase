@@ -65,6 +65,29 @@ let
               ++ virtual;
             };
           };
+        opi4pro =
+          {
+            physical ? [ ],
+            virtual ? [ ],
+            ...
+          }:
+          {
+            physical = {
+              imports = [
+                ./config-physical.nix
+                ./config-physical-opi4pro.nix
+                ./config-opi4pro.nix
+              ]
+              ++ physical;
+            };
+            virtual = {
+              imports = [
+                ./config-virtual.nix
+                # ./config-pi4.nix
+              ]
+              ++ virtual;
+            };
+          };
       };
     lib = import ./lib.nix {
       serverbaseModules = myModules;

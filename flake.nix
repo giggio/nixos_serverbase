@@ -52,6 +52,14 @@
           vmDiskSize = 48;
           useEFIBoot = true;
         }
+        {
+          name = "opi4pro";
+          defaultArch = "aarch64";
+          hardwareModule = self.nixosModules.hardware.opi4pro { };
+          modules = [ ./configuration.nix ];
+          supportsIso = false;
+          supportsImg = true;
+        }
       ];
       nixosConfigurations = self.nixosModules.lib.mkNixosConfigurations machines;
     in
