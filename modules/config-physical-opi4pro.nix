@@ -7,6 +7,61 @@
 }:
 
 let
+  # Cross toolchain with the SAME triple Armbian uses for the known-good
+  # binary (glibc, soft-float, aapcs-linux ABI: enums always 4 bytes).
+  # First build compiles GCC from source on the aarch64 build platform —
+  # slow once, cached afterwards.
+  pkgsArmLinuxGnueabi = import pkgs.path {
+    system = pkgs.stdenv.buildPlatform.system;
+    crossSystem = {
+      config = "armv7l-unknown-linux-gnueabi";
+    };
+  };
+
+  installOpi4ProBootloader = pkgs.writeShellScript "install-opi4pro-bootloader" ''
+    set -euo pipefail
+    toplevel="$1"
+    fw=/boot/firmware
+
+    if ! ${pkgs.util-linux}/bin/mountpoint -q "$fw"; then
+      echo "ERROR: $fw is not mounted; refusing to install bootloader files" >&2
+      exit 1
+    fi
+
+    echo "opi4pro: installing kernel, initrd, dtb to $fw"
+    cp "$toplevel/kernel" "$fw/Image.new" && mv "$fw/Image.new" "$fw/Image"
+
+    ${pkgs.ubootTools}/bin/mkimage -A arm -O linux -T ramdisk -C gzip -n uInitrd -d "$toplevel/initrd" "$fw/uInitrd.new"
+    mv "$fw/uInitrd.new" "$fw/uInitrd"
+
+    mkdir -p "$fw/allwinner"
+    cp "$toplevel/dtbs/allwinner/sun60i-a733-orangepi-4-pro.dtb" "$fw/allwinner/.dtb.new"
+    mv "$fw/allwinner/.dtb.new" "$fw/allwinner/sun60i-a733-orangepi-4-pro.dtb"
+
+    echo "opi4pro: regenerating /boot/boot.scr for $toplevel"
+    bootargs="init=$toplevel/init $(cat "$toplevel/kernel-params")"
+    tmp=$(mktemp)
+    cat > "$tmp" <<EOF
+    setenv kernel_addr_r 0x41000000
+    setenv fdt_addr_r 0x4a000000
+    setenv ramdisk_addr_r 0x4b000000
+    setenv fdt_high 0xffffffff
+    setenv initrd_high 0xffffffff
+    load mmc 0:1 \$ramdisk_addr_r uInitrd
+    load mmc 0:1 \$kernel_addr_r Image
+    load mmc 0:1 \$fdt_addr_r allwinner/sun60i-a733-orangepi-4-pro.dtb
+    fdt addr \$fdt_addr_r
+    fdt resize 65536
+    setenv bootargs "$bootargs"
+    booti \$kernel_addr_r \$ramdisk_addr_r \$fdt_addr_r
+    EOF
+    ${pkgs.ubootTools}/bin/mkimage -C none -A arm -T script -d "$tmp" /boot/boot.scr.new
+    mv /boot/boot.scr.new /boot/boot.scr
+    rm -f "$tmp"
+    sync
+    echo "opi4pro: bootloader install complete"
+  '';
+
   # Pin to the Armbian tag that carries the merged, hardware-tested
   # Orange Pi 4 Pro support (armbian/build#9967 and follow-ups).
   armbianBuild = pkgs.fetchFromGitHub {
@@ -104,11 +159,16 @@ let
       "boot_package.fex"
     ];
 
-    makeFlags = [
-      "SCP=/dev/null"
-      "KCFLAGS=-w -Wno-error"
-      "DTC=dtc"
-    ];
+    makeFlags = [ ];
+
+    preBuild = ''
+      # -fomit-frame-pointer is LOAD-BEARING, not an optimization preference.
+      # cleanup_before_linux_select() flushes then disables the D-cache, and is only safe because (per U-Boot's own comment) nothing is pushed to the
+      # stack in between. Frame-pointer prologues push r7/lr after the flush; those lines are dirty in a cache that is then disabled without
+      # writeback, so the popped pc comes back as garbage -> wild jump. Ubuntu's arm-linux-gnueabi-gcc omits it by default (Armbian's build);
+      # nixpkgs' ARM cross-GCCs do not.
+      makeFlagsArray+=("KCFLAGS=-fcommon -fomit-frame-pointer -Wno-error -Wno-attributes -Wno-array-bounds -Wno-maybe-uninitialized -Wno-stringop-overflow")
+    '';
 
     nativeBuildInputs = with pkgs; [
       bison
@@ -118,32 +178,21 @@ let
       bash
       tinyxxd
       git
-      dtc
       bc
       perl
       findutils
       util-linux
       sunxiPackTools # Injects the QEMU-wrapped packing tools into PATH
-      pkgsCross.arm-embedded.buildPackages.gcc
-      pkgsCross.arm-embedded.buildPackages.binutils
+      pkgsArmLinuxGnueabi.buildPackages.gcc13
+      pkgsArmLinuxGnueabi.buildPackages.binutils
       pkgsCross.riscv64-embedded.buildPackages.gcc
       pkgsCross.riscv64-embedded.buildPackages.binutils
     ];
 
     postConfigure = ''
-      echo "Enabling CONFIG_PHYS_64BIT so 32-bit U-Boot can parse 64-bit FDT memory nodes..."
-      # Use the official Kconfig helper if available, otherwise edit .config directly
-      if [ -x ./scripts/config ]; then
-        echo "Enabling PHYS_64BIT using ./scripts/config..."
-        ./scripts/config --enable PHYS_64BIT
-      else
-        echo "Enabling PHYS_64BIT by patching .config directly..."
-        echo "CONFIG_PHYS_64BIT=y" >> .config
-      fi
       # DEBUG AID: give ourselves a wide, unmissable window to interrupt autoboot.
-      # The default (2s) collapses to one line in a plain-text serial capture
-      # (via \r overwrites) and is trivially easy to miss.
-      echo "Setting CONFIG_BOOTDELAY=15 for debugging..."
+      # The default (2s) collapses to one line in a plain-text serial capture (via \r overwrites) and is trivially easy to miss.
+      echo "Setting CONFIG_BOOTDELAY=15..."
       if [ -x ./scripts/config ]; then
         ./scripts/config --set-val BOOTDELAY 15
       else
@@ -151,12 +200,16 @@ let
         echo "CONFIG_BOOTDELAY=15" >> .config
       fi
       make olddefconfig
-      # Verification: Ensure the symbol wasn't dropped due to missing dependencies
-      if ! grep -q "CONFIG_PHYS_64BIT=y" .config; then
-        echo "ERROR: CONFIG_PHYS_64BIT was dropped by olddefconfig!"
-        exit 1
+      # The tree ships scripts/dtc/dtc as an x86-only prebuilt binary; rebuild
+      # it from the tree's OWN dtc source for this build platform, exactly as
+      # Armbian does. Kbuild then uses ./scripts/dtc/dtc for the control DTB
+      # that gets appended to u-boot.bin.
+      if ! ./scripts/dtc/dtc --version > /dev/null 2>&1; then
+        echo "Rebuilding in-tree scripts/dtc for the build platform..."
+        rm -f scripts/dtc/dtc
+        make -f scripts/Makefile.build obj=scripts/dtc srctree=. objtree="$PWD" HOSTCC=cc HOSTCFLAGS="-O2 -fcommon" LEX=flex YACC=bison
+        ./scripts/dtc/dtc --version
       fi
-      echo "CONFIG_PHYS_64BIT successfully enabled."
     '';
 
     postPatch = ''
@@ -166,60 +219,25 @@ let
       find . -name "Makefile" -o -name "*.mk" -o -name "config.mk" | xargs sed -i -E '/tar .*(toolchain|gcc-linaro|riscv64)/d' || true
       find . -name "Makefile" -o -name "*.mk" -o -name "config.mk" | xargs sed -i -E '/mkdir .*(toolchain|gcc-linaro|riscv64)/d' || true
 
-      # FIX 1: Fix vendor typo
-      if [ -f arch/arm/include/asm/arch/pmic_bus.h ]; then
-        sed -i 's/_SUNXI_PMIS_BUS_H/_SUNXI_PMIC_BUS_H/g' arch/arm/include/asm/arch/pmic_bus.h
-      fi
+      # Toolchain directories the vendor Makefile hardcodes.
+      ARM32_BIN_DIR="../tools/toolchain/gcc-linaro-7.2.1-2017.11-x86_64_arm-linux-gnueabi/bin"
+      RISCV_BIN_DIR="../tools/toolchain/riscv64-linux-x86_64-20200528/bin"
+      mkdir -p "$ARM32_BIN_DIR" "$RISCV_BIN_DIR"
+      for tool in gcc as ld ar nm objcopy objdump ranlib strip size readelf c++ g++ cpp; do
+        real_tool=$(type -p armv7l-unknown-linux-gnueabi-$tool)
+        if [ -n "$real_tool" ]; then ln -s "$real_tool" "$ARM32_BIN_DIR/arm-linux-gnueabi-$tool"; fi
+      done
+      for tool in gcc as ld ar nm objcopy objdump ranlib strip size readelf; do
+        real_tool=$(type -p riscv64-none-elf-$tool)
+        if [ -n "$real_tool" ]; then
+          for prefix in riscv64-unknown-linux-gnu- riscv64-unknown-elf- riscv64-linux-gnu- riscv64-none-elf-; do
+            ln -s "$real_tool" "$RISCV_BIN_DIR/$prefix$tool" || true
+          done
+        fi
+      done
 
-      # FIX 2: Prevent 'unreachable' macro collision
-      if [ -f include/linux/compiler-gcc.h ]; then
-        sed -i '/#define unreachable()/i #undef unreachable' include/linux/compiler-gcc.h
-      fi
-
-      # FIX 3: Strip -Werror
-      find . -name "Makefile" -o -name "*.mk" | xargs sed -i 's/-Werror//g' || true
-
-      # FIX 4: Stub out vblk.c to satisfy the linker for the t736 defconfig.
-      if [ -f drivers/block/vblk.c ]; then
-        echo "Stubbing out drivers/block/vblk.c to support legacy block mode..."
-        cat << 'EOF' > drivers/block/vblk.c
-      /* Dummy file to satisfy legacy build rules and linker */
-      int vblk_create() {
-          return 0;
-      }
-      int vblk_get_devnum_by_typename(const char *ifname) {
-          return -1; // Return -1 to indicate no virtual block devices found
-      }
-      int vblk_init(void) {
-          return 0;
-      }
-      EOF
-      fi
-
-      # FIX 5: Robustly remove ALL problematic stdint.h inclusions from the ENTIRE tree
-      find . -type f \( -name "*.c" -o -name "*.h" \) -exec sed -i '/#include.*stdint\.h/d' {} +
-
-      # FIX 6: (Now inert with defconfig=sun60iw2p1_t736_defconfig, which targets
-      # "sun60iw2p1-soc-system" instead - left in place since it's harmless and
-      # makes it easy to switch defconfigs back for comparison/debugging.)
-      # The vendor tree expects a root DTS file, but board-uboot.dts is just a fragment.
-      # We must create a root DTS file that includes the SoC definitions and the board fragment.
-      if [ ! -f arch/arm/dts/sun60iw2p1-orangepi-4-pro.dts ]; then
-        echo "Creating root DTS wrapper for Orange Pi 4 Pro..."
-        cat << 'DTS_EOF' > arch/arm/dts/sun60iw2p1-orangepi-4-pro.dts
-      /dts-v1/;
-
-      #include "sun60iw2p1-soc-system.dts"
-      #include "board-uboot.dts"
-
-      / {
-          model = "OrangePi 4 Pro";
-          compatible = "xunlong,orangepi-4-pro", "allwinner,sun60iw2";
-      };
-      DTS_EOF
-      fi
-
-      # FIX 7: Dummy script for sunxi_ubootools
+      # Armbian's known-good binary has dtb_offset=0 (verified live at 0x4a0004f0), i.e. this tool never runs in their build either.
+      # Neutralize it so our header matches the reference.
       cat << 'EOF' > scripts/sunxi_ubootools
       #!/usr/bin/env bash
       exit 0
@@ -227,128 +245,67 @@ let
       chmod +x scripts/sunxi_ubootools
       patchShebangs scripts/sunxi_ubootools
 
-      # FIX 8: Shrink U-Boot's bootm_size to 96MB (0x06000000).
-      # This restricts the boot memory pool to 0x40000000-0x46000000.
-      # The initrd will be placed at ~0x44000000, safely below the 0x48000000 BL31 reserved region!
-      # The regex handles multiple formats: "bootm_size=0x...", "bootm_size = 0x...", etc.
-      find include/configs/ -name "*.h" | xargs sed -i -E 's/(bootm_size\s*=?\s*)0x[0-9a-fA-F]+/\10x06000000/g' || true
-      # Verification: Print the patched value to confirm it worked
-      echo "=== Verification: bootm_size patch ==="
-      grep -r "bootm_size" include/configs/ || echo "WARNING: bootm_size not found in headers!"
-      echo "======================================="
+      # Turn debug() into printf() for this one file, so boot_jump_linux tells us which branch it takes and with what SMC arguments.
+      sed -i '1i #define DEBUG 1' arch/arm/lib/bootm.c
+      # Print the branch decision itself.
+      sed -i 's|/\* We could run 32bit os on 64bit platform, which have monitor \*/|printf("BRANCH: monitor_exist=%d force_32bit=%d\\n", sunxi_probe_secure_monitor(), sunxi_get_force_32bit_os());|' arch/arm/lib/bootm.c
+      sed -i 's|sunxi_smc_call_atf(ARM_SVC_ARISC_STARTUP, (ulong)r2, 0, 0);|printf("DBG: before ARISC smc r2=0x%lx\\n", (ulong)r2); sunxi_smc_call_atf(ARM_SVC_ARISC_STARTUP, (ulong)r2, 0, 0); printf("DBG: after ARISC smc\\n");|' arch/arm/lib/bootm.c
 
-      # Construct toolchain paths
-      ARM32_BIN_DIR="../tools/toolchain/gcc-linaro-7.2.1-2017.11-x86_64_arm-linux-gnueabi/bin"
-      RISCV_BIN_DIR="../tools/toolchain/riscv64-linux-x86_64-20200528/bin"
-      mkdir -p "$ARM32_BIN_DIR" "$RISCV_BIN_DIR"
+      sed -i 's|\tboard_quiesce_devices();|\tprintf("DBG1: before board_quiesce\\n");\n\tboard_quiesce_devices();\n\tprintf("DBG2: after board_quiesce\\n");|' arch/arm/lib/bootm.c
+      sed -i 's|\tdm_remove_devices_flags(DM_REMOVE_ACTIVE_ALL);|\tprintf("DBG3: before dm_remove\\n");\n\tdm_remove_devices_flags(DM_REMOVE_ACTIVE_ALL);\n\tprintf("DBG4: after dm_remove\\n");|' arch/arm/lib/bootm.c
+      sed -i 's|\tcleanup_before_linux();|\tprintf("DBG5: before cleanup_before_linux\\n");\n\tcleanup_before_linux();\n\tprintf("DBG6: after cleanup\\n");|' arch/arm/lib/bootm.c
+      sed -i 's|sunxi_drm_kernel_para_flush();|printf("DBG7: before drm flush\\n"); sunxi_drm_kernel_para_flush(); printf("DBG8: after drm flush\\n");|' arch/arm/lib/bootm.c
 
-      # CRITICAL: Include readelf and other tools in the wrapper loop!
-      for tool in gcc as ld ar nm objcopy objdump ranlib strip size readelf c++ g++ cpp; do
-        real_tool=$(type -p arm-none-eabi-$tool)
-        if [ -n "$real_tool" ]; then ln -s "$real_tool" "$ARM32_BIN_DIR/arm-linux-gnueabi-$tool"; fi
+      # Fail loudly if any sed silently missed — we've been burned by this.
+      for tag in DBG1 DBG3 DBG5 DBG7; do
+        grep -q "$tag" arch/arm/lib/bootm.c || { echo "FATAL: sed for $tag did not apply"; exit 1; }
       done
-      for tool in gcc as ld ar nm objcopy objdump ranlib strip size readelf; do
-        real_tool=$(type -p riscv64-none-elf-$tool)
-        if [ -n "$real_tool" ]; then
-          for prefix in riscv64-unknown-linux-gnu- riscv64-unknown-elf- riscv64-linux-gnu- riscv64-none-elf-; do
-            ln -s "$real_tool" "$RISCV_BIN_DIR$prefix$tool" || true
-          done
-        fi
+
+      # Fail loudly if any sed silently missed — we've been burned by this.
+      for tag in DBG1 DBG3 DBG5 DBG7; do
+        grep -q "$tag" arch/arm/lib/bootm.c || { echo "FATAL: sed for $tag did not apply"; exit 1; }
       done
+
       git init -b main && git config user.name "Nix" && git config user.email "nix@local" && git commit --allow-empty -m "init"
     '';
 
     postBuild = ''
       set -e
-      set -x
       echo "=== Packing U-Boot using Allwinner proprietary tools ==="
 
       mkdir -p pack_work
       cp -r ${orangepiBuild}/external/packages/pack-uboot/sun60iw2/bin/. ./pack_work/
       cd pack_work
 
-      # CRITICAL FIX: boot_package.cfg expects monitor.fex and scp.fex.
-      # The bin directory provides monitor.bin and scp.bin. We must rename them!
-      if [ -f monitor.bin ]; then
-        echo "Copying monitor.bin to monitor.fex..."
-        cp monitor.bin monitor.fex
-      else
-        echo "WARNING: monitor.bin not found in pack-uboot bin directory!"
-      fi
+      if [ -f monitor.bin ] && [ ! -f monitor.fex ]; then cp monitor.bin monitor.fex; fi
+      if [ -f scp.bin ] && [ ! -f scp.fex ]; then cp scp.bin scp.fex; fi
 
-      if [ -f scp.bin ]; then
-        echo "Copying scp.bin to scp.fex..."
-        cp scp.bin scp.fex
-      else
-        echo "WARNING: scp.bin not found in pack-uboot bin directory!"
-      fi
-
-      # DEBUG: List files to ensure everything is present before packing
-      echo "--- Contents of pack_work before packing ---"
-      ls -l
-      echo "--------------------------------------------"
-
-      # Prepare u-boot.fex
+      # Our compiled, sunxi_ubootools-stamped, DTB-appended binary.
       cp ../u-boot.bin u-boot.fex
 
-      # Compile DTB
-      dtc -p 2048 -W no-unit_address_vs_reg -@ -O dtb -o uboot.dtb -b 0 dts/u-boot-current.dts
+      # Compile the SoC DTS with the tree's OWN dtc, like Armbian.
+      ../scripts/dtc/dtc -p 2048 -W no-unit_address_vs_reg -@ -O dtb -o uboot.dtb -b 0 dts/u-boot-current.dts
       cp uboot.dtb sunxi.fex
-
-      echo "Running update_dtb..."
       update_dtb sunxi.fex 4096
-      echo "update_dtb finished. Size of sunxi.fex: $(stat -c%s sunxi.fex)"
 
-      # CRITICAL FIX: use orangepi-build's OWN paired sys_config.fex, not Armbian's
-      # repackaged copy — this is the file that's actually validated against this
-      # exact monitor.fex/BL31 pairing.
-      echo "Generating sys_config.bin using the vendor's own paired sys_config.fex..."
-      cp sys_config/sys_config.fex sys_config.fex
+      # Board-specific sys_config (per Armbian's board file — no generic default).
+      cp ${armbianBuild}/packages/blobs/sunxi/sun60iw2/sys_config_orangepi.fex sys_config.fex
       perl -pi -e 's/\r?\n/\r\n/' sys_config.fex
       export LC_ALL=C
       ${sunxiPackTools}/bin/script sys_config.fex
-      echo "script finished. Size of sys_config.bin: $(stat -c%s sys_config.bin)"
-      echo "--- DEBUG: Checking sys_config.bin ---"
-      ls -l sys_config.bin
-      hexdump -C sys_config.bin | head -n 5 || true
-      echo "--------------------------------------"
 
-      echo "Running update_uboot (stamping the packaged copy)..."
       update_uboot -no_merge u-boot.fex sys_config.bin
-      echo "update_uboot finished. Size of u-boot.fex: $(stat -c%s u-boot.fex)"
-
-      # DEBUG: Print boot_package.cfg
-      echo "--- boot_package.cfg contents ---"
-      cat boot_package.cfg
-      echo "---------------------------------"
-
-      # CRITICAL FIX: the vendor pipeline stamps u-boot.bin a SECOND time, directly.
-      # This is what actually sets uboot_spare_head.boot_data.monitor_exist —
-      # skipping this is why sunxi_probe_secure_monitor() was returning false and
-      # U-Boot fell back to a raw 32-bit jump into your AArch64 kernel.
-      echo "Running update_uboot (stamping the original u-boot.bin)..."
-      cp ../u-boot.bin u-boot.bin.stamped
-      update_uboot -no_merge u-boot.bin.stamped sys_config.bin
-      cp u-boot.bin.stamped ../u-boot.bin
 
       sed -i 's/$/\r/' boot_package.cfg
-      echo "Running dragonsecboot..."
       dragonsecboot -pack boot_package.cfg
 
-      # CRITICAL FIX: use the vendor's own generic A733 boot0 blob. There is no
-      # "orangepi4pro"-specific boot0 in the real vendor tree — Armbian's file of
-      # that name is a repackaging, not confirmed identical. orangepi-build's own
-      # board recipe falls back to exactly this file for this exact board:
-      #   cp "$BIN_PATH/boot0_sdcard_$BOARD.fex" ./boot0_sdcard.fex 2>/dev/null || cp "$BIN_PATH/boot0_sdcard_a733.fex" ./boot0_sdcard.fex
-      cp ${orangepiBuild}/external/packages/pack-uboot/sun60iw2/bin/boot0_sdcard_a733.fex ../boot0_sdcard.fex
+      # Board-specific boot0.
+      cp ${armbianBuild}/packages/blobs/sunxi/sun60iw2/boot0_sdcard_orangepi4pro.fex ../boot0_sdcard.fex
       cp boot_package.fex ../boot_package.fex
 
       echo "--- Final Bootloader Sizes ---"
       ls -l ../boot0_sdcard.fex ../boot_package.fex
-      echo "------------------------------"
-
       cd ..
-      set +x
       echo "=== Packing complete! ==="
     '';
   };
@@ -413,7 +370,7 @@ let
 
   bootScript = pkgs.runCommand "boot.scr" { nativeBuildInputs = [ pkgs.ubootTools ]; } (
     let
-      bootArgs = "init=${config.system.build.toplevel}/init ${toString config.boot.kernelParams} clk_ignore_unused";
+      bootArgs = "init=${config.system.build.toplevel}/init ${toString config.boot.kernelParams}";
     in
     /* bash */ ''
       cat << EOF > boot.cmd
@@ -468,8 +425,10 @@ in
     # "earlycon=uart8250,mmio32,0x02500000"
     "earlyprintk=sunxi-uart,0x02500000"
     "panic=10"
+    "clk_ignore_unused"
   ];
 
+  hardware.wirelessRegulatoryDatabase = true;
   hardware.deviceTree = {
     enable = true;
     name = "allwinner/sun60i-a733-orangepi-4-pro.dtb";
@@ -494,6 +453,10 @@ in
 
   boot.loader.generic-extlinux-compatible.enable = lib.mkForce false; # CRITICAL: Disable extlinux completely. We are using boot.scr instead!
   boot.loader.grub.enable = false;
+  boot.loader.external = {
+    enable = true;
+    installHook = installOpi4ProBootloader;
+  };
   hardware.enableRedistributableFirmware = true;
   nixpkgs.hostPlatform = lib.mkDefault "aarch64-linux";
   boot.zfs.forceImportRoot = false;
@@ -532,12 +495,26 @@ in
   # cp /mnt/tmp/usr/lib/linux-u-boot-*/boot0_sdcard.fex ./blob/armbian-boot0_sdcard.fex
   # cp /mnt/tmp/usr/lib/linux-u-boot-*/boot_package.fex ./blob/armbian-boot_package.fex
   # sudo umount /mnt/tmp && sudo losetup -d "$LOOP"
+  # echo "Flashing Armbian-built Allwinner boot0 and boot_package (known-good on hardware)..."
+  # dd if=${./blobs/armbian-boot0_sdcard.fex} of=$img seek=8 conv=notrunc bs=1k
+  # dd if=${./blobs/armbian-boot_package.fex} of=$img seek=16400 conv=notrunc bs=1k
   sdImage.postBuildCommands = /* bash */ ''
-    echo "Flashing Armbian-built Allwinner boot0 and boot_package (known-good on hardware)..."
-    dd if=${./blobs/armbian-boot0_sdcard.fex} of=$img seek=8 conv=notrunc bs=1k
-    dd if=${./blobs/armbian-boot_package.fex} of=$img seek=16400 conv=notrunc bs=1k
+    echo "Flashing locally built Allwinner boot0 and boot_package..."
+    dd if=${ubootOrangePi4Pro}/boot0_sdcard.fex of=$img seek=8 conv=notrunc bs=1k
+    dd if=${ubootOrangePi4Pro}/boot_package.fex of=$img seek=16400 conv=notrunc bs=1k
   '';
 
   sdImage.firmwareSize = 256;
   sdImage.firmwarePartitionOffset = 48; # MiB — must clear boot_package.fex, which starts at 16.4MiB
+
+  fileSystems."/boot/firmware" = {
+    device = "/dev/disk/by-label/FIRMWARE";
+    fsType = "vfat";
+    options = [
+      "nofail"
+      "umask=0077"
+    ];
+  };
+
+  system.build.opi4proUboot = ubootOrangePi4Pro; # build with: nix build .#nixosConfigurations.opi4pro.config.system.build.opi4proUboot --print-build-logs
 }
