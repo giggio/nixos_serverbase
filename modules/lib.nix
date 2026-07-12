@@ -439,6 +439,7 @@
               qemu
               libguestfs-with-appliance
               guestfs-tools
+              picocom # for serial communication
             ]
           ));
       };
