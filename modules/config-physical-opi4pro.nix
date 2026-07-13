@@ -57,59 +57,68 @@ let
   #
   # IMPORTANT: the boot.cmd heredoc below MUST stay in sync with the `bootScript` derivation further down. They generate the
   # same script for two different moments (switch-time vs image-build-time). If you change memory addresses in one, change both.
-  installOpi4ProBootloader = pkgs.writeShellScript "install-opi4pro-bootloader" ''
-    set -euo pipefail
-    toplevel="$1"
-    fw=/boot/firmware
+  installOpi4ProBootloader = pkgs.writeShellApplication {
+    name = "install-opi4pro-bootloader";
+    runtimeInputs = (
+      with pkgs;
+      [
+        coreutils
+      ]
+    );
+    text = ''
+      set -euo pipefail
+      toplevel="$1"
+      fw=/boot/firmware
 
-    # Refuse to run if the FAT firmware partition is not mounted - otherwise we would silently write the kernel into an empty
-    # directory on the root filesystem and the board would keep booting the old kernel with no visible error.
-    if ! ${pkgs.util-linux}/bin/mountpoint -q "$fw"; then
-      echo "ERROR: $fw is not mounted; refusing to install bootloader files" >&2
-      exit 1
-    fi
+      # Refuse to run if the FAT firmware partition is not mounted - otherwise we would silently write the kernel into an empty
+      # directory on the root filesystem and the board would keep booting the old kernel with no visible error.
+      if ! ${pkgs.util-linux}/bin/mountpoint -q "$fw"; then
+        echo "ERROR: $fw is not mounted; refusing to install bootloader files" >&2
+        exit 1
+      fi
 
-    echo "opi4pro: installing kernel, initrd, dtb to $fw"
-    # Raw aarch64 Image (no uImage wrapper): the boot script uses `booti`, which takes the kernel unwrapped.
-    cp "$toplevel/kernel" "$fw/Image.new" && mv "$fw/Image.new" "$fw/Image"
+      echo "opi4pro: installing kernel, initrd, dtb to $fw"
+      # Raw aarch64 Image (no uImage wrapper): the boot script uses `booti`, which takes the kernel unwrapped.
+      cp "$toplevel/kernel" "$fw/Image.new" && mv "$fw/Image.new" "$fw/Image"
 
-    # The initrd, however, IS wrapped as a legacy U-Boot image ("uInitrd"). U-Boot needs the wrapper's size/compression
-    # metadata to hand a ramdisk to the kernel. -C gzip must match boot.initrd.compressor below.
-    ${pkgs.ubootTools}/bin/mkimage -A arm -O linux -T ramdisk -C gzip -n uInitrd -d "$toplevel/initrd" "$fw/uInitrd.new"
-    mv "$fw/uInitrd.new" "$fw/uInitrd"
+      # The initrd, however, IS wrapped as a legacy U-Boot image ("uInitrd"). U-Boot needs the wrapper's size/compression
+      # metadata to hand a ramdisk to the kernel. -C gzip must match boot.initrd.compressor below.
+      ${pkgs.ubootTools}/bin/mkimage -A arm -O linux -T ramdisk -C gzip -n uInitrd -d "$toplevel/initrd" "$fw/uInitrd.new"
+      mv "$fw/uInitrd.new" "$fw/uInitrd"
 
-    mkdir -p "$fw/allwinner"
-    cp "$toplevel/dtbs/allwinner/sun60i-a733-orangepi-4-pro.dtb" "$fw/allwinner/.dtb.new"
-    mv "$fw/allwinner/.dtb.new" "$fw/allwinner/sun60i-a733-orangepi-4-pro.dtb"
+      mkdir -p "$fw/allwinner"
+      cp "$toplevel/dtbs/allwinner/sun60i-a733-orangepi-4-pro.dtb" "$fw/allwinner/.dtb.new"
+      mv "$fw/allwinner/.dtb.new" "$fw/allwinner/sun60i-a733-orangepi-4-pro.dtb"
 
-    echo "opi4pro: regenerating /boot/boot.scr for $toplevel"
-    # kernel-params is the file NixOS writes containing exactly `boot.kernelParams`. Reading it (rather than hardcoding) keeps
-    # switch-time and image-time boot arguments identical.
-    # NOTE: no `root=` here. NixOS uses systemd inside the initrd ("systemd stage 1"), and systemd-fstab-generator builds
-    # sysroot.mount from the initrd's own fstab. Passing root= as well makes it generate the unit twice and stage 1 aborts with
-    # "Failed to create unit file '/run/systemd/generator/sysroot.mount', as it already exists".
-    bootargs="init=$toplevel/init $(cat "$toplevel/kernel-params")"
-    tmp=$(mktemp)
-    cat > "$tmp" <<EOF
-    setenv kernel_addr_r 0x41000000
-    setenv fdt_addr_r 0x4a000000
-    setenv ramdisk_addr_r 0x4b000000
-    setenv fdt_high 0xffffffff
-    setenv initrd_high 0xffffffff
-    load mmc 0:1 \$ramdisk_addr_r uInitrd
-    load mmc 0:1 \$kernel_addr_r Image
-    load mmc 0:1 \$fdt_addr_r allwinner/sun60i-a733-orangepi-4-pro.dtb
-    fdt addr \$fdt_addr_r
-    fdt resize 65536
-    setenv bootargs "$bootargs"
-    booti \$kernel_addr_r \$ramdisk_addr_r \$fdt_addr_r
-    EOF
-    ${pkgs.ubootTools}/bin/mkimage -C none -A arm -T script -d "$tmp" /boot/boot.scr.new
-    mv /boot/boot.scr.new /boot/boot.scr
-    rm -f "$tmp"
-    sync
-    echo "opi4pro: bootloader install complete"
-  '';
+      echo "opi4pro: regenerating /boot/boot.scr for $toplevel"
+      # kernel-params is the file NixOS writes containing exactly `boot.kernelParams`. Reading it (rather than hardcoding) keeps
+      # switch-time and image-time boot arguments identical.
+      # NOTE: no `root=` here. NixOS uses systemd inside the initrd ("systemd stage 1"), and systemd-fstab-generator builds
+      # sysroot.mount from the initrd's own fstab. Passing root= as well makes it generate the unit twice and stage 1 aborts with
+      # "Failed to create unit file '/run/systemd/generator/sysroot.mount', as it already exists".
+      bootargs="init=$toplevel/init $(cat "$toplevel/kernel-params")"
+      tmp=$(mktemp)
+      cat > "$tmp" <<EOF
+      setenv kernel_addr_r 0x41000000
+      setenv fdt_addr_r 0x4a000000
+      setenv ramdisk_addr_r 0x4b000000
+      setenv fdt_high 0xffffffff
+      setenv initrd_high 0xffffffff
+      load mmc 0:1 \$ramdisk_addr_r uInitrd
+      load mmc 0:1 \$kernel_addr_r Image
+      load mmc 0:1 \$fdt_addr_r allwinner/sun60i-a733-orangepi-4-pro.dtb
+      fdt addr \$fdt_addr_r
+      fdt resize 65536
+      setenv bootargs "$bootargs"
+      booti \$kernel_addr_r \$ramdisk_addr_r \$fdt_addr_r
+      EOF
+      ${pkgs.ubootTools}/bin/mkimage -C none -A arm -T script -d "$tmp" /boot/boot.scr.new
+      mv /boot/boot.scr.new /boot/boot.scr
+      rm -f "$tmp"
+      sync
+      echo "opi4pro: bootloader install complete"
+    '';
+  };
 
   # ---------------------------------------------------------------------------------------------------------------------------
   # Upstream sources.
@@ -578,7 +587,7 @@ in
     # The sd-image module would normally write an extlinux config here. We replace that with our boot.scr, at the path the vendor
     # U-Boot's distro-boot scan looks for it: /boot/boot.scr on the ext4 root partition (mmc 0:2).
     populateRootCommands = /* bash */ ''
-      mkdir -p ./files/boot
+      mkdir -p ./files/boot/firmware
       cp -v ${bootScript} ./files/boot/boot.scr
     '';
 
