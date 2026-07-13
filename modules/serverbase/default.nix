@@ -43,10 +43,15 @@ in
   ];
 
   nix = {
-    settings.experimental-features = [
-      "nix-command"
-      "flakes"
-    ];
+    settings = {
+      experimental-features = [
+        "nix-command"
+        "flakes"
+      ];
+      trusted-public-keys = [
+        "giggio:gA25EMS+ouiC1xzWOKP68b7ikEfjmXohUT1PZ6aNP5c="
+      ];
+    };
   };
 
   boot = {
