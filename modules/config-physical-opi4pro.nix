@@ -626,6 +626,7 @@ in
     fsType = "vfat";
     options = [
       "nofail"
+      "auto"
       "umask=0077"
     ];
   };
