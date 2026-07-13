@@ -116,6 +116,9 @@ let
       mv /boot/boot.scr.new /boot/boot.scr
       rm -f "$tmp"
       sync
+      if ! ${flashUboot}/bin/opi4pro-flash-uboot --check; then
+        echo "opi4pro: NOTE — the bootloader on the card is out of date. Run: sudo opi4pro-flash-uboot" >&2
+      fi
       echo "opi4pro: bootloader install complete"
     '';
   };
@@ -527,6 +530,82 @@ let
     echo "Verifying uInitrd..."
     ${pkgs.ubootTools}/bin/mkimage -l "$out/uInitrd"
   '';
+
+  # Flashes the raw Allwinner bootloader region of the SD card the board is currently running from.
+  #
+  # Why this exists: U-Boot is NOT on a filesystem. It lives in raw sectors (boot0 at 8 KiB, boot_package at 16400 KiB), which
+  # `nixos-rebuild switch` deliberately never touches — the install hook only rewrites kernel/initrd/DTB/boot.scr. So any change
+  # to the U-Boot derivation (defconfig, KCFLAGS, patches, CONFIG_BOOTDELAY, ...) has no effect until this is run.
+  #
+  # Writing these sectors on a live, mounted card is safe: the region ends around 17.8 MiB and partition 1 starts at 48 MiB, so
+  # no filesystem overlaps it. The board keeps running normally; the new bootloader takes effect on the next reboot.
+  flashUboot = pkgs.writeShellApplication {
+    name = "opi4pro-flash-uboot";
+    runtimeInputs = with pkgs; [
+      coreutils
+      util-linux
+      diffutils
+    ];
+    text = ''
+      BOOT0="${ubootOrangePi4Pro}/boot0_sdcard.fex"
+      PKG="${ubootOrangePi4Pro}/boot_package.fex"
+      BOOT0_OFF_KIB=8      # fixed by the BROM: it reads boot0 from exactly this offset
+      PKG_OFF_KIB=16400    # fixed by boot0: it reads the boot package from exactly this offset
+
+      CHECK_ONLY=0
+      [ "''${1:-}" = "--check" ] && CHECK_ONLY=1
+
+      # Find the disk that holds our FAT firmware partition. This is the card we booted from, whatever it is called
+      # (/dev/mmcblk1 on this board, but do not hardcode it).
+      FWPART="$(readlink -f /dev/disk/by-label/FIRMWARE)"
+      DISK="/dev/$(lsblk -no pkname "$FWPART")"
+      echo "opi4pro: firmware partition $FWPART -> disk $DISK"
+
+      [ -b "$DISK" ] || { echo "ERROR: $DISK is not a block device" >&2; exit 1; }
+      [ -f "$BOOT0" ] && [ -f "$PKG" ] || { echo "ERROR: bootloader artifacts missing from the store" >&2; exit 1; }
+
+      # Returns 0 if the on-card bytes differ from the file (i.e. a write is needed).
+      differs() {
+        local file="$1" off_kib="$2" size count
+        size="$(stat -c %s "$file")"
+        count=$(( (size + 1023) / 1024 ))
+        ! dd if="$DISK" bs=1k skip="$off_kib" count="$count" status=none | head -c "$size" | cmp -s - "$file"
+      }
+
+      write_region() {
+        local file="$1" off_kib="$2" name="$3"
+        if ! differs "$file" "$off_kib"; then
+          echo "opi4pro: $name already up to date at ''${off_kib}KiB — skipping"
+          return 0
+        fi
+        if [ "$CHECK_ONLY" = 1 ]; then
+          echo "opi4pro: $name at ''${off_kib}KiB is OUT OF DATE"
+          return 10
+        fi
+        echo "opi4pro: writing $name ($(stat -c %s "$file") bytes) to $DISK at ''${off_kib}KiB"
+        # conv=notrunc is essential: without it dd would truncate the whole card.
+        dd if="$file" of="$DISK" bs=1k seek="$off_kib" conv=notrunc,fsync status=none
+        # Read the region back and compare, so we never leave a half-written bootloader behind unnoticed.
+        if differs "$file" "$off_kib"; then
+          echo "ERROR: verification FAILED for $name — the card may be unbootable. See DISASTER-RECOVERY.md" >&2
+          exit 1
+        fi
+        echo "opi4pro: $name written and verified"
+      }
+
+      rc=0
+      write_region "$BOOT0" "$BOOT0_OFF_KIB" "boot0_sdcard.fex" || rc=$?
+      write_region "$PKG"   "$PKG_OFF_KIB"   "boot_package.fex" || rc=$?
+
+      if [ "$CHECK_ONLY" = 1 ]; then
+        [ "$rc" = 0 ] && echo "opi4pro: bootloader on card is up to date"
+        exit "$rc"
+      fi
+
+      sync
+      echo "opi4pro: done — reboot to run the new bootloader"
+    '';
+  };
 in
 {
   imports = [
@@ -650,5 +729,8 @@ in
     #   sudo dd if=result/boot_package.fex of=/dev/sdX bs=1k seek=16400 conv=notrunc,fsync
     opi4proUboot = ubootOrangePi4Pro;
     opi4proInitrdUImage = initrdUImage;
+    opi4proFlashUboot = flashUboot;
   };
+
+  environment.systemPackages = [ flashUboot ];
 }
