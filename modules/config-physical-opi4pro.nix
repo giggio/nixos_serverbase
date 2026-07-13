@@ -575,7 +575,7 @@ in
       # Makes `nixos-rebuild switch` update the kernel/initrd/DTB on the FAT partition and regenerate /boot/boot.scr.
       external = {
         enable = true;
-        installHook = installOpi4ProBootloader;
+        installHook = "${installOpi4ProBootloader}/bin/install-opi4pro-bootloader";
       };
     };
     zfs.forceImportRoot = false;
