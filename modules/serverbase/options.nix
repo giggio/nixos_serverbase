@@ -61,6 +61,11 @@ with lib;
         default = 48;
         description = "Virtual machine disk size in GB";
       };
+      extraDisks = mkOption {
+        type = types.listOf types.int;
+        default = [ ];
+        description = "Number of extra disks to add";
+      };
       useEFIBoot = mkEnableOption "EFI boot enabled";
     };
   };

@@ -42,6 +42,19 @@
         ];
       options = [
         "-enable-kvm"
+        "-serial unix:/tmp/$VM_NAME.sock,server,nowait"
+      ];
+      drives = lib.mkMerge [
+        [
+          {
+            driveExtraOpts.werror = "report";
+            file = "$VM_DIR/secret-disk.qcow2";
+          }
+        ]
+        (lib.lists.imap1 (idx: imgCfg: {
+          driveExtraOpts.werror = "report";
+          file = "$VM_DIR/disk${toString idx}.qcow2";
+        }) config.setup.vm.extraDisks)
       ];
     };
     graphics = false; # connection is via serial port

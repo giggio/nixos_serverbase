@@ -256,8 +256,10 @@ $(create_machines): create_%: $(out_vm_dir)/run-%-vm $(out_vm_dir)/.run-%-vm.sta
 	@echo -e "VM is \e[32m$(vm_name)\e[0m (at \e[32m$(vm_dir)\e[0m)"
 	mkdir -p "$(vm_dir)"
 	cp $(secrets_qcow2) "$(vm_dir)/secret-disk.qcow2"
+	nix run --offline .#machine_$* | jq -r '(.extraDisks // [])[]' | nl -s'|' -w1 | while read -r disk; do qemu-img create -f qcow2 $(vm_dir)/disk"$$(echo "$$disk" | cut -d'|' -f1)".qcow2 "$$(echo "$$disk" | cut -d'|' -f2)G"; done
 	cp $(out_vm_dir)/run-$*-vm "$(vm_dir)/run-$*-vm"
-	sed -i -e 's|QEMU_OPTS|QEMU_OPTS -drive file=$(vm_dir)/secret-disk.qcow2,id=drive2,if=none,index=2,werror=report -device virtio-blk-pci,drive=drive2 -serial unix:/tmp/$(vm_name).sock,server,nowait|' \
+	sed -i -e '3i export VM_NAME="$(vm_name)"' \
+	  -e '3i export VM_DIR="$(vm_dir)"' \
 	  -e '3i export NIX_DISK_IMAGE="$(vm_dir)/$(vm_name).qcow2"' \
 	  -e '3i export NIX_EFI_VARS="$(vm_dir)/$(vm_name)-efi-vars.fd"' \
 	  "$(vm_dir)/run-$*-vm"

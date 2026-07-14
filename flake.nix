@@ -59,6 +59,11 @@
           modules = [ ./configuration.nix ];
           supportsIso = false;
           supportsImg = true;
+          extraDisks = [
+            100
+            100
+            100
+          ];
         }
       ];
       nixosConfigurations = self.nixosModules.lib.mkNixosConfigurations machines;
@@ -83,6 +88,7 @@
         packages = {
           list_machines = self.nixosModules.lib.list_machines { inherit pkgs machines; };
         }
+        // self.nixosModules.lib.machine_details { inherit pkgs machines; }
         // self.nixosModules.lib.mkInstallerPackages {
           inherit nixosConfigurations machines;
         };

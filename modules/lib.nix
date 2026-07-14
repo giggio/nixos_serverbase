@@ -125,6 +125,7 @@
                 setup.vm.diskSize = lib.mkIf (combination.machine ? vmDiskSize) combination.machine.vmDiskSize;
                 setup.vm.useEFIBoot =
                   if (combination.machine ? useEFIBoot) then combination.machine.useEFIBoot else false;
+                setup.vm.extraDisks = lib.mkIf (combination.machine ? extraDisks) combination.machine.extraDisks;
               }
               (lib.attrsets.optionalAttrs combination.isDev { config.setup.environment = "dev"; })
             ]
@@ -406,6 +407,33 @@
       echo 'echo -n "|imgs ${lib.strings.concatStringsSep " " imgMachinesNamesWithDev}"' >> "$out/bin/list_machines";
       chmod +x "$out/bin/list_machines";
     '';
+
+  machine_details =
+    { pkgs, machines, ... }:
+    let
+      attrs = lib.lists.foldr (newConfig: configAccumulator: configAccumulator // newConfig) { } (
+        (map (
+          machine:
+          (
+            let
+              command = pkgs.runCommand "machine_${machine.name}" { } ''
+                mkdir -p "$out/bin"
+                cat << EOF > "$out/bin/machine_${machine.name}"
+                #!/usr/bin/env bash
+                echo '${builtins.toJSON machine}'
+                EOF
+                chmod +x "$out/bin/machine_${machine.name}";
+              '';
+            in
+            {
+              "machine_${machine.name}" = command;
+              "machine_${machine.name}dev" = command;
+            }
+          )
+        ) machines)
+      );
+    in
+    attrs;
 
   mkDevShells =
     {
