@@ -66,6 +66,16 @@ with lib;
         default = [ ];
         description = "Number of extra disks to add";
       };
+      extraStartCommands = mkOption {
+        type = types.lines;
+        default = "";
+        description = "Extra commands to be ran when creating the vm";
+      };
+      extraCreateCommands = mkOption {
+        type = types.lines;
+        default = "";
+        description = "Extra commands to be added to the run-vm file";
+      };
       useEFIBoot = mkEnableOption "EFI boot enabled";
     };
   };

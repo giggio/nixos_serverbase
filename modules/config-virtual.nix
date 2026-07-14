@@ -22,7 +22,17 @@
     "${toString modulesPath}/virtualisation/qemu-vm.nix"
   ];
 
-  setup.vm.enable = true;
+  setup.vm = {
+    enable = true;
+    extraCreateCommands = /* bash */ ''
+      # Creating the VM
+      echo "Creating the vm..."
+    '';
+    extraStartCommands = /* bash */ ''
+      # extra start commands would
+      # go here
+    '';
+  };
 
   virtualisation = {
     useEFIBoot = config.setup.vm.useEFIBoot;

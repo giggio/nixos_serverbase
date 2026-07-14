@@ -258,7 +258,10 @@ $(create_machines): create_%: $(out_vm_dir)/run-%-vm $(out_vm_dir)/.run-%-vm.sta
 	cp $(secrets_qcow2) "$(vm_dir)/secret-disk.qcow2"
 	nix run --offline .#machine_$* | jq -r '(.extraDisks // [])[]' | nl -s'|' -w1 | while read -r disk; do qemu-img create -f qcow2 $(vm_dir)/disk"$$(echo "$$disk" | cut -d'|' -f1)".qcow2 "$$(echo "$$disk" | cut -d'|' -f2)G"; done
 	cp $(out_vm_dir)/run-$*-vm "$(vm_dir)/run-$*-vm"
-	sed -i -e '3i export VM_NAME="$(vm_name)"' \
+	command="$$(nix eval .#nixosConfigurations.$*$(subst _,,$(architecture))vm.config.setup.vm.extraCreateCommands --raw)" && cd "$(vm_dir)" && echo "Running: $$command" && source <(echo "$$command")
+	sed -i  \
+	  -e '3r '<(nix eval .#nixosConfigurations.$*$(subst _,,$(architecture))vm.config.setup.vm.extraStartCommands --raw) \
+	  -e '3i export VM_NAME="$(vm_name)"' \
 	  -e '3i export VM_DIR="$(vm_dir)"' \
 	  -e '3i export NIX_DISK_IMAGE="$(vm_dir)/$(vm_name).qcow2"' \
 	  -e '3i export NIX_EFI_VARS="$(vm_dir)/$(vm_name)-efi-vars.fd"' \
