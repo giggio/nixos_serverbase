@@ -83,7 +83,7 @@ let
             virtual = {
               imports = [
                 ./config-virtual.nix
-                # ./config-pi4.nix
+                ./config-opi4pro.nix
               ]
               ++ virtual;
             };
