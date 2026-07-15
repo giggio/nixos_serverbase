@@ -64,6 +64,11 @@
             100
             100
           ];
+          # The _img packages for this machine are UNATTENDED INSTALLER images, not full-system images: the SD card boots an
+          # installer that wipes /dev/nvme0n1 with disko and installs this machine system onto it, pulling the pre-built
+          # closure from the attic cache. The SD card then stays in the board permanently, holding only the boot chain (the
+          # SoC boot ROM cannot boot from NVMe). See modules/setup-opi4pro.nix.
+          imgIsInstaller = true;
         }
       ];
       nixosConfigurations = self.nixosModules.lib.mkNixosConfigurations machines;

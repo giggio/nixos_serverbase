@@ -11,6 +11,9 @@
   disko.devices.disk.main = {
     device = "/dev/nvme0n1";
     type = "disk";
+    preCreateHook = ''
+      dd if=/dev/zero of="$device" bs=1M count=16 conv=fsync
+    '';
     content = {
       type = "gpt";
       partitions = {

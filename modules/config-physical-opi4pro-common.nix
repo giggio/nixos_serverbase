@@ -647,8 +647,11 @@ in
   boot = {
     kernelPackages = pkgs.linuxPackagesFor orangepiVendorKernel;
     kernelParams = [
-      "console=ttyS0,115200n8"
+      # NOTE ON CONSOLE ORDER: the LAST console= wins and becomes /dev/console, where userspace (systemd's [ OK ] lines, getty)
+      # writes. Kernel messages go to ALL consoles regardless. ttyS0 is last here, so SERIAL is primary; HDMI still shows kernel
+      # output, and systemd is additionally mirrored to serial via systemd.extraConfig below (redundant but harmless).
       "console=tty0"
+      "console=ttyS0,115200n8"
       # earlyprintk (not earlycon) is what Armbian uses with this exact vendor kernel; it produces output from the very first
       # kernel instructions, before the real serial driver is up.
       "earlyprintk=sunxi-uart,0x02500000"

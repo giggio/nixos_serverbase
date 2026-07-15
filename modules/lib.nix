@@ -3,7 +3,10 @@
   lib,
   inputs,
 }:
-{
+# The Orange Pi 4 Pro unattended-installer image builder lives in its own file (the mechanism is very board-specific), and is
+# merged into this lib so it is reachable as serverbaseModules.lib.mkOpi4ProInstallerImage from mkInstallerPackages below.
+(import ./setup-opi4pro.nix { inherit lib inputs; })
+// {
   mkNixosConfigurations =
     machines:
     let
@@ -191,18 +194,39 @@
           ) combinations
         )
         // lib.foldr (machine_accumulator: new_machine: machine_accumulator // new_machine) { } (
-          map (machine: {
-            "${machine.name}_img" = serverbaseModules.lib.mkSdCardImage {
-              pkgs = import inputs.nixpkgs { system = "${machine.defaultArch}-linux"; };
-              nixos-system = nixosConfigurations."${machine.name}";
-              isDev = false;
-            };
-            "${machine.name}dev_img" = serverbaseModules.lib.mkSdCardImage {
-              pkgs = import inputs.nixpkgs { system = "${machine.defaultArch}-linux"; };
-              nixos-system = nixosConfigurations."${machine.name}dev";
-              isDev = true;
-            };
-          }) imageSupportingMachines
+          map (
+            machine:
+            let
+              # Two kinds of _img package share the same name contract (<name>.img.zst / <name>dev.img.zst, so the Makefile's
+              # img rule works unchanged for both):
+              #   - default: a full-system SD image - the whole system runs from the card (e.g. pi4);
+              #   - machine.imgIsInstaller = true: a lean UNATTENDED INSTALLER SD image - it boots the board, wipes the NVMe
+              #     with the final system's disko config, and installs the final system onto it from the flake, pulling the
+              #     pre-built closure from the attic cache (e.g. opi4pro). See modules/setup-opi4pro.nix.
+              mkImg =
+                isDev:
+                let
+                  configName = "${machine.name}${if isDev then "dev" else ""}";
+                in
+                if (machine.imgIsInstaller or false) then
+                  serverbaseModules.lib.mkOpi4ProInstallerImage {
+                    pkgs = import inputs.nixpkgs { system = "${machine.defaultArch}-linux"; };
+                    finalSystem = nixosConfigurations."${configName}";
+                    flakeAttr = configName;
+                    inherit isDev;
+                  }
+                else
+                  serverbaseModules.lib.mkSdCardImage {
+                    pkgs = import inputs.nixpkgs { system = "${machine.defaultArch}-linux"; };
+                    nixos-system = nixosConfigurations."${configName}";
+                    inherit isDev;
+                  };
+            in
+            {
+              "${machine.name}_img" = mkImg false;
+              "${machine.name}dev_img" = mkImg true;
+            }
+          ) imageSupportingMachines
         );
     in
     installerPackages

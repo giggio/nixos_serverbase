@@ -80,10 +80,28 @@ $(out_vm_dir)/.run-%-vm.stamp: $(nix_deps)
 $(vm_files): $(out_vm_dir)/run-%-vm: $(out_vm_dir)/.run-%-vm.stamp;
 
 # See the comment above about the .stamp file
+sops_agekey := $(HOME)/.config/nixos-secrets/server.agekey
 $(out_img_dir)/.%.img.zst.stamp: $(nix_deps)
 	nix build .#$*_img --print-build-logs --out-link "$(result_img_dir)/"
 	mkdir -p "$(out_img_dir)"
-	ln -sf "$$(realpath "$(result_img_dir)/$*.img.zst")" "$(out_img_dir)/$*.img.zst"
+	# opi4pro images are UNATTENDED INSTALLERS that decrypt the private cache address with sops (see
+	# modules/setup-opi4pro.nix). The age key that unlocks it must NEVER pass through nix - it would end up world-readable
+	# in the store - so it is injected here, straight into the image's ext4 root (partition 2), AFTER the lean image is
+	# built: decompress -> guestfish upload -> recompress. Every other image keeps the cheap symlink-to-store path.
+	case "$*" in \
+	  opi4pro*) \
+	    echo "Injecting sops age key into $* installer image..."; \
+	    test -f "$(sops_agekey)" || { echo "ERROR: missing $(sops_agekey)" >&2; exit 1; }; \
+	    zstd -d -f -o "$(out_img_dir)/$*.img" "$(result_img_dir)/$*.img.zst"; \
+	    chmod +w "$(out_img_dir)/$*.img"; \
+	    guestfish -a "$(out_img_dir)/$*.img" run : mount /dev/sda2 / : mkdir-p /etc/sops/age : upload "$(sops_agekey)" /etc/sops/age/server.agekey : chmod 0400 /etc/sops/age/server.agekey : sync; \
+	    zstd -f -o "$(out_img_dir)/$*.img.zst" "$(out_img_dir)/$*.img"; \
+	    rm -f "$(out_img_dir)/$*.img"; \
+	    ;; \
+	  *) \
+	    ln -sf "$$(realpath "$(result_img_dir)/$*.img.zst")" "$(out_img_dir)/$*.img.zst"; \
+	    ;; \
+	esac
 	touch --date=@$$(stat -c '%Y' "$(out_img_dir)/$*.img.zst") "$@"
 	rm -rf "$(result_dir)"
 
