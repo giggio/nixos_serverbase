@@ -186,6 +186,7 @@ in
     hashedPassword = "$y$j9T$uFrz8gHZsyL7Jo1iCC/ky.$lVYuZPrYGtrxbP564V49AO.HraNu8fqRWVtiXLVrUkD"; # generate with: nix run nixpkgs#mkpasswd -- -m yescrypt
     isNormalUser = true;
     description = "Giovanni Bassi";
+    group = "users";
     extraGroups = [
       "networkmanager"
       "wheel"
