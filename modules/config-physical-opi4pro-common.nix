@@ -21,6 +21,22 @@
 #
 # Three blobs remain irreducible (boot0, BL31/monitor, SCP). Even Armbian ships these as committed binaries; no source exists
 # anywhere. Everything else here - U-Boot, kernel, initrd, boot script - is compiled from source.
+#
+# THIS IS THE COMMON MODULE. It contains the boot chain only, and is imported by BOTH:
+#   - config-physical-opi4pro.nix: the final installed system (root on the NVMe SSD via disko), and
+#   - the SD installer image built by setup-opi4pro.nix (root on the SD card, installs the final system onto the NVMe).
+# It must therefore NOT import sd-image.nix (that module hardcodes fileSystems."/" to the NIXOS_SD label, which would collide
+# with the disko-managed NVMe root) and must NOT contain any sdImage.* settings - those live with the installer.
+#
+# WHERE THINGS LIVE ON DISK (both for the installer and the installed system):
+#   SD card, raw sectors : boot0 @ 8 KiB, boot_package (U-Boot+BL31+SCP) @ 16400 KiB. Written by dd; no filesystem.
+#   SD card, partition 1 : FAT, label FIRMWARE, starts at 48 MiB, MARKED BOOTABLE. Holds Image, uInitrd, the DTB, and boot.scr.
+#   SD card, partition 2 : ext4, label NIXOS_SD - the INSTALLER's root filesystem. Dead weight after installation.
+#   NVMe                 : everything else (/ and the nix store) on the installed system.
+# boot.scr lives on the FAT partition (not on an ext4 root) so the SD card only has to carry boot artifacts once the real
+# system is on the NVMe. U-Boot finds it there because the FAT partition carries the bootable flag (set by the installer
+# image's postBuildCommands) and U-Boot's distro-boot scan only looks at bootable partitions, under the prefixes "/" and
+# "/boot/".
 {
   lib,
   modulesPath,
@@ -90,7 +106,7 @@ let
       cp "$toplevel/dtbs/allwinner/sun60i-a733-orangepi-4-pro.dtb" "$fw/allwinner/.dtb.new"
       mv "$fw/allwinner/.dtb.new" "$fw/allwinner/sun60i-a733-orangepi-4-pro.dtb"
 
-      echo "opi4pro: regenerating /boot/boot.scr for $toplevel"
+      echo "opi4pro: regenerating boot.scr on the FAT partition for $toplevel"
       # kernel-params is the file NixOS writes containing exactly `boot.kernelParams`. Reading it (rather than hardcoding) keeps
       # switch-time and image-time boot arguments identical.
       # NOTE: no `root=` here. NixOS uses systemd inside the initrd ("systemd stage 1"), and systemd-fstab-generator builds
@@ -112,8 +128,13 @@ let
       setenv bootargs "$bootargs"
       booti \$kernel_addr_r \$ramdisk_addr_r \$fdt_addr_r
       EOF
-      ${pkgs.ubootTools}/bin/mkimage -C none -A arm -T script -d "$tmp" /boot/boot.scr.new
-      mv /boot/boot.scr.new /boot/boot.scr
+      # boot.scr goes to the FAT partition, at its root. U-Boot's distro-boot scan looks for "boot.scr" under the prefixes
+      # "/" and "/boot/" on every BOOTABLE partition - and the installer image marks the FAT partition (and only it) bootable.
+      # Writing it here (rather than /boot/boot.scr on the root filesystem) is what lets the SD card carry only boot artifacts,
+      # and it is also what ends the installer: nixos-install runs this hook inside the chroot, overwriting the installer's own
+      # boot.scr with the final system's, so the next boot goes straight into the installed system instead of installing again.
+      ${pkgs.ubootTools}/bin/mkimage -C none -A arm -T script -d "$tmp" "$fw/boot.scr.new"
+      mv "$fw/boot.scr.new" "$fw/boot.scr"
       rm -f "$tmp"
       sync
       if ! ${flashUboot}/bin/opi4pro-flash-uboot --check; then
@@ -610,7 +631,8 @@ in
 {
   imports = [
     "${modulesPath}/profiles/base.nix"
-    "${modulesPath}/installer/sd-card/sd-image.nix"
+    # NOTE: sd-image.nix is deliberately NOT imported here - see the header comment. The installer image imports it; the final
+    # system uses disko for its NVMe root instead.
   ];
 
   hardware = {
@@ -672,49 +694,15 @@ in
 
   nixpkgs.hostPlatform = lib.mkDefault "aarch64-linux";
 
-  sdImage = {
-    # The sd-image module would normally write an extlinux config here. We replace that with our boot.scr, at the path the vendor
-    # U-Boot's distro-boot scan looks for it: /boot/boot.scr on the ext4 root partition (mmc 0:2).
-    populateRootCommands = /* bash */ ''
-      mkdir -p ./files/boot/firmware
-      cp -v ${bootScript} ./files/boot/boot.scr
-    '';
-
-    # The FAT firmware partition (mmc 0:1) holds what boot.scr loads: the raw kernel Image, the wrapped uInitrd, and the DTB.
-    populateFirmwareCommands = /* bash */ ''
-      FWDIR="''${FWDIR:-$(pwd)/firmware}"
-      mkdir -p "$FWDIR"
-      cp -v "${config.boot.kernelPackages.kernel}/Image" "$FWDIR/Image"
-      cp -v ${initrdUImage}/uInitrd "$FWDIR/uInitrd"
-      install -D -m 644 "${config.boot.kernelPackages.kernel}/dtbs/${config.hardware.deviceTree.name}" "$FWDIR/allwinner/sun60i-a733-orangepi-4-pro.dtb"
-    '';
-
-    # Write the bootloader to the raw sectors the BROM and boot0 read from. These offsets are fixed by the hardware/blob contract,
-    # not by us: boot0 at 8 KiB, boot_package at 16400 KiB. (Armbian's write_uboot_platform() uses exactly the same two offsets.)
-    #
-    # RECOVERY: if a bad U-Boot ever leaves the board unbootable, you can restore a known-good bootloader without rebuilding, by
-    # extracting boot0_sdcard.fex and boot_package.fex from /usr/lib/linux-u-boot-*/ inside an official Armbian image and dd'ing
-    # them to the same two offsets on the card.
-    postBuildCommands = /* bash */ ''
-      echo "Flashing locally built Allwinner boot0 and boot_package..."
-      dd if=${ubootOrangePi4Pro}/boot0_sdcard.fex of=$img seek=8 conv=notrunc bs=1k
-      dd if=${ubootOrangePi4Pro}/boot_package.fex of=$img seek=16400 conv=notrunc bs=1k
-    '';
-
-    firmwareSize = 256;
-    # 48 MiB. The FAT partition MUST start after the bootloader region: boot_package.fex is written at 16400 KiB (16.4 MiB) and is
-    # ~1.4 MB. The sd-image default of 8 MiB puts the filesystem directly under it, so the dd above silently corrupts whatever
-    # file happens to live there - which first showed up as a "Bad Data CRC" on the kernel image.
-    firmwarePartitionOffset = 48;
-  };
-
-  # Mounted so the install hook can update the kernel/initrd/DTB on every `nixos-rebuild switch`. nofail keeps a missing or
+  # The ONLY thing mounted from the SD card on the installed system. The install hook updates all four boot artifacts here on
+  # every `nixos-rebuild switch` (and during `nixos-install`, which runs the hook inside the chroot). nofail keeps a missing or
   # damaged FAT partition from blocking multi-user boot (you would still get a shell to fix it from).
   fileSystems."/boot/firmware" = {
     device = "/dev/disk/by-label/FIRMWARE";
     fsType = "vfat";
     options = lib.mkForce [
-      # needs mkForce here, because sd-image.nix sets "noauto"
+      # mkForce because sd-image.nix sets "noauto" in the installer evaluation (which imports this module alongside sd-image);
+      # harmless in the final system, where nothing else defines this mount.
       "nofail"
       "auto"
       "umask=0077"
@@ -730,6 +718,8 @@ in
     opi4proUboot = ubootOrangePi4Pro;
     opi4proInitrdUImage = initrdUImage;
     opi4proFlashUboot = flashUboot;
+    # Consumed by the installer image (setup-opi4pro.nix) to place this system's boot.scr on the FAT partition at build time.
+    opi4proBootScript = bootScript;
   };
 
   environment.systemPackages = [ flashUboot ];
