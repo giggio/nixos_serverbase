@@ -51,7 +51,18 @@ in
       trusted-public-keys = [
         "giggio:gA25EMS+ouiC1xzWOKP68b7ikEfjmXohUT1PZ6aNP5c="
       ];
+      netrc-file = config.sops.templates.attic_netrc.path;
     };
+    extraOptions = ''
+      !include ${config.sops.secrets.nixExtraSecretOptions.path}
+    '';
+  };
+
+  sops.secrets.nixExtraSecretOptions = {
+    sopsFile = ./secrets/nix_extra_options.conf;
+    format = "binary";
+    mode = "0440";
+    group = "users";
   };
 
   boot = {
