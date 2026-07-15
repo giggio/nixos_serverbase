@@ -47,7 +47,7 @@
         in
         lib.mkForce [
           # remove other nic options with lib.mkForce
-          ''-netdev user,id=mynet0,ipv6=off,hostfwd=tcp::8888-:${toString httpPort},hostfwd=tcp::4443-:${toString httpsPort},hostfwd=tcp::2222-:22,"$QEMU_NET_OPTS"''
+          ''-netdev user,id=mynet0,ipv6=off,hostfwd=tcp::8888-:${toString httpPort},hostfwd=tcp::4443-:${toString httpsPort},hostfwd=tcp::4445-:445,hostfwd=tcp::2222-:22,"$QEMU_NET_OPTS"''
           "-device virtio-net-pci,netdev=mynet0,mac=52:54:00:CA:FE:EE"
         ];
       options = [
