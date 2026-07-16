@@ -95,7 +95,6 @@ sops, and home-manager).
           list_machines = serverbase.nixosModules.lib.list_machines { inherit pkgs machines; };
         }
         // serverbase.nixosModules.lib.mkInstallerPackages {
-          flake = self;
           inherit nixosConfigurations machines;
         };
         devShells.default = serverbase.nixosModules.lib.mkDevShell {

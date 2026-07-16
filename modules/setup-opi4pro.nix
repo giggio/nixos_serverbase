@@ -10,9 +10,11 @@
 #      (NIXOS_INSTALL_BOOTLOADER=1 -> boot.loader.external.installHook), which overwrites the installer's own boot.scr on the
 #      FAT partition with the final system's. The next boot lands in the installed system; no install loop is possible.
 #   3. The image is LEAN: unlike the ISO, it does NOT embed the final system's closure (the base image is already ~6 GB and
-#      growing; the SD card is 4 GB). It carries only the flake SOURCE, and nixos-install pulls the pre-built closure from the
-#      attic cache over the network. The final system's closure must therefore be pushed to the cache BEFORE running the
-#      installer - see the comment on the substituters below.
+#      growing; the SD card is 4 GB). It carries only the flake SOURCE - injected into the image's ext4 root by the Makefile
+#      AFTER the build (like the age key), because nixos_serverbase is a git submodule and would otherwise be missing from the
+#      flake's own source tree - and nixos-install pulls the pre-built closure from the attic cache over the network. The final
+#      system's closure must therefore be pushed to the cache BEFORE running the installer - see the comment on the substituters
+#      below.
 #
 # There is no kexec into the installed system (the ISO flow does that): kexec on this vendor kernel is untested territory, and
 # a plain reboot through the (now rewritten) boot chain is exactly the path the installed system will use forever after.
@@ -37,7 +39,6 @@
       # nixosConfigurations, because the installer runs `nixos-install --flake /etc/nixos#<flakeAttr>`.
       flakeAttr,
       isDev,
-      flake,
     }:
     let
       hostName = finalSystem.config.setup.hostName;
@@ -93,12 +94,12 @@
 
               # The installer's root partition carries the flake SOURCE at /etc/nixos - this is what keeps the image small. The
               # heavy lifting (the final system's closure) is fetched from the attic cache by nixos-install at install time.
-              # flake is this very flake's source tree (no .git directory), so the image rebuilds whenever the repo
-              # changes, which is exactly right for an installer.
+              # The source is NOT populated here: nixos_serverbase is a git submodule, so this flake's own source tree omits it.
+              # Instead the Makefile injects the full working tree - outer repo plus submodule, via
+              # `git ls-files --recurse-submodules` - straight into the ext4 root after the build, exactly like the sops age key.
+              # See the Makefile's out/nix/img/opi4pro.img.zst rule.
               sdImage.populateRootCommands = /* bash */ ''
-                mkdir -p ./files/etc/nixos
-                cp -r --no-preserve=mode,ownership ${flake}/. ./files/etc/nixos/
-                chmod -R u+w ./files/etc/nixos
+                echo "Root image files will come from the Makefile later. Nothing to do now."
               '';
 
               sdImage.postBuildCommands = /* bash */ ''

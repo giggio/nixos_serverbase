@@ -85,16 +85,44 @@ $(out_img_dir)/.%.img.zst.stamp: $(nix_deps)
 	nix build .#$*_img --print-build-logs --out-link "$(result_img_dir)/"
 	mkdir -p "$(out_img_dir)"
 	# opi4pro images are UNATTENDED INSTALLERS that decrypt the private cache address with sops (see
-	# modules/setup-opi4pro.nix). The age key that unlocks it must NEVER pass through nix - it would end up world-readable
-	# in the store - so it is injected here, straight into the image's ext4 root (partition 2), AFTER the lean image is
-	# built: decompress -> guestfish upload -> recompress. Every other image keeps the cheap symlink-to-store path.
+	# modules/setup-opi4pro.nix). Two things are injected here, straight into the image's ext4 root (partition 2), AFTER the
+	# lean image is built (decompress -> guestfish -> recompress); every other image keeps the cheap symlink-to-store path:
+	#   1. The age key that unlocks the secrets. It must NEVER pass through nix - it would end up world-readable in the store.
+	#   2. The flake SOURCE at /etc/nixos, which nixos-install installs from. The flake pins its inputs as `git+file:`
+	#      references in flake.lock, so /etc/nixos must be a REAL git tree - both the top-level repo and every submodule need
+	#      their `.git`. We stage the tracked working tree (`git ls-files --recurse-submodules`) and then add the git dirs,
+	#      discovered generically (no hardcoded paths, so this Makefile stays valid standalone or included from any superproject):
+	#      the top-level one via `git rev-parse --git-dir`, and each submodule's via `git submodule foreach --recursive`. These
+	#      are tiny (~6 MB); the multi-GB `out`/artifacts are untracked and never staged, so no `git clean`/`gc` is needed. A
+	#      submodule's `.git` is usually a pointer FILE into the superproject's `.git/modules/...`, which rides along inside the
+	#      top-level `.git` we copied, so the pointers still resolve. The staged tree is packed into a tar with `--owner=0
+	#      --group=0` and `tar-in`'d to /etc/nixos: the installer runs nixos-install as ROOT, and nix's libgit2 refuses a repo
+	#      whose path is not owned by the current user, so the whole tree must land owned by root - which `copy-in` cannot do
+	#      (it preserves the build user's uid) and guestfish has no recursive chown, hence the root-owned tar.
+	#      One fix-up before packing: a superproject flake pins its submodule inputs by the BUILD host's absolute path (e.g.
+	#      `git+file:/home/user/.../nixos_serverbase`), which does not exist on the target. So in the staged flake.nix (if any -
+	#      the submodule alone has none) we rewrite that path - the working tree's top level from `git rev-parse --show-toplevel`
+	#      - to /etc/nixos, where the tree now lives. flake.lock needs no edit: a git+file lock is content-addressed, so nix
+	#      re-locks the input from the new local path to the SAME narHash -> same derivation -> still a cache hit.
 	case "$*" in \
 	  opi4pro*) \
-	    echo "Injecting sops age key into $* installer image..."; \
+	    echo "Injecting sops age key and flake source into $* installer image..."; \
 	    test -f "$(sops_agekey)" || { echo "ERROR: missing $(sops_agekey)" >&2; exit 1; }; \
 	    zstd -d -f -o "$(out_img_dir)/$*.img" "$(result_img_dir)/$*.img.zst"; \
 	    chmod +w "$(out_img_dir)/$*.img"; \
-	    guestfish -a "$(out_img_dir)/$*.img" run : mount /dev/sda2 / : mkdir-p /etc/sops/age : upload "$(sops_agekey)" /etc/sops/age/server.agekey : chmod 0400 /etc/sops/age/server.agekey : sync; \
+	    export staging="$$(mktemp -d)"; \
+	    mkdir -p "$$staging/nixos"; \
+	    git ls-files --recurse-submodules -z | tar --null -T - -cf - | tar -C "$$staging/nixos" -xf -; \
+	    cp -a "$$(git rev-parse --git-dir)" "$$staging/nixos/.git"; \
+	    git submodule foreach --recursive --quiet 'cp -a .git "$$staging/nixos/$$displaypath/.git"'; \
+	    top="$$(git rev-parse --show-toplevel)"; \
+	    if [ -f "$$staging/nixos/flake.nix" ]; then \
+	      esc_top="$${top//./\\.}"; \
+	      sed -i "s#git+file:$$esc_top#git+file:/etc/nixos#g" "$$staging/nixos/flake.nix"; \
+	    fi; \
+	    tar -C "$$staging/nixos" --owner=0 --group=0 -cf "$$staging/nixos.tar" .; \
+	    guestfish -a "$(out_img_dir)/$*.img" run : mount /dev/sda2 / : mkdir-p /etc/sops/age : upload "$(sops_agekey)" /etc/sops/age/server.agekey : chmod 0400 /etc/sops/age/server.agekey : mkdir-p /etc/nixos : tar-in "$$staging/nixos.tar" /etc/nixos : sync; \
+	    rm -rf "$$staging"; \
 	    zstd -f -o "$(out_img_dir)/$*.img.zst" "$(out_img_dir)/$*.img"; \
 	    rm -f "$(out_img_dir)/$*.img"; \
 	    ;; \

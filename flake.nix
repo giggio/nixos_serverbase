@@ -95,7 +95,6 @@
         }
         // self.nixosModules.lib.machine_details { inherit pkgs machines; }
         // self.nixosModules.lib.mkInstallerPackages {
-          flake = self;
           inherit nixosConfigurations machines;
         };
         devShells = self.nixosModules.lib.mkDevShells {
