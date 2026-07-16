@@ -154,6 +154,7 @@
     {
       nixosConfigurations,
       machines,
+      flake,
     }:
     let
       combinations = serverbaseModules.lib.mkNixosMachineCombinations machines;
@@ -213,7 +214,7 @@
                     pkgs = import inputs.nixpkgs { system = "${machine.defaultArch}-linux"; };
                     finalSystem = nixosConfigurations."${configName}";
                     flakeAttr = configName;
-                    inherit isDev;
+                    inherit isDev flake;
                   }
                 else
                   serverbaseModules.lib.mkSdCardImage {

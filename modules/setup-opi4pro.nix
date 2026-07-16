@@ -37,6 +37,7 @@
       # nixosConfigurations, because the installer runs `nixos-install --flake /etc/nixos#<flakeAttr>`.
       flakeAttr,
       isDev,
+      flake,
     }:
     let
       hostName = finalSystem.config.setup.hostName;
@@ -92,11 +93,11 @@
 
               # The installer's root partition carries the flake SOURCE at /etc/nixos - this is what keeps the image small. The
               # heavy lifting (the final system's closure) is fetched from the attic cache by nixos-install at install time.
-              # inputs.self is this very flake's source tree (no .git directory), so the image rebuilds whenever the repo
+              # flake is this very flake's source tree (no .git directory), so the image rebuilds whenever the repo
               # changes, which is exactly right for an installer.
               sdImage.populateRootCommands = /* bash */ ''
                 mkdir -p ./files/etc/nixos
-                cp -r --no-preserve=mode,ownership ${inputs.self}/. ./files/etc/nixos/
+                cp -r --no-preserve=mode,ownership ${flake}/. ./files/etc/nixos/
                 chmod -R u+w ./files/etc/nixos
               '';
 
