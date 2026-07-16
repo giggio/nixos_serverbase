@@ -481,6 +481,34 @@ let
           # 64-bit cell format describing the real 4 GiB (base 0x40000000, size 0x1_00000000). Without this the kernel sees the
           # wrong amount of memory.
           find arch/arm64/boot/dts/allwinner/ -name "*.dts" -o -name "*.dtsi" | xargs perl -0777 -pi -e 's/(memory\@40000000\s*\{[^}]*?reg\s*=\s*)<[^>]+>;/\1<0x0 0x40000000 0x1 0x00000000>;/gs'
+
+          # USB-2 host on the single USB-A port. The sunxi OTG manager (usbc0) is configured as an OTG port
+          # (usb_port_type=0x2) that relies on ID-pin detection (usb_detect_type=0x1). This board has no ID GPIO, so detection
+          # fails at boot ("get id is fail" / "usb detect mode isn't supported") and the USB-2 host controllers ehci0/ohci0
+          # never come up - a USB-2 device on the port is invisible, and only the USB-3 xhci path works. The controllers
+          # themselves are already fully enabled in the board .dts (&ehci0/&ohci0 status="okay" with phy_range + drvvbus); the
+          # ONLY thing missing is the manager committing to host mode.
+          #
+          # Force a fixed host role by rewriting the two live properties in the board's &usbc0 override:
+          #   usb_port_type   0x2 (OTG)    -> 0x1 (host)
+          #   usb_detect_type 0x1 (detect) -> 0x0 (no detection; use the fixed port type)
+          # This is the device-tree equivalent of the verified runtime `echo 1 > .../10.usbc0/otg_role`, which brought up buses
+          # 5 (ehci0) and 6 (ohci0) and let a USB-2 device enumerate. Scoped to the board .dts, so the zero3w board and the
+          # shared .dtsi are untouched. NOTE: there is also a COMMENTED usb_detect_type inside a `#ifdef TYPEC_DP` block just
+          # above the live one - the perl below only rewrites lines that are NOT commented out.
+          board_dts=arch/arm64/boot/dts/allwinner/sun60i-a733-orangepi-4-pro.dts
+          perl -0777 -pi -e '
+            s{(&usbc0\s*\{.*?)^\s*usb_port_type\s*=\s*<0x2>;}{''${1}\tusb_port_type = <0x1>;}sm;
+            s{(&usbc0\s*\{.*?)^(?!\s*//)(\s*)usb_detect_type\s*=\s*<0x1>;}{''${1}''${2}usb_detect_type = <0x0>;}sm;
+          ' "$board_dts"
+
+          # Verify both edits landed (and that we did not accidentally leave the OTG value), so a future vendor-tree refactor
+          # that renames or reformats the node fails the build instead of silently regressing USB-2 host support.
+          if ! grep -qE '^\s*usb_port_type\s*=\s*<0x1>;' "$board_dts" \
+             || ! grep -qE '^\s*usb_detect_type\s*=\s*<0x0>;' "$board_dts"; then
+            echo "FATAL: failed to set usbc0 host mode (usb_port_type=0x1, usb_detect_type=0x0) in $board_dts" >&2
+            exit 1
+          fi
         '';
 
         nativeBuildInputs =
