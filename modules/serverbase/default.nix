@@ -86,6 +86,7 @@ in
       };
 
       systemd = {
+        emergencyAccess = true;
         initrdBin = with pkgs; [
           coreutils
           bashInteractive

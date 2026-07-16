@@ -242,6 +242,7 @@
                   pkgs.systemd
                   pkgs.coreutils
                   pkgs.getent
+                  pkgs.git
                 ];
                 serviceConfig = {
                   Type = "oneshot";
