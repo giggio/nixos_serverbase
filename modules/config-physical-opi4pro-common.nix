@@ -431,6 +431,40 @@ let
   };
 
   # ---------------------------------------------------------------------------------------------------------------------------
+  # Vendor kernel .config, with software-RAID (MD) re-enabled.
+  # ---------------------------------------------------------------------------------------------------------------------------
+  # The Armbian vendor config ships with the whole MD subsystem OFF (`# CONFIG_MD is not set`). That leaves the running kernel
+  # with no /proc/mdstat and no md_mod, so mdadm/boot.swraid cannot assemble the NAS array no matter how they are configured.
+  # Re-enable MD built-in (matching this kernel's monolithic style; the array lives in stage 2 on the NVMe-rooted system, not in
+  # the initrd, and RAID6_PQ — which MD_RAID456 needs — is already =y in the vendor config). MD_RAID456 is the raid5/6 driver.
+  #
+  # This has to be done by rewriting the configfile: linuxManualConfig only applies the `.patch` field of kernelPatches and
+  # ignores their `extraConfig`. We drop each symbol's "is not set" line and append it as =y; `make oldconfig` in the kernel
+  # build then reconciles and pulls in the async_tx helpers that MD_RAID456 selects.
+  kernelRaidConfigSymbols = [
+    "MD"
+    "BLK_DEV_MD"
+    "MD_AUTODETECT"
+    "MD_RAID0"
+    "MD_RAID1"
+    "MD_RAID10"
+    "MD_RAID456"
+  ];
+  vendorKernelConfig =
+    pkgs.runCommand "linux-sun60iw2-vendor-md.config"
+      {
+        base = "${armbianBuild}/config/kernel/linux-sun60iw2-vendor.config";
+        symbols = kernelRaidConfigSymbols;
+      }
+      ''
+        cat "$base" > "$out"
+        for s in $symbols; do
+          sed -i "/^# CONFIG_$s is not set\$/d" "$out"
+          echo "CONFIG_$s=y" >> "$out"
+        done
+      '';
+
+  # ---------------------------------------------------------------------------------------------------------------------------
   # Vendor Linux kernel (aarch64, 6.6.98).
   # ---------------------------------------------------------------------------------------------------------------------------
   orangepiVendorKernel =
@@ -449,7 +483,7 @@ let
 
       # Armbian's kernel config for this board - itself a verbatim copy of Orange Pi's own. Using a full config file (rather
       # than a `defconfig` make target) is what makes this tree build and boot; the in-tree defconfigs do not match the board.
-      configfile = "${armbianBuild}/config/kernel/linux-sun60iw2-vendor.config";
+      configfile = vendorKernelConfig;
       allowImportFromDerivation = true;
 
       # The four device-tree fixups Armbian carries on top of the vendor tree for this specific board: correct model string,
