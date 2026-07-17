@@ -431,17 +431,24 @@ let
   };
 
   # ---------------------------------------------------------------------------------------------------------------------------
-  # Vendor kernel .config, with software-RAID (MD) re-enabled.
+  # Vendor kernel .config, with software-RAID (MD) and the NFS server (NFSD) re-enabled.
   # ---------------------------------------------------------------------------------------------------------------------------
-  # The Armbian vendor config ships with the whole MD subsystem OFF (`# CONFIG_MD is not set`). That leaves the running kernel
-  # with no /proc/mdstat and no md_mod, so mdadm/boot.swraid cannot assemble the NAS array no matter how they are configured.
-  # Re-enable MD built-in (matching this kernel's monolithic style; the array lives in stage 2 on the NVMe-rooted system, not in
-  # the initrd, and RAID6_PQ — which MD_RAID456 needs — is already =y in the vendor config). MD_RAID456 is the raid5/6 driver.
+  # The Armbian vendor config ships with two whole subsystems OFF that the NAS needs:
+  #   * MD (`# CONFIG_MD is not set`) — leaves the running kernel with no /proc/mdstat and no md_mod, so mdadm/boot.swraid
+  #     cannot assemble the NAS array no matter how they are configured. MD_RAID456 is the raid5/6 driver; RAID6_PQ (which it
+  #     needs) is already =y in the vendor config, and the async_tx helpers it selects are pulled in by `make oldconfig`.
+  #   * NFSD (`# CONFIG_NFSD is not set`) — the vendor config enables only the NFS *client* (CONFIG_NFS_FS=m). With NFSD off the
+  #     kernel never registers the `nfsd` pseudo-filesystem, so `proc-fs-nfsd.mount` fails ("unknown filesystem type 'nfsd'")
+  #     and nfs-server.service cannot start. NFSD_V4 gives the NFSv4-only server this NAS exports; oldconfig pulls in the
+  #     SUNRPC/GSS deps it selects.
+  # We re-enable both built-in, matching this kernel's monolithic style (the array lives in stage 2 on the NVMe-rooted system,
+  # not in the initrd).
   #
   # This has to be done by rewriting the configfile: linuxManualConfig only applies the `.patch` field of kernelPatches and
   # ignores their `extraConfig`. We drop each symbol's "is not set" line and append it as =y; `make oldconfig` in the kernel
-  # build then reconciles and pulls in the async_tx helpers that MD_RAID456 selects.
-  kernelRaidConfigSymbols = [
+  # build then reconciles and pulls in whatever each symbol selects. Sub-options that do not appear in the vendor config at all
+  # (e.g. NFSD_V4, hidden while NFSD is off) simply have nothing to drop and are appended as =y.
+  kernelExtraEnabledSymbols = [
     "MD"
     "BLK_DEV_MD"
     "MD_AUTODETECT"
@@ -449,12 +456,14 @@ let
     "MD_RAID1"
     "MD_RAID10"
     "MD_RAID456"
+    "NFSD"
+    "NFSD_V4"
   ];
   vendorKernelConfig =
-    pkgs.runCommand "linux-sun60iw2-vendor-md.config"
+    pkgs.runCommand "linux-sun60iw2-vendor-md-nfsd.config"
       {
         base = "${armbianBuild}/config/kernel/linux-sun60iw2-vendor.config";
-        symbols = kernelRaidConfigSymbols;
+        symbols = kernelExtraEnabledSymbols;
       }
       ''
         cat "$base" > "$out"
