@@ -51,6 +51,20 @@
                       example = literalExpression "[ 1234 5678 ]";
                     };
                   };
+                  subnetOctet = mkOption {
+                    type = types.ints.between 32 254;
+                    example = 41;
+                    description = ''
+                      Second octet N of this daemon's bridge network 172.N.0.0/16; the
+                      bridge gets 172.N.0.1 as its gateway. Must be unique across all
+                      daemons (enforced by assertion) and must stay stable: dockerd
+                      persists the subnet it first derived from the bridge, so changing
+                      this value forces a libnetwork store reset for the daemon (done
+                      automatically at start), which drops that daemon's docker networks.
+                      Values 16..31 are disallowed as they fall inside 172.16.0.0/12,
+                      which the firewall treats as LAN.
+                    '';
+                  };
                   interfaceName = mkOption {
                     type = types.str;
                     readOnly = true;
@@ -86,26 +100,20 @@
       cfg = config.virtualisation.docker;
       settingsFormatToml = pkgs.formats.toml { };
       settingsFormatJson = pkgs.formats.json { };
-      daemonsWithIndex =
-        lib.attrsets.attrValues
-          (lib.foldlAttrs
-            (acc: name: value: {
-              counter = acc.counter + 1;
-              result = acc.result // {
-                ${name} = value // {
-                  index = acc.counter;
-                };
-              };
-            })
-            {
-              counter = 0;
-              result = { };
-            }
-            config.setup.docker.extra-daemons
-          ).result;
+      daemons = lib.attrsets.attrValues config.setup.docker.extra-daemons;
     in
     {
       virtualisation.docker.enable = true;
+      assertions = [
+        {
+          assertion =
+            let
+              octets = builtins.map (daemon: daemon.network.subnetOctet) daemons;
+            in
+            (builtins.length (lib.lists.unique octets)) == (builtins.length octets);
+          message = "setup.docker.extra-daemons: each daemon's network.subnetOctet must be unique, otherwise the dockerd bridges would share a subnet and collide.";
+        }
+      ];
       environment.etc = lib.foldr (a: b: a // b) { } (
         builtins.map (
           daemon:
@@ -132,7 +140,7 @@
               )
             );
           }
-        ) daemonsWithIndex
+        ) daemons
       );
       systemd.services = lib.foldr (a: b: a // b) { } (
         builtins.map (
@@ -166,6 +174,26 @@
               }
               // daemon.configuration
             );
+            subnet = "172.${toString daemon.network.subnetOctet}.0.0/16";
+            # dockerd derives (and then persists) the default bridge subnet from the
+            # bridge interface's IP. If the configured subnet changes, the persisted
+            # value would keep winning across restarts and reboots, so wipe the
+            # libnetwork store when it no longer matches and let dockerd re-derive it.
+            resetLibnetworkStore = pkgs.writeShellApplication {
+              name = "docker${suffix}-reset-libnetwork-store";
+              runtimeInputs = [ pkgs.coreutils ];
+              text = ''
+                stamp="${data-root}/.nixos-bridge-subnet"
+                want="${subnet}"
+                db="${data-root}/network/files/local-kv.db"
+                if [ ! -f "$stamp" ] || [ "$(cat "$stamp")" != "$want" ]; then
+                  echo "docker${suffix}: bridge subnet is now $want; resetting libnetwork store so dockerd re-derives it" >&2
+                  rm -f "$db"
+                  mkdir -p "$(dirname "$stamp")"
+                  printf '%s' "$want" > "$stamp"
+                fi
+              '';
+            };
           in
           {
             "${dockerService}" = {
@@ -182,6 +210,7 @@
               ];
               serviceConfig = {
                 Type = "notify";
+                ExecStartPre = [ (lib.getExe resetLibnetworkStore) ];
                 ExecStart = [
                   "${cfg.package}/bin/dockerd --config-file=${daemonSettingsFile} ${cfg.extraOptions}"
                 ];
@@ -257,7 +286,7 @@
             };
 
           }
-        ) daemonsWithIndex
+        ) daemons
       );
 
       systemd.sockets = lib.foldr (a: b: a // b) { } (
@@ -291,7 +320,7 @@
               };
             };
           }
-        ) daemonsWithIndex
+        ) daemons
       );
 
       # New interface and bridge are required, with NAT, so network works as expected
@@ -301,7 +330,7 @@
             networkConfig.ConfigureWithoutCarrier = "yes";
             linkConfig.RequiredForOnline = "no";
           };
-        }) daemonsWithIndex
+        }) daemons
       );
 
       networking = {
@@ -310,25 +339,25 @@
             "${daemon.network.interfaceName}" = {
               interfaces = [ ];
             };
-          }) daemonsWithIndex
+          }) daemons
         );
         interfaces = lib.foldr (a: b: a // b) { } (
           builtins.map (daemon: {
             "${daemon.network.interfaceName}" = {
               ipv4.addresses = [
                 {
-                  address = "172.${toString (39 + daemon.index)}.0.1";
+                  address = "172.${toString daemon.network.subnetOctet}.0.1";
                   prefixLength = 16;
                 }
               ];
               useDHCP = false;
             };
-          }) daemonsWithIndex
+          }) daemons
         );
         nat = {
           enable = true;
           externalInterface = "eth0";
-          internalInterfaces = builtins.map (daemon: daemon.network.interfaceName) daemonsWithIndex;
+          internalInterfaces = builtins.map (daemon: daemon.network.interfaceName) daemons;
         };
         firewall =
           let
@@ -348,7 +377,7 @@
                   # Disabling ICC (inter container communication) for docker daemon ${daemon.name} containers
                   iptables -A FORWARD -i ${dockerHostNetInterfaceName} -o ${dockerHostNetInterfaceName} -j DROP
                 ''
-              ) (builtins.filter (daemon: daemon.network.disableICC.enable) daemonsWithIndex)
+              ) (builtins.filter (daemon: daemon.network.disableICC.enable) daemons)
             );
           in
           {

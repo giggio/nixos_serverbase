@@ -6,7 +6,10 @@
     kata = {
       kata-runtime.enable = true;
       network.disableICC.enable = true;
+      network.subnetOctet = 39;
     };
-    other = { };
+    other = {
+      network.subnetOctet = 40;
+    };
   };
 }

@@ -149,7 +149,7 @@ $(iso_files): $(out_iso_dir)/%.iso: $(out_iso_dir)/.%.iso.stamp;
 
 # See the comment above about the .stamp file
 $(out_system_dir)/.%.stamp: $(nix_deps)
-	nix build .\#nixosConfigurations.$*.config.system.build.toplevel --print-build-logs --out-link "$(result_system_dir)/$*"
+	nix build .#nixosConfigurations.$*.config.system.build.toplevel --print-build-logs --out-link "$(result_system_dir)/$*"
 	mkdir -p "$(out_system_dir)"
 	rm -f "$(out_system_dir)/$*"
 	ln -sf "$$(realpath "$(result_system_dir)/$*")" "$(out_system_dir)/$*"
