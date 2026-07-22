@@ -35,7 +35,7 @@ in
     (
       _: super:
       let
-        pkgs = fenix.inputs.nixpkgs.legacyPackages.${super.system};
+        pkgs = fenix.inputs.nixpkgs.legacyPackages.${super.stdenv.hostPlatform.system};
       in
       fenix.overlays.default pkgs pkgs
     ) # rust toolchain
