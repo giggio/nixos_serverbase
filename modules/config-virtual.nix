@@ -81,6 +81,8 @@
       builtins.traceVerbose "VM disk size: ${toString diskSize}" diskSize;
   };
 
+  security.sudo.wheelNeedsPassword = false; # VM-only: allow non-interactive sudo (e.g. over ssh) for test/debugging convenience
+
   boot = {
     loader = {
       # disables boot loaders, are vms are using the nix store from the host
