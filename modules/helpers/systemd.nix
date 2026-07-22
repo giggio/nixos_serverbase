@@ -17,7 +17,7 @@
       mounts:
       lib.strings.concatStrings (
         lib.map (mount: ''
-          if ! grep -q ${mount} /proc/mounts; then
+          if ! grep -q ${mount} /proc/self/mounts; then
             echo "The mount at ${mount} is not mounted."
             exit 1
           fi
