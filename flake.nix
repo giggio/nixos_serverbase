@@ -88,7 +88,7 @@
       {
         formatter = pkgs.nixfmt-tree;
         checks = self.nixosModules.lib.mkChecks {
-          inherit pkgs machines;
+          inherit pkgs machines nixosConfigurations;
           tests = import ./tests;
         };
         packages = {

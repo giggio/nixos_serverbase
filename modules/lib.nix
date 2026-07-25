@@ -37,18 +37,24 @@
     builtins.mapAttrs (_: module: lib.nixosSystem module) nixosConfigurations;
 
   # Builds the flake `checks` from a set of test files. Each test file is a function
-  #   { pkgs, inputs, testNodes, ... }: <nixosTest definition>
+  #   { pkgs, lib, inputs, machines, testNodes, ... }: <nixosTest definition>
   # where `testNodes.base` and `testNodes.machine <name>` are NixOS modules that reproduce, respectively, the plain serverbase
-  # configuration and a real machine from the flake's machine list. Building nodes from the actual machine definition is the
-  # point: a service test then exercises the same modules the machine really boots with, instead of a hand-written copy that
-  # drifts.
+  # configuration and a real machine from the flake's machine list, and `testNodes.vmConfigurationOf <name>` is the evaluated
+  # configuration of the VM that machine is driven as. Building nodes from the actual machine definition is the point: a
+  # service test then exercises the same modules the machine really boots with, instead of a hand-written copy that drifts.
   mkChecks =
     {
       pkgs,
       machines,
+      nixosConfigurations,
       tests,
     }:
     let
+      findMachine =
+        name:
+        lib.lists.findFirst (
+          m: m.name == name
+        ) (throw "mkChecks: there is no machine named '${name}' in the flake's machine list") machines;
       # The tests must not depend on the caller's nixpkgs configuration, so rebuild pkgs with a known-empty config.
       system = pkgs.stdenv.hostPlatform.system;
       testPkgs = import inputs.nixpkgs {
@@ -81,9 +87,7 @@
       machine =
         name:
         let
-          theMachine = lib.lists.findFirst (
-            m: m.name == name
-          ) (throw "mkChecks: there is no machine named '${name}' in the flake's machine list") machines;
+          theMachine = findMachine name;
         in
         {
           imports = [
@@ -93,10 +97,35 @@
           ]
           ++ theMachine.modules;
         };
-      testNodes = { inherit base machine; };
+      # The configuration of the VM this machine is actually driven as on this system - the one the Makefile builds as
+      # `<machine><host arch>vm`. A test node approximates the board the same way that VM does (see the kernel choice in
+      # config-pi4.nix and config-opi4pro.nix), so a test can hold itself to what the VM resolved to rather than
+      # restating it and letting the two drift apart.
+      vmConfigurationOf =
+        name:
+        nixosConfigurations.${
+          serverbaseModules.lib.mkNixosModuleName {
+            machine = findMachine name;
+            isDev = true;
+            isVM = true;
+            inherit system;
+          }
+        };
+      testNodes = { inherit base machine vmConfigurationOf; };
     in
     builtins.mapAttrs (
-      _: test: pkgs.testers.nixosTest (import test { inherit pkgs inputs testNodes; })
+      _: test:
+      pkgs.testers.nixosTest (
+        import test {
+          inherit
+            pkgs
+            lib
+            inputs
+            machines
+            testNodes
+            ;
+        }
+      )
     ) tests;
 
   mkNixosMachineCombinations =
