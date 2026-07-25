@@ -22,7 +22,7 @@
           description = "Gathers info from systemd and publishes it as YAML configuration in the Traefik format";
           wantedBy = [ "multi-user.target" ];
           unitConfig = helpers.systemd.notifyUnitConfig;
-          serviceConfig = helpers.systemd.restartServiceConfig // {
+          serviceConfig = (helpers.systemd.restartServiceConfig config) // {
             ExecStart = "${pkgs.systemd_traefik_configuration_provider}/bin/systemd_traefik_configuration_provider --log-hide-date";
             Group = [ "traefik" ];
           };

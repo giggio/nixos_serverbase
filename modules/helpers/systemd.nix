@@ -7,12 +7,20 @@
     infiniteRetriesUnitConfig = {
       StartLimitIntervalSec = "0"; # Allow infinite retries
     };
-    restartServiceConfig = {
-      Restart = lib.mkForce "always";
-      RestartMaxDelaySec = lib.mkForce "10m";
-      RestartSec = lib.mkForce 20;
-      RestartSteps = lib.mkForce 3;
-    };
+    # Takes the machine's `config` because the policy depends on the environment: restarting forever is what keeps a
+    # service alive on a real server, but in a test it only keeps a genuine failure out of `systemctl --failed` for as
+    # long as the test runs, so a test build fails fast and visibly instead.
+    restartServiceConfig =
+      config:
+      if config.setup.isTest then
+        { Restart = lib.mkForce "no"; }
+      else
+        {
+          Restart = lib.mkForce "always";
+          RestartMaxDelaySec = lib.mkForce "10m";
+          RestartSec = lib.mkForce 20;
+          RestartSteps = lib.mkForce 3;
+        };
     checkMountScript =
       mounts:
       lib.strings.concatStrings (
