@@ -317,18 +317,110 @@ create_and_start_machines := $(shell for x in $$(echo "$(machines)" | sed 's/ /\
 ## Create, starts and connect to a new VM
 $(create_and_start_machines): create_and_start_%: create_% start_%
 
+# Reusable preamble shared by the VM start recipes: announce the VM, fail if it does not exist
+# or if another VM is already running, and clear any stale serial socket. Relies on the target
+# specific $(vm_name)/$(vm_dir) variables and the $* stem, so it is only valid in a start_% recipe.
+define vm_start_preamble
+@echo -e "VM is \e[32m$(vm_name)\e[0m (at \e[32m$(vm_dir)\e[0m)"
+if [ "$*" == "$(vm_name)" ]; then echo "No VMs found" && exit 1; fi
+if ps | grep [q]emu &>/dev/null; then echo "There is already a VM running" && exit 1; fi
+rm -f /tmp/$(vm_name).sock
+endef
+
 start_machines := $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'start_%s ' "$$x"; done)
 start_%: vm_name=$*$(call vm_count,$*)
 start_%: vm_dir=$(VMS_DIR)/$(vm_name)
-## Start and connects the last existing VM
+## Start and connects the last existing VM (holds the terminal on the serial console, needs zellij)
 $(start_machines): start_%:
-	@echo -e "VM is \e[32m$(vm_name)\e[0m (at \e[32m$(vm_dir)\e[0m)"
-	if [ "$*" == "$(vm_name)" ]; then echo "No VMs found" && exit 1; fi
-	if ps | grep [q]emu &>/dev/null; then echo "There is already a VM running" && exit 1; fi
-	rm -f /tmp/$(vm_name).sock
+	$(vm_start_preamble)
 	zellij run --name $(vm_name) --close-on-exit --floating -y0 -x80% --height=20% -- env PATH="$$PATH" "$(vm_dir)/run-$*-vm"
 	zellij action toggle-floating-panes
 	$(MAKE) connect_$*
+
+start_detached_machines := $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'start_detached_%s ' "$$x"; done)
+start_detached_%: vm_name=$*$(call vm_count,$*)
+start_detached_%: vm_dir=$(VMS_DIR)/$(vm_name)
+start_detached_%: monitor_sock=/tmp/$(vm_name)-monitor.sock
+## Start the last existing VM detached: no serial console, no TTY, no zellij, returns immediately.
+## The qemu monitor is put on a unix socket (freeing stdio) so stop_% can power it down; connect over ssh (vm.localhost) or with connect_% for the serial console.
+$(start_detached_machines): start_detached_%:
+	$(vm_start_preamble)
+	rm -f $(monitor_sock)
+	setsid --fork env PATH="$$PATH" QEMU_OPTS='-monitor unix:$(monitor_sock),server,nowait' "$(vm_dir)/run-$*-vm" </dev/null >"$(vm_dir)/$(vm_name).log" 2>&1
+	@echo -e "VM \e[32m$(vm_name)\e[0m started detached."
+	@echo "  wait for boot : make wait_$* (dumps the console log if it never comes up)"
+	@echo "  console log   : $(vm_dir)/console.log (read with: make console_$*)"
+	@echo "  serial socket : /tmp/$(vm_name).sock (attach with: make connect_$*)"
+	@echo "  qemu monitor  : $(monitor_sock) (stop with: make stop_$*)"
+	@echo "  qemu stderr   : $(vm_dir)/$(vm_name).log"
+	@echo "  ssh           : ssh vm.localhost (host port 2222 -> guest 22)"
+
+stop_machines := $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'stop_%s ' "$$x"; done)
+stop_%: vm_name=$*$(call vm_count,$*)
+stop_%: vm_dir=$(VMS_DIR)/$(vm_name)
+stop_%: monitor_sock=/tmp/$(vm_name)-monitor.sock
+stop_%: serial_sock=/tmp/$(vm_name).sock
+## Stop the last existing VM without removing it (graceful ACPI powerdown through the qemu monitor)
+# qemu's pid is resolved from the process bound to the serial socket (ss), never from a command-line
+# match: the recipe's own shell holds these socket paths in its argv, so pgrep/pkill -f would match
+# itself. With a concrete pid, kill -0 gives an unambiguous liveness check.
+$(stop_machines): stop_%:
+	if [ "$*" == "$(vm_name)" ]; then echo "no VMs found" && exit 1; fi
+	pid=$$(ss -xlnp 2>/dev/null | grep -F "$(serial_sock)" | grep -oP 'pid=\K[0-9]+' | head -1); \
+	if [ -z "$$pid" ]; then echo "VM $(vm_name) is not running" && exit 0; fi; \
+	if [ -S "$(monitor_sock)" ]; then \
+	  echo -e "Sending ACPI powerdown to \e[32m$(vm_name)\e[0m (qemu pid $$pid)..."; \
+	  echo system_powerdown | socat - UNIX-CONNECT:"$(monitor_sock)" >/dev/null || true; \
+	else \
+	  echo "No monitor socket for $(vm_name); terminating qemu (pid $$pid)..."; \
+	  kill "$$pid" || true; \
+	fi; \
+	printf "Waiting for VM to power off..."; \
+	for i in $$(seq 1 60); do if kill -0 "$$pid" 2>/dev/null; then printf '.'; sleep 1; else echo " done"; break; fi; done; \
+	if kill -0 "$$pid" 2>/dev/null; then echo " timeout, killing pid $$pid..."; kill -9 "$$pid" || true; fi
+	rm -f "$(monitor_sock)"
+
+# Readiness/diagnostics helpers, meant for unattended use (CI, agents) alongside start_detached_%.
+# ssh options are spelled out instead of relying on a host ssh config entry, so this works on any
+# machine: VM host keys change on every rebuild, hence no host key checking against localhost.
+VM_WAIT_TIMEOUT ?= 180
+CONSOLE_LINES ?= +1
+# The console log is raw terminal traffic: CRs, colour codes and the cursor-position/OSC chatter
+# systemd emits. Strip it for display only - the file on disk stays byte for byte what the VM sent.
+strip_ansi := tr -d '\r' | sed -E -e 's/\x1b\][^\x07\x1b]*(\x07|\x1b\\)//g' -e 's/\x1b\[[0-9;:?!]*[ -\/]*[@-~]//g' -e 's/\x1b[=>][0-9]*[a-zA-Z]?//g' -e 's/\x1b[PX^_][^\x1b]*(\x1b\\)?//g'
+vm_ssh_port := 2222
+vm_ssh_opts := -p $(vm_ssh_port) -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes -o ConnectTimeout=3 -o LogLevel=ERROR
+
+wait_machines := $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'wait_%s ' "$$x"; done)
+wait_%: vm_name=$*$(call vm_count,$*)
+wait_%: vm_dir=$(VMS_DIR)/$(vm_name)
+wait_%: console_log=$(vm_dir)/console.log
+## Wait until the last existing VM answers ssh (VM_WAIT_TIMEOUT seconds, default 180).
+## On timeout it dumps the tail of the serial console log, so a VM that fails to boot reports why instead of just hanging.
+$(wait_machines): wait_%:
+	@if [ "$*" == "$(vm_name)" ]; then echo "no VMs found" && exit 1; fi; \
+	printf "Waiting for \e[32m$(vm_name)\e[0m to answer ssh on port $(vm_ssh_port)..."; \
+	deadline=$$(( $$(date +%s) + $(VM_WAIT_TIMEOUT) )); \
+	while [ $$(date +%s) -lt $$deadline ]; do \
+	  if ssh $(vm_ssh_opts) 127.0.0.1 true 2>/dev/null; then echo -e " \e[32mready\e[0m"; exit 0; fi; \
+	  printf '.'; sleep 2; \
+	done; \
+	echo -e " \e[31mTIMEOUT\e[0m after $(VM_WAIT_TIMEOUT)s"; \
+	echo "--- last 40 lines of $(console_log) ---"; \
+	tail -n 40 "$(console_log)" 2>/dev/null | $(strip_ansi) || echo "(no console log found)"; \
+	echo "--- end of console log ---"; \
+	exit 1
+
+console_machines := $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'console_%s ' "$$x"; done)
+console_%: vm_name=$*$(call vm_count,$*)
+console_%: vm_dir=$(VMS_DIR)/$(vm_name)
+console_%: console_log=$(vm_dir)/console.log
+## Print the serial console log of the last existing VM (whole boot log; CONSOLE_LINES=40 for just the tail).
+## Works on a running, a stopped, or a never-booted VM - unlike connect_%, it needs no TTY and does not attach.
+$(console_machines): console_%:
+	@if [ "$*" == "$(vm_name)" ]; then echo "no VMs found" && exit 1; fi; \
+	if ! [ -f "$(console_log)" ]; then echo "no console log at $(console_log) (VM never started, or was created before console logging existed)" && exit 1; fi; \
+	tail -n $(CONSOLE_LINES) "$(console_log)" | $(strip_ansi)
 
 connect_machines := $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'connect_%s ' "$$x"; done)
 connect_%: vm_name=$*$(call vm_count,$*)

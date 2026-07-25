@@ -52,7 +52,13 @@
         ];
       options = [
         "-enable-kvm"
-        "-serial unix:/tmp/$VM_NAME.sock,server,nowait"
+        # The serial console is a unix socket (connect with socat) AND is mirrored to
+        # $VM_DIR/console.log. The logfile is what makes a detached VM debuggable: the chardev logs
+        # everything from the very first kernel line, whether or not a client is attached, so a VM
+        # that panics before sshd comes up still leaves a full boot log on disk. The legacy
+        # `-serial unix:...` shorthand cannot express logfile=, hence the explicit chardev.
+        "-chardev socket,id=serialsock,path=/tmp/$VM_NAME.sock,server=on,wait=off,logfile=$VM_DIR/console.log,logappend=off"
+        "-serial chardev:serialsock"
       ];
       drives = lib.mkMerge [
         [
