@@ -188,7 +188,6 @@
     description = "Giovanni Bassi";
     group = "users";
     extraGroups = [
-      "networkmanager"
       "wheel"
       "docker"
     ];

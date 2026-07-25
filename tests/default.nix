@@ -1,6 +1,8 @@
 {
   boot-test = ./boot.nix;
   base-packages = ./base-packages.nix;
+  base-users-ssh = ./base-users-ssh.nix;
+  base-networking = ./base-networking.nix;
   clone-config = ./clone-config.nix;
   machines-boot = ./machines-boot.nix;
   helpers = ./helpers.nix;
