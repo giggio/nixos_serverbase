@@ -7,16 +7,23 @@
 let
   myModules = {
     hardware =
-
+      # Every hardware module exposes the same variants: `physical` for the real board, `virtual`/`virtualboot` for the qemu
+      # VMs built by the Makefile, and `test` for nixosTest nodes. `test` deliberately carries only the machine-identity
+      # modules - the nixosTest driver builds and boots the VM itself, so importing config-virtual.nix (and through it
+      # qemu-vm.nix) would fight it, and config-physical.nix would drag in disko and the real bootloader.
       {
         gmktec =
           {
             physical ? [ ],
             virtual ? [ ],
             virtualboot ? [ ],
+            test ? [ ],
             ...
           }:
           {
+            test = {
+              imports = [ ./config-gmktec.nix ] ++ test;
+            };
             physical = {
               imports = [
                 ./config-physical.nix
@@ -46,9 +53,13 @@ let
           {
             physical ? [ ],
             virtual ? [ ],
+            test ? [ ],
             ...
           }:
           {
+            test = {
+              imports = [ ./config-pi4.nix ] ++ test;
+            };
             physical = {
               imports = [
                 ./config-physical.nix
@@ -69,9 +80,13 @@ let
           {
             physical ? [ ],
             virtual ? [ ],
+            test ? [ ],
             ...
           }:
           {
+            test = {
+              imports = [ ./config-opi4pro.nix ] ++ test;
+            };
             physical = {
               imports = [
                 ./config-physical.nix

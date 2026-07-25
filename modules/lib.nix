@@ -21,8 +21,10 @@
                 in
                 {
                   "${machine.name}" = nixosConfigurations."${machine.name}${arch}";
-                  "${machine.name}vmboot" = nixosConfigurations."${machine.name}${arch}vmboot";
                   "${machine.name}dev" = nixosConfigurations."${machine.name}dev${arch}";
+                }
+                // lib.attrsets.optionalAttrs machine.supportsIso {
+                  "${machine.name}vmboot" = nixosConfigurations."${machine.name}${arch}vmboot";
                   "${machine.name}devvmboot" = nixosConfigurations."${machine.name}dev${arch}vmboot";
                 }
               )
@@ -34,13 +36,76 @@
     in
     builtins.mapAttrs (_: module: lib.nixosSystem module) nixosConfigurations;
 
+  # Builds the flake `checks` from a set of test files. Each test file is a function
+  #   { pkgs, inputs, testNodes, ... }: <nixosTest definition>
+  # where `testNodes.base` and `testNodes.machine <name>` are NixOS modules that reproduce, respectively, the plain serverbase
+  # configuration and a real machine from the flake's machine list. Building nodes from the actual machine definition is the
+  # point: a service test then exercises the same modules the machine really boots with, instead of a hand-written copy that
+  # drifts.
+  mkChecks =
+    {
+      pkgs,
+      machines,
+      tests,
+    }:
+    let
+      # The tests must not depend on the caller's nixpkgs configuration, so rebuild pkgs with a known-empty config.
+      system = pkgs.stdenv.hostPlatform.system;
+      testPkgs = import inputs.nixpkgs {
+        inherit system;
+        config.allowUnfree = false;
+      };
+      base =
+        { lib, ... }:
+        {
+          imports = serverbaseModules.default;
+          _module.args = {
+            inherit inputs;
+            helpers = import ./helpers { inherit lib; };
+            pkgs-unstable = inputs.nixpkgs-unstable.legacyPackages.${system};
+          };
+          nixpkgs.pkgs = lib.mkForce testPkgs;
+          nixpkgs.config = lib.mkForce { };
+          setup = {
+            environment = "test";
+            # there is no network in the test sandbox, so the config clone must not try to authenticate
+            nixosConfig.useCredentials = false;
+          };
+        };
+      machine =
+        name:
+        let
+          theMachine = lib.lists.findFirst (
+            m: m.name == name
+          ) (throw "mkChecks: there is no machine named '${name}' in the flake's machine list") machines;
+        in
+        {
+          imports = [
+            base
+            theMachine.hardwareModule.test
+            { setup.hostName = name; }
+          ]
+          ++ theMachine.modules;
+        };
+      testNodes = { inherit base machine; };
+    in
+    builtins.mapAttrs (
+      _: test: pkgs.testers.nixosTest (import test { inherit pkgs inputs testNodes; })
+    ) tests;
+
   mkNixosMachineCombinations =
     machines:
     let
       combinations =
         builtins.filter
-          # only build if architecture matches or it is a vm
-          (combination: (combination.isVM || combination.machine.defaultArch == combination.system))
+          (
+            combination:
+            # only build if architecture matches or it is a vm
+            (combination.isVM || combination.machine.defaultArch == combination.system)
+            # the vmboot variant only exists to boot an ISO installation inside a VM (see mkIsoPackage), so only machines that
+            # produce an ISO define hardwareModule.virtualboot
+            && (!combination.isVMBoot || combination.machine.supportsIso)
+          )
           (
             lib.lists.flatten (
               map (

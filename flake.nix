@@ -87,8 +87,9 @@
       in
       {
         formatter = pkgs.nixfmt-tree;
-        checks = {
-          boot-test = pkgs.testers.nixosTest (import ./tests/default.nix { inherit pkgs inputs; });
+        checks = self.nixosModules.lib.mkChecks {
+          inherit pkgs machines;
+          tests = import ./tests;
         };
         packages = {
           list_machines = self.nixosModules.lib.list_machines { inherit pkgs machines; };
