@@ -159,12 +159,14 @@ pkgs.writeShellApplication {
         echo "Symlinking done."
       fi
       if ! [ -z "$private_git_origin" ]; then
-        cd "$destination_dir"
         echo "Switching origin to $private_git_origin..."
         if $dry_run; then
+          # the cd stays inside this branch: on a dry run the destination was never cloned, so entering it would fail
+          echo -e "\e[32mWould run:\e[34m cd $destination_dir\e[0m"
           echo -e "\e[32mWould run:\e[34m git remote set-url origin $private_git_origin\e[0m"
           echo -e "\e[32mWould run:\e[34m git submodule sync\e[0m"
         else
+          cd "$destination_dir"
           git remote set-url origin "$private_git_origin"
           git submodule sync
         fi

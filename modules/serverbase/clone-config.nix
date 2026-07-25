@@ -8,6 +8,17 @@
 let
   clone_script = import ./clone-script.nix { inherit pkgs; };
   home = "/home/${config.setup.username}";
+  # Retrying is what lets the clone survive a server that boots before its network is up. A test sandbox has nothing to
+  # wait for, and retrying for ten minutes there would only keep a genuine failure out of `systemctl --failed` for as
+  # long as the test runs, so in a test the unit fails immediately and visibly instead.
+  retryServiceConfig =
+    if config.setup.isTest then
+      { Restart = "no"; }
+    else
+      {
+        Restart = "on-failure";
+        RestartSec = 30;
+      };
 in
 {
   options.setup = with lib; {
@@ -93,6 +104,7 @@ in
                 "git@codeberg.org:${config.setup.vimFiles.repo}.git";
           in
           {
+            enable = config.setup.vimFiles.enable;
             description = "Clone vimfiles into ~/.vim if missing";
             wantedBy = [ "multi-user.target" ];
             path = [ pkgs.coreutils ];
@@ -108,9 +120,8 @@ in
 
             serviceConfig = {
               Type = "oneshot";
-              Restart = "on-failure";
-              RestartSec = 30;
-            };
+            }
+            // retryServiceConfig;
 
             script = ''
               echo "Cloning vimfiles into ${clone_dir} using repo ${repoUrl}"
@@ -120,7 +131,12 @@ in
               echo "Symlink dir is ${toString config.setup.vimFiles.symlinkDir})"
               echo "Changing ownership to ${config.setup.username}"
               ${clone_script}/bin/clone "${toString repoUrl}" "${clone_dir}" \
-              ${if config.setup.vimFiles.symlinkDir != null then ''--symlink "${home}/.config/nvim"'' else ""} \
+              ${
+                if config.setup.vimFiles.symlinkDir != null then
+                  ''--symlink "${config.setup.vimFiles.symlinkDir}"''
+                else
+                  ""
+              } \
               ${
                 if config.setup.vimFiles.usePrivateRepo then ''--private-git-origin "${privateRepoUrl}"'' else ""
               } \
@@ -149,6 +165,7 @@ in
             '';
           in
           {
+            enable = config.setup.nixosConfig.enable;
             description = "Clone NixOS config ~/.config/nixos if missing";
             wantedBy = [ "multi-user.target" ];
             path = [ pkgs.coreutils ];
@@ -164,9 +181,8 @@ in
 
             serviceConfig = {
               Type = "oneshot";
-              Restart = "on-failure";
-              RestartSec = 30;
-            };
+            }
+            // retryServiceConfig;
             script = ''
               echo "Cloning nixosConfig into ${clone_dir} using repo ${repoUrl}"
               echo "Private repo is ${privateRepoUrl} (using private repo: ${

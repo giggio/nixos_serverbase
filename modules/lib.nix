@@ -68,8 +68,14 @@
           nixpkgs.config = lib.mkForce { };
           setup = {
             environment = "test";
-            # there is no network in the test sandbox, so the config clone must not try to authenticate
-            nixosConfig.useCredentials = false;
+            # The clone units want the network and credentials a test sandbox does not have, and leaving them on would
+            # make every other test's `systemctl --failed` assertion depend on how far their retries had got. The test
+            # that is actually about them (tests/clone-config.nix) turns them back on against a local repository.
+            vimFiles.enable = lib.mkDefault false;
+            nixosConfig = {
+              enable = lib.mkDefault false;
+              useCredentials = false;
+            };
           };
         };
       machine =
@@ -100,8 +106,23 @@
         builtins.filter
           (
             combination:
-            # only build if architecture matches or it is a vm
-            (combination.isVM || combination.machine.defaultArch == combination.system)
+            let
+              # A VM variant exists so a machine can be booted on a workstation: natively on its own architecture, and
+              # emulated on x86_64, the only architecture VMs are ever driven from (the Makefile always builds
+              # `<machine><host arch>vm`). That is what makes the aarch64 boards testable from an x86_64 PC. The inverse -
+              # an x86_64 machine emulated as aarch64 - has no use, and would force every service package the machine pulls
+              # in to support aarch64.
+              vmArchitectures = lib.lists.unique [
+                combination.machine.defaultArch
+                "x86_64"
+              ];
+            in
+            (
+              if combination.isVM then
+                builtins.elem combination.system vmArchitectures
+              else
+                combination.machine.defaultArch == combination.system
+            )
             # the vmboot variant only exists to boot an ISO installation inside a VM (see mkIsoPackage), so only machines that
             # produce an ISO define hardwareModule.virtualboot
             && (!combination.isVMBoot || combination.machine.supportsIso)
