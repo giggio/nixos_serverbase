@@ -7,9 +7,6 @@
   ...
 }:
 
-let
-  fenix = inputs.fenix;
-in
 {
   imports = [
     ../../cachix.nix # ugly loading from the root folder, can we do something about it?
@@ -31,16 +28,7 @@ in
   };
 
   nixpkgs.config.allowUnfree = false;
-  nixpkgs.overlays = [
-    (
-      _: super:
-      let
-        pkgs = fenix.inputs.nixpkgs.legacyPackages.${super.stdenv.hostPlatform.system};
-      in
-      fenix.overlays.default pkgs pkgs
-    ) # rust toolchain
-    (final: prev: (import ./pkgs/default.nix { pkgs = prev; }))
-  ];
+  nixpkgs.overlays = import ./overlays.nix { inherit inputs; };
 
   nix = {
     settings = {

@@ -37,7 +37,7 @@
     builtins.mapAttrs (_: module: lib.nixosSystem module) nixosConfigurations;
 
   # Builds the flake `checks` from a set of test files. Each test file is a function
-  #   { pkgs, lib, inputs, machines, testNodes, ... }: <nixosTest definition>
+  #   { pkgs, lib, inputs, machines, testNodes, ... }: <nixosTest definition | derivation>
   # where `testNodes.base` and `testNodes.machine <name>` are NixOS modules that reproduce, respectively, the plain serverbase
   # configuration and a real machine from the flake's machine list, and `testNodes.vmConfigurationOf <name>` is the evaluated
   # configuration of the VM that machine is driven as. Building nodes from the actual machine definition is the point: a
@@ -115,8 +115,8 @@
     in
     builtins.mapAttrs (
       _: test:
-      pkgs.testers.nixosTest (
-        import test {
+      let
+        definition = import test {
           inherit
             pkgs
             lib
@@ -124,8 +124,12 @@
             machines
             testNodes
             ;
-        }
-      )
+        };
+      in
+      # A test file yields either a nixosTest definition or a derivation to build directly. Checks over pure functions
+      # and over what a package ships have no machine to boot, and as derivations they finish in seconds instead of
+      # minutes.
+      if lib.isDerivation definition then definition else pkgs.testers.nixosTest definition
     ) tests;
 
   mkNixosMachineCombinations =
