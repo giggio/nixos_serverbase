@@ -1,9 +1,4 @@
-{
-  pkgs,
-  lib,
-  testNodes,
-  ...
-}:
+{ testNodes, ... }:
 
 # Covers modules/serverbase/secrets.nix and the two sops templates the base configuration renders. What is worth proving
 # here is the wiring, not that sops can decrypt: that every declared secret arrives where the rest of the configuration
@@ -11,60 +6,16 @@
 # placeholders actually substituted - a template whose placeholder is misspelled renders perfectly happily with the
 # placeholder text still in it.
 #
-# The machines' own secrets cannot be used, since only the servers hold the key. Instead the fixtures below are encrypted
-# at build time with a throwaway key, so the plaintext stays readable in this file and nothing has to be re-encrypted by
-# hand when a secret is added.
+# The machines' own secrets cannot be used, since only the servers hold the key, so the fixtures come from
+# testNodes.fakeSecrets (modules/test-secrets.nix): encrypted at build time, with the plaintext stated right here.
 let
-  # Test-only age identity. It exists to encrypt the fixtures a few lines down and nothing else; no real secret is, or
-  # ever should be, encrypted to it. It is committed on purpose, so that this check needs no setup to run.
-  testAgePublicKey = "age1seqqa058acupwts8neefs5vdu8lwpz7hdyry000vd0xu5dp7nefqqc76wx";
-  testAgeKeyFile = pkgs.writeText "test-age-key" ''
-    AGE-SECRET-KEY-1MTQ3WT0F43GESK4XAP9Z2VLJ0W9TLR4UUL0EYX3HSPN95P4HJJ5SGCLFUM
-  '';
-  testKeyPath = "/run/test-age-key";
-
   secretValues = {
-    codebergUser = "test-codeberg-user";
-    codebergPat = "test-codeberg-pat";
-    atticServer = "attic.test";
-    atticToken = "test-attic-token";
-  };
-  # an ordinary nix setting whose default is not 7, so that reading it back proves the include was honoured
-  extraNixOption = "connect-timeout = 7";
-
-  encrypt =
-    {
-      name,
-      format,
-      text,
-    }:
-    pkgs.runCommand name
-      {
-        nativeBuildInputs = [ pkgs.sops ];
-        inherit text;
-        passAsFile = [ "text" ];
-      }
-      ''
-        export SOPS_AGE_RECIPIENTS=${testAgePublicKey}
-        sops --encrypt --input-type ${format} --output-type ${format} "$textPath" > $out
-      '';
-
-  sharedSecrets = encrypt {
-    name = "test-shared-secrets.yaml";
-    format = "yaml";
-    text = ''
-      codeberg_repo_clone:
-        user: ${secretValues.codebergUser}
-        pat: ${secretValues.codebergPat}
-      attic_server: ${secretValues.atticServer}
-      attic_token: ${secretValues.atticToken}
-    '';
-  };
-
-  nixExtraOptions = encrypt {
-    name = "test-nix-extra-options.conf";
-    format = "binary";
-    text = "${extraNixOption}\n";
+    "codeberg_repo_clone/user" = "test-codeberg-user";
+    "codeberg_repo_clone/pat" = "test-codeberg-pat";
+    attic_server = "attic.test";
+    attic_token = "test-attic-token";
+    # an ordinary nix setting whose default is not 7, so that reading it back proves the include was honoured
+    nixExtraSecretOptions = "connect-timeout = 7\n";
   };
 in
 {
@@ -73,27 +24,14 @@ in
   nodes.machine = {
     imports = [
       testNodes.base
+      (testNodes.fakeSecrets {
+        names = builtins.attrNames secretValues;
+        values = secretValues;
+      })
       {
         setup = {
           hostName = "nixos";
           username = "giggio";
-        };
-        sops = {
-          age.keyFile = lib.mkForce testKeyPath;
-          # the fixtures are only encrypted when their derivation is built, so there is nothing for sops-nix to inspect
-          # at evaluation time. Dropping the check is safe here and only here: what it guards against - committing a
-          # plaintext secret - cannot happen to a file that is generated.
-          validateSopsFiles = false;
-          defaultSopsFile = lib.mkForce sharedSecrets;
-          secrets.nixExtraSecretOptions.sopsFile = lib.mkForce nixExtraOptions;
-        };
-
-        # On a server the key is installed from a USB stick during boot; a test has no operator to plug one in, so it is
-        # laid down from the store instead. sops-nix refuses a keyFile that is itself in the store, and rightly so - the
-        # store is world-readable - hence the copy, ordered before the secrets are decrypted.
-        system.activationScripts = {
-          testAgeKey = "install -D -m 0400 ${testAgeKeyFile} ${testKeyPath}";
-          setupSecrets.deps = [ "testAgeKey" ];
         };
       }
     ];
@@ -111,10 +49,10 @@ in
 
       with subtest("every declared secret is decrypted and readable only by root"):
           for path, expected in [
-              ("codeberg_repo_clone/user", "${secretValues.codebergUser}"),
-              ("codeberg_repo_clone/pat", "${secretValues.codebergPat}"),
-              ("attic_server", "${secretValues.atticServer}"),
-              ("attic_token", "${secretValues.atticToken}"),
+              ("codeberg_repo_clone/user", "${secretValues."codeberg_repo_clone/user"}"),
+              ("codeberg_repo_clone/pat", "${secretValues."codeberg_repo_clone/pat"}"),
+              ("attic_server", "${secretValues.attic_server}"),
+              ("attic_token", "${secretValues.attic_token}"),
           ]:
               value = secret(path)
               assert value == expected, f"secret {path} decrypted to '{value}', expected '{expected}'"
@@ -124,8 +62,8 @@ in
       with subtest("the attic netrc is rendered with the credentials substituted in"):
           netrc = secret("rendered/attic_netrc")
           assert netrc.splitlines() == [
-              "machine ${secretValues.atticServer}",
-              "password ${secretValues.atticToken}",
+              "machine ${secretValues.attic_server}",
+              "password ${secretValues.attic_token}",
           ], f"the netrc template did not render as expected: {netrc}"
           # 0440 root:users, because nix runs the substituter as the calling user, not as root
           mode = ownership("rendered/attic_netrc")
@@ -147,8 +85,10 @@ in
 
       with subtest("the git askpass template carries the codeberg credentials"):
           askpass = secret("rendered/git-askpass")
-          assert "username=${secretValues.codebergUser}" in askpass, f"no username in the askpass file: {askpass}"
-          assert "password=${secretValues.codebergPat}" in askpass, f"no password in the askpass file: {askpass}"
+          assert "username=${secretValues."codeberg_repo_clone/user"}" in askpass, \
+              f"no username in the askpass file: {askpass}"
+          assert "password=${secretValues."codeberg_repo_clone/pat"}" in askpass, \
+              f"no password in the askpass file: {askpass}"
 
       (_, failed) = machine.systemctl("--failed --quiet")
       machine.log(f"systemctl --failed output: {failed}")

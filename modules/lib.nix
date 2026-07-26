@@ -6,6 +6,7 @@
 # The Orange Pi 4 Pro unattended-installer image builder lives in its own file (the mechanism is very board-specific), and is
 # merged into this lib so it is reachable as serverbaseModules.lib.mkOpi4ProInstallerImage from mkInstallerPackages below.
 (import ./setup-opi4pro.nix { inherit lib inputs; })
+// (import ./test-secrets.nix { inherit lib; })
 // {
   mkNixosConfigurations =
     machines:
@@ -111,7 +112,57 @@
             inherit system;
           }
         };
-      testNodes = { inherit base machine vmConfigurationOf; };
+      # Sugar over mkFakeSecrets for a whole machine: every secret it declares, read off the already-evaluated VM
+      # configuration rather than off the test node, which would be self-referential. Nothing is evaluated twice, and
+      # the price is an assumption - the VM is `setup.environment = "dev"` and a test node is `"test"`, so the two
+      # agree only as long as no machine gates a secret on the environment. When they stop agreeing the node does not
+      # boot: sops-nix rejects the whole manifest over a single secret it cannot find in its file. A node that cannot
+      # carry that assumption uses withFakeSecrets below, which asks the node itself instead.
+      fakeSecretsFor =
+        {
+          machine,
+          values ? { },
+          extraNames ? [ ],
+        }:
+        serverbaseModules.lib.mkFakeSecrets {
+          names = (builtins.attrNames (vmConfigurationOf machine).config.sops.secrets) ++ extraNames;
+          inherit values;
+        };
+      # The same thing for a node whose secrets have to come from the node itself: either because it is not a whole
+      # machine - a couple of modules under test on top of `base` - or because it must not inherit the dev VM's
+      # assumptions. There is no evaluated configuration to read the secret names off, so one is made: the module list
+      # is evaluated a second time on its own, purely to ask what secrets it declared. That extra evaluation is the
+      # whole cost, and it is the only way to stay non-recursive - a module that both reads and defines
+      # `config.sops.secrets` cannot be evaluated at all.
+      withFakeSecrets =
+        {
+          modules,
+          values ? { },
+        }:
+        modules
+        ++ [
+          (serverbaseModules.lib.mkFakeSecrets {
+            names =
+              builtins.attrNames
+                (inputs.nixpkgs.lib.nixosSystem {
+                  # qemu-vm.nix comes along because the test driver brings it too: a node is free to use
+                  # `virtualisation.fileSystems`, and a probe without that option would fail to evaluate the very
+                  # modules it exists to inspect
+                  modules = modules ++ [ "${inputs.nixpkgs}/nixos/modules/virtualisation/qemu-vm.nix" ];
+                }).config.sops.secrets;
+            inherit values;
+          })
+        ];
+      testNodes = {
+        inherit
+          base
+          machine
+          vmConfigurationOf
+          fakeSecretsFor
+          withFakeSecrets
+          ;
+        fakeSecrets = serverbaseModules.lib.mkFakeSecrets;
+      };
     in
     builtins.mapAttrs (
       _: test:
@@ -122,6 +173,7 @@
             lib
             inputs
             machines
+            nixosConfigurations
             testNodes
             ;
         };

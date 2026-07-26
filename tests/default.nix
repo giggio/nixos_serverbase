@@ -9,6 +9,7 @@
   machines-boot = ./machines-boot.nix;
   home-manager = ./home-manager.nix;
   helpers = ./helpers.nix;
+  flake-matrix = ./flake-matrix.nix;
   custom-packages = ./custom-packages.nix;
   traefik-provider = ./traefik-provider.nix;
   gmktec1-docker = ./gmktec1-docker.nix;
