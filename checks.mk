@@ -9,8 +9,19 @@
 # the run ends with a table. A red row names one file that holds that test and nothing else.
 
 # How many checks to build at once. Every check is a VM, and starting all of them together is what makes the test
-# driver time out rather than fail - the guest shells stop answering long before any assertion is reached.
+# driver time out rather than fail - the guest shells stop answering long before any assertion is reached. Most checks
+# default `virtualisation.cores` to 1 (the nixos test driver's own default), so 4 at a time is one vCPU per physical
+# core on a 4-core box - already the ceiling before the host is oversubscribed. A few checks ask for more themselves
+# (gmktec1's boot and forgejo-runner checks both set `cores = 2`), so even at this number two of those landing in the
+# same batch oversubscribes slightly; that is tolerated, going higher is not.
 check_jobs ?= 4
+
+# Cores nix itself may hand to a single derivation's own build step (distinct from a check's `virtualisation.cores`,
+# which sizes the qemu guest, not the build). Left at nix's own default (0, meaning "all available"), one derivation
+# that happens to compile something - a kernel, a package with no cached substitute - can burst across every core
+# while $(check_jobs) other checks are already running their VMs, which is the more likely reason raising check_jobs
+# stopped being safe than vCPU count alone. Pinning it to 1 keeps every concurrent build to its fair share.
+check_cores ?= 1
 
 # Wall clock per check, in seconds. The in-driver watchdog (tests/lib/diagnostics.nix) catches a driver that stops
 # making progress, but nothing there catches a guest that keeps answering while getting nowhere, or a build that never
@@ -18,12 +29,10 @@ check_jobs ?= 4
 check_timeout ?= 3600
 
 check_out_dir := $(out_dir)/checks
-# `\#` because this is a variable assignment, where make would otherwise read the rest of the line as a comment. In a
-# recipe `#` is passed through to the shell untouched, so the recipes below write it plain.
-check_names_cmd = nix eval --raw --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrNames cs)' \
-  .\#checks.$(architecture)-linux
 
-.PHONY: checks checks_report list_checks test
+check_names_cmd = nix eval --raw --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrNames cs)' .\#checks.$(architecture)-linux
+
+.PHONY: checks full_checks checks_report list_checks dirty_checks cache_checks test
 
 ### Tests
 
@@ -34,6 +43,8 @@ test: check_boot-test
 list_checks:
 	@$(check_names_cmd); echo
 
+# Run like this to use every core:
+# make checks check_jobs=$(nproc) check_cores=1
 ## Runs every check, check_jobs at a time, each into its own log, then prints a pass/fail table
 checks:
 	@set -o pipefail; \
@@ -46,7 +57,7 @@ checks:
 	run_check() { \
 	  name="$$1"; log="$(check_out_dir)/$$name.log"; started=$$SECONDS; \
 	  if nix build ".#checks.$(architecture)-linux.$$name" \
-	      --no-link --print-build-logs --timeout $(check_timeout) > "$$log" 2>&1; then \
+	      --no-link --print-build-logs --cores $(check_cores) --timeout $(check_timeout) > "$$log" 2>&1; then \
 	    result=pass; \
 	  else \
 	    result=fail; \
@@ -74,7 +85,7 @@ check_%:
 	@mkdir -p "$(check_out_dir)"
 	@set -o pipefail; \
 	nix build ".#checks.$(architecture)-linux.$*" \
-	  --no-link --print-build-logs --timeout $(check_timeout) 2>&1 | tee "$(check_out_dir)/$*.log"
+	  --no-link --print-build-logs --cores $(check_cores) --timeout $(check_timeout) 2>&1 | tee "$(check_out_dir)/$*.log"
 
 # A check that has passed once is a realised store path, so every later `nix build` of it is a no-op that prints
 # nothing and exits 0. That is what makes a suite cheap to re-run, and it also means a check cannot be run twice to
@@ -85,11 +96,54 @@ recheck_%:
 	@set -o pipefail; \
 	{ \
 	  nix build ".#checks.$(architecture)-linux.$*" --no-link --print-build-logs \
-	    --timeout $(check_timeout) 2>&1 \
+	    --cores $(check_cores) --timeout $(check_timeout) 2>&1 \
 	  && printf '\n=== that was the first build of this check; running it again ===\n\n' \
 	  && nix build ".#checks.$(architecture)-linux.$*" --no-link --print-build-logs --rebuild \
-	    --timeout $(check_timeout) 2>&1; \
+	    --cores $(check_cores) --timeout $(check_timeout) 2>&1; \
 	} | tee "$(check_out_dir)/$*.log"
+
+# Same run as `checks`, under a name meant for a crontab or systemd timer rather than a terminal: it is the full
+# sweep that catches whatever a per-push run of just the affected checks (see `dirty_checks`) could miss - a check
+# nix considers unaffected because no input it tracks changed, but whose result still depends on something outside
+# that tracking (a docker image pulled at test time, a flaky assertion). Nothing here differs from `checks` itself;
+# the separate name exists so a schedule invokes something self-documenting instead of the same target a person runs
+# interactively.
+## Runs every check unconditionally - meant for a schedule, not the terminal
+full_checks: checks
+
+# What actually would run for the checks a schedule should not need to wait for. `nix build --dry-run` against a check
+# that is already realised for the current inputs prints nothing at all; against one where anything changed underneath
+# it - the check itself, a shared module fifteen imports away, the machine it boots - it names every derivation that
+# would have to be rebuilt. That is a more reliable "what does this change affect" than a hand-written file-to-test
+# map: the map has to be maintained by hand and drifts, this reads it straight off the dependency graph nix already
+# has, transitively, for free.
+# Run with the number of processsors at a time: a dry-run re-evaluates the whole flake from scratch (nixpkgs, every module,
+# every other check) just to answer one name, so a serial loop over thirty of them pays that cost thirty times over and is the
+# slower half of this target, not the qemu-free half being asked for. Evaluation is memory-bound rather than
+# vCPU-bound, so it does not carry the same oversubscription risk `check_jobs` exists to bound for actual VM boots.
+dirty_checks:
+	@names=$$($(check_names_cmd)) || exit 1; \
+	report() { \
+	  name="$$1"; \
+	  output=$$(nix build ".#checks.$(architecture)-linux.$$name" --dry-run 2>&1 >/dev/null); \
+	  case "$$output" in \
+	    *"will be built"*) echo "$$name" ;; \
+	    *error:*) echo "$$name (dry-run itself failed - see \`make check_$$name\`)" >&2; echo "$$name" ;; \
+	  esac; \
+	}; \
+	export -f report; \
+	printf '%s\n' $$names | xargs -P $$(nproc) -n1 $(SHELL) -c 'report "$$0"'
+
+## Pushes one check's result to the cache, e.g. `make cache_check_gmktec1-boot` - builds it first if needed
+cache_check_%:
+	@echo -e "Pushing cache for check \e[32m$*\e[0m"
+	nix build ".#checks.$(architecture)-linux.$*" --no-link --print-out-paths --cores $(check_cores) --timeout $(check_timeout) | attic push servers --stdin
+
+## Pushes every check's result to the cache, check_jobs at a time - so a later run elsewhere can substitute instead
+## of re-running a check nothing has invalidated
+cache_checks:
+	@names=$$($(check_names_cmd)) || exit 1; \
+	printf '%s\n' $$names | xargs -P $(check_jobs) -I{} $(MAKE) --no-print-directory cache_check_{}
 
 # The table, and for every check that failed the lines that say why. A log path on its own is traceability only in the
 # sense that the evidence exists somewhere; lifting the driver's `!!!` lines and nix's `error:` lines into the summary
