@@ -111,29 +111,10 @@
             isVM = true;
             inherit system;
           }
-        };
-      # Sugar over mkFakeSecrets for a whole machine: every secret it declares, read off the already-evaluated VM
-      # configuration rather than off the test node, which would be self-referential. Nothing is evaluated twice, and
-      # the price is an assumption - the VM is `setup.environment = "dev"` and a test node is `"test"`, so the two
-      # agree only as long as no machine gates a secret on the environment. When they stop agreeing the node does not
-      # boot: sops-nix rejects the whole manifest over a single secret it cannot find in its file. A node that cannot
-      # carry that assumption uses withFakeSecrets below, which asks the node itself instead.
-      fakeSecretsFor =
-        {
-          machine,
-          values ? { },
-          extraNames ? [ ],
-        }:
-        serverbaseModules.lib.mkFakeSecrets {
-          names = (builtins.attrNames (vmConfigurationOf machine).config.sops.secrets) ++ extraNames;
-          inherit values;
-        };
-      # The same thing for a node whose secrets have to come from the node itself: either because it is not a whole
-      # machine - a couple of modules under test on top of `base` - or because it must not inherit the dev VM's
-      # assumptions. There is no evaluated configuration to read the secret names off, so one is made: the module list
-      # is evaluated a second time on its own, purely to ask what secrets it declared. That extra evaluation is the
-      # whole cost, and it is the only way to stay non-recursive - a module that both reads and defines
-      # `config.sops.secrets` cannot be evaluated at all.
+        }.config;
+      # Sugar over mkFakeSecrets for a node under test: the module list is evaluated a second time on its own, purely
+      # to ask what secrets it declared. That extra evaluation is the whole cost, and it is the only way to stay
+      # non-recursive - a module that both reads and defines `config.sops.secrets` cannot be evaluated at all.
       withFakeSecrets =
         {
           modules,
@@ -158,7 +139,6 @@
           base
           machine
           vmConfigurationOf
-          fakeSecretsFor
           withFakeSecrets
           ;
         fakeSecrets = serverbaseModules.lib.mkFakeSecrets;

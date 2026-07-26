@@ -28,7 +28,7 @@ in
         # as the VM - for the boards that is a hand-picked approximation of the real one, and a test proving anything
         # about a different kernel would be proving it about a machine that does not exist.
         environment.etc."test/expected-kernel".text =
-          (testNodes.vmConfigurationOf name).config.boot.kernelPackages.kernel.version;
+          (testNodes.vmConfigurationOf name).boot.kernelPackages.kernel.version;
       }
     ];
   });
