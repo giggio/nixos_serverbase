@@ -5,8 +5,12 @@ ifndef VMS_DIR
   $(error VMS_DIR is undefined)
 endif
 
+# Where this Makefile lives, which is not where make was started from when a superproject includes it. Read once,
+# here, because $(MAKEFILE_LIST) grows with every include and its last word stops being this file after the first one.
+serverbase_dir := $(dir $(lastword $(MAKEFILE_LIST)))
+
 # Include help system
-include $(dir $(lastword $(MAKEFILE_LIST)))help.mk
+include $(serverbase_dir)help.mk
 
 nix_deps := $(shell { git ls-files --cached --modified --others --exclude-standard --deduplicate & git submodule foreach --recursive -q 'git ls-files --cached --modified --others --exclude-standard --deduplicate | sed "s,^,$$displaypath/,"'; } | sort | uniq | grep -v -e '^\..*' -e '.*\.md' -e Makefile -e '.*\.mk' | while IFS= read -r f; do [ -e "$$f" ] && echo "$$f"; done)
 define vm_count
@@ -450,10 +454,7 @@ $(delete_old_vms_machines): delete_old_vms_%:
 	  find $(VMS_DIR) -type d -name '$(*)*' -printf '%f '; \
 	fi;
 
-### Tests
-## Runs a quick boot test
-test:
-	nix build .#checks.$(architecture)-linux.boot-test --print-build-logs --no-link
+include $(serverbase_dir)checks.mk
 
 ### Information
 ## List machines
