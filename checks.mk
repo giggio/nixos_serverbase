@@ -135,9 +135,16 @@ dirty_checks:
 	printf '%s\n' $$names | xargs -P $$(nproc) -n1 $(SHELL) -c 'report "$$0"'
 
 ## Pushes one check's result to the cache, e.g. `make cache_check_gmktec1-boot` - builds it first if needed
+# stderr is sent to its own log, same as `checks` does per-check, not to $$log - this recipe's stdout is
+# the store path piped into `attic push`, so 2>&1 here would corrupt that stream. It is mainly nix's
+# eval-cache SQLite chatter (harmless under xargs -P: N parallel `nix build`s share one eval-cache file
+# keyed by flake revision, not by attribute, so they collide - nix already ignores the failed cache write
+# itself) that this hides from the interleaved terminal output; a real build failure still fails the
+# recipe and is on record in the log.
 cache_check_%:
 	@echo -e "Pushing cache for check \e[32m$*\e[0m"
-	nix build ".#checks.$(architecture)-linux.$*" --no-link --print-out-paths --cores $(check_cores) --timeout $(check_timeout) | attic push servers --stdin
+	@mkdir -p "$(check_out_dir)"
+	nix build ".#checks.$(architecture)-linux.$*" --no-link --print-out-paths --cores $(check_cores) --timeout $(check_timeout) 2>"$(check_out_dir)/cache_$*.log" | attic push servers --stdin
 
 ## Pushes every check's result to the cache, check_jobs at a time - so a later run elsewhere can substitute instead
 ## of re-running a check nothing has invalidated
