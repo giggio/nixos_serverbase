@@ -74,7 +74,7 @@ deps:
 # and making other targets depend on the run-...-vm file would always rebuild everything.
 # With the stamp file we have a file that has the correct date.
 $(out_vm_dir)/.run-%-vm.stamp: $(nix_deps)
-	nix build .#$*$(subst _,,$(architecture))vm --print-build-logs --out-link "$(result_vm_dir)/"
+	nix build .#$*$(subst _,,$(architecture))vm --print-build-logs --keep-going --out-link "$(result_vm_dir)/"
 	mkdir -p "$(out_vm_dir)"
 	ln -sf "$$(realpath "$(result_vm_dir)/"run*)" "$(out_vm_dir)/run-$*-vm"
 	touch --date=@$$(stat -c '%Y' "$(out_vm_dir)/run-$*-vm") "$@"
@@ -86,7 +86,7 @@ $(vm_files): $(out_vm_dir)/run-%-vm: $(out_vm_dir)/.run-%-vm.stamp;
 # See the comment above about the .stamp file
 sops_agekey := $(HOME)/.config/nixos-secrets/server.agekey
 $(out_img_dir)/.%.img.zst.stamp: $(nix_deps)
-	nix build .#$*_img --print-build-logs --out-link "$(result_img_dir)/"
+	nix build .#$*_img --print-build-logs --keep-going --out-link "$(result_img_dir)/"
 	mkdir -p "$(out_img_dir)"
 	# opi4pro images are UNATTENDED INSTALLERS that decrypt the private cache address with sops (see
 	# modules/setup-opi4pro.nix). Two things are injected here, straight into the image's ext4 root (partition 2), AFTER the
@@ -142,7 +142,7 @@ $(img_files): $(out_img_dir)/%.img.zst: $(out_img_dir)/.%.img.zst.stamp;
 
 # See the comment above about the .stamp file
 $(out_iso_dir)/.%.iso.stamp: $(nix_deps)
-	nix build .#$*_iso --print-build-logs --out-link "$(result_iso_dir)/"
+	nix build .#$*_iso --print-build-logs --keep-going --out-link "$(result_iso_dir)/"
 	mkdir -p "$(out_iso_dir)"
 	ln -sf "$$(realpath "$(result_iso_dir)/$*.iso")" "$(out_iso_dir)/$*.iso"
 	touch --date=@$$(stat -c '%Y' "$(out_iso_dir)/$*.iso") "$@"
@@ -153,7 +153,7 @@ $(iso_files): $(out_iso_dir)/%.iso: $(out_iso_dir)/.%.iso.stamp;
 
 # See the comment above about the .stamp file
 $(out_system_dir)/.%.stamp: $(nix_deps)
-	nix build .#nixosConfigurations.$*.config.system.build.toplevel --print-build-logs --out-link "$(result_system_dir)/$*"
+	nix build .#nixosConfigurations.$*.config.system.build.toplevel --print-build-logs --keep-going --out-link "$(result_system_dir)/$*"
 	mkdir -p "$(out_system_dir)"
 	rm -f "$(out_system_dir)/$*"
 	ln -sf "$$(realpath "$(result_system_dir)/$*")" "$(out_system_dir)/$*"
