@@ -3,9 +3,10 @@
   lib,
   inputs,
 }:
-# The Orange Pi 4 Pro unattended-installer image builder lives in its own file (the mechanism is very board-specific), and is
-# merged into this lib so it is reachable as serverbaseModules.lib.mkOpi4ProInstallerImage from mkInstallerPackages below.
+# The Orange Pi 4 Pro image builders live in their own files (the mechanism is very board-specific), and are merged into this
+# lib so they are reachable as serverbaseModules.lib.mkOpi4Pro{Installer,Boot}Image from mkInstallerPackages below.
 (import ./setup-opi4pro.nix { inherit lib inputs; })
+// (import ./setup-opi4pro-boot-image.nix)
 // (import ./test-secrets.nix { inherit lib; })
 // {
   mkNixosConfigurations =
@@ -354,6 +355,8 @@
               #   - machine.imgIsInstaller = true: a lean UNATTENDED INSTALLER SD image - it boots the board, wipes the NVMe
               #     with the final system's disko config, and installs the final system onto it from the flake, pulling the
               #     pre-built closure from the attic cache (e.g. opi4pro). See modules/setup-opi4pro.nix.
+              # Installer machines additionally get a third, <name>boot_img: a BOOT-ONLY card image for replacing a card under
+              # an already-installed system, which reinstalls nothing. See modules/setup-opi4pro-boot-image.nix.
               mkImg =
                 isDev:
                 let
@@ -372,10 +375,21 @@
                     nixos-system = nixosConfigurations."${configName}";
                     inherit isDev;
                   };
+              mkBootImg =
+                isDev:
+                serverbaseModules.lib.mkOpi4ProBootImage {
+                  pkgs = import inputs.nixpkgs { system = "${machine.defaultArch}-linux"; };
+                  finalSystem = nixosConfigurations."${machine.name}${if isDev then "dev" else ""}";
+                  inherit isDev;
+                };
             in
             {
               "${machine.name}_img" = mkImg false;
               "${machine.name}dev_img" = mkImg true;
+            }
+            // lib.attrsets.optionalAttrs (machine.imgIsInstaller or false) {
+              "${machine.name}boot_img" = mkBootImg false;
+              "${machine.name}devboot_img" = mkBootImg true;
             }
           ) imageSupportingMachines
         );
@@ -573,7 +587,18 @@
       isoMachinesNames = map (m: m.name) (lib.filter (m: m.supportsIso) machines);
       isoMachinesNamesWithDev = isoMachinesNames ++ (lib.map (m: "${m}dev") isoMachinesNames);
       imgMachinesNames = map (m: m.name) (lib.filter (m: m.supportsImg) machines);
-      imgMachinesNamesWithDev = imgMachinesNames ++ (lib.map (m: "${m}dev") imgMachinesNames);
+      # Machines whose card carries only the boot chain also get a boot-only image (see modules/setup-opi4pro-boot-image.nix).
+      # Listed here so the Makefile's img rules cover `<name>boot.img.zst` like any other image.
+      bootImgMachinesNames = map (m: "${m.name}boot") (
+        lib.filter (m: m.supportsImg && (m.imgIsInstaller or false)) machines
+      );
+      imgMachinesNamesWithDev =
+        imgMachinesNames
+        ++ (lib.map (m: "${m}dev") imgMachinesNames)
+        ++ bootImgMachinesNames
+        ++ (lib.map (m: "${m.name}devboot") (
+          lib.filter (m: m.supportsImg && (m.imgIsInstaller or false)) machines
+        ));
     in
     pkgs.runCommand "list_machines" { } ''
       mkdir -p "$out/bin"

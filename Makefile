@@ -109,6 +109,11 @@ $(out_img_dir)/.%.img.zst.stamp: $(nix_deps)
 	#      - to /etc/nixos, where the tree now lives. flake.lock needs no edit: a git+file lock is content-addressed, so nix
 	#      re-locks the input from the new local path to the SAME narHash -> same derivation -> still a cache hit.
 	case "$*" in \
+	  *boot) \
+	    : "BOOT-ONLY card image (modules/setup-opi4pro-boot-image.nix): no ext4 root to inject into, and nothing to inject -"; \
+	    : "it reinstalls nothing, so it needs neither the age key nor the flake source. Must be matched BEFORE opi4pro* below."; \
+	    ln -sf "$$(realpath "$(result_img_dir)/$*.img.zst")" "$(out_img_dir)/$*.img.zst"; \
+	    ;; \
 	  opi4pro*) \
 	    echo "Injecting sops age key and flake source into $* installer image..."; \
 	    test -f "$(sops_agekey)" || { echo "ERROR: missing $(sops_agekey)" >&2; exit 1; }; \
