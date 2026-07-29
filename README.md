@@ -29,6 +29,25 @@ system without prompting.
   system artifacts (Pi4 images, ISOs, QEMU VMs) and development shells.
 - [configuration.nix](./configuration.nix): A specific machine configuration
   (example: `pi4`) that imports the serverbase and applies host-specific settings.
+- [docs/](./docs/): Board-specific documentation, for hardware that needed more
+  explanation than a comment can carry. See [Documentation](#documentation).
+
+## Documentation
+
+Most of what this repository does is explained by comments next to the code. Two
+things did not fit there, both about the Orange Pi 4 Pro — a board with no
+mainline Linux or U-Boot support, where the boot chain is reproduced from
+Allwinner's vendor BSP:
+
+- [docs/opi4pro/DISASTER-RECOVERY.md](./docs/opi4pro/DISASTER-RECOVERY.md) — the
+  runbook for when the board does not boot. It assumes you remember nothing and
+  walks from "the board is dead" to "the board boots again", cheapest repair
+  first. Read it *before* you need it, at least once.
+- [docs/opi4pro/BRINGUP-REPORT.md](./docs/opi4pro/BRINGUP-REPORT.md) — how the
+  port was done and why it is shaped the way it is: the boot chain, the
+  unattended installer, USB-2 host mode, and every failure met along the way.
+  Read this when you want to change something and need to know what a given
+  line is load-bearing for.
 
 ## Usage as a flake (library)
 
@@ -118,6 +137,17 @@ You can build a Raspberry Pi 4 image that can be used to create an installation
 SD card, or an ISO that can be used to install on Gmktec G3 Plus.
 You can also create QEMU VMs.
 
+`mkInstallerPackages` produces these per machine:
+
+| Package | What it is |
+|---|---|
+| `<machine>_img` | SD image. For most boards the whole system runs from the card; for machines with `imgIsInstaller = true` it is an unattended installer that wipes the target disk and installs onto it. |
+| `<machine>boot_img` | **Boot-only** SD image, for `imgIsInstaller` machines only. Reproduces just the boot chain so a card can be replaced without reinstalling. Never touches the system disk. |
+| `<machine>_iso` | Installer ISO, for machines with `supportsIso = true`. |
+| `<machine><arch>vm` | QEMU run script. |
+
+Each also has a `dev` variant (`<machine>dev_img`, `<machine>devboot_img`, …).
+
 See the above example with `mkInstallerPackages`.
 
 ### 4. Using the Makefile
@@ -199,6 +229,31 @@ It is very similar to the Raspberry Pi 4 above, just change the out file to:
 ```bash
 zstdcat out/nix/img/opi4pro.img.zst | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
 ```
+
+This board is different from the others in two ways worth knowing before you
+flash anything:
+
+- The `.img` is an **unattended installer**, not a full system on a card. It
+  boots the board, wipes the NVMe SSD and installs onto it. The board then runs
+  from the SSD, and the SD card stays in forever holding only the boot chain —
+  the SoC's boot ROM can only read the first-stage loader from SD raw sectors.
+- The final system's closure must be in the binary cache **before** the
+  installer runs, or the board will try to build the vendor kernel and U-Boot
+  itself. `make cache_opi4pro` pushes it.
+
+To replace a worn-out or undersized SD card **without** reinstalling, build the
+boot-only image instead. It carries just the bootloader region and the four boot
+files, is about 304 MiB (~51 MiB compressed), and never touches the SSD:
+
+```bash
+make out/nix/img/opi4proboot.img.zst          # or: nix build .#opi4proboot_img
+zstdcat out/nix/img/opi4proboot.img.zst | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
+```
+
+The card is tied to one system generation (`boot.scr` bakes an absolute
+`init=/nix/store/...` path), so build it from the revision the board is actually
+running and verify before flashing — see
+[docs/opi4pro/DISASTER-RECOVERY.md](./docs/opi4pro/DISASTER-RECOVERY.md#7-replace-the-sd-card-without-reinstalling).
 
 ### Deploying to Gmktec G3 Plus
 

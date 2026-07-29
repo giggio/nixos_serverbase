@@ -697,7 +697,7 @@ let
         dd if="$file" of="$DISK" bs=1k seek="$off_kib" conv=notrunc,fsync status=none
         # Read the region back and compare, so we never leave a half-written bootloader behind unnoticed.
         if differs "$file" "$off_kib"; then
-          echo "ERROR: verification FAILED for $name — the card may be unbootable. See DISASTER-RECOVERY.md" >&2
+          echo "ERROR: verification FAILED for $name — the card may be unbootable. See docs/opi4pro/DISASTER-RECOVERY.md" >&2
           exit 1
         fi
         echo "opi4pro: $name written and verified"
