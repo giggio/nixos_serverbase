@@ -1,4 +1,4 @@
-{ inputs, ... }:
+{ inputs, pkgs, ... }:
 
 {
   imports = [
@@ -7,6 +7,21 @@
   ];
 
   boot.loader.systemd-boot.enable = true; # using UEFI and not GRUB
+
+  systemd.services."serial-getty@ttyACM0" = {
+    enable = true;
+    wantedBy = [ "getty.target" ];
+    overrideStrategy = "asDropin";
+    environment.TERM = "vt102";
+    serviceConfig.ExecStart = [
+      ""
+      "${pkgs.util-linux}/bin/agetty --login-program ${pkgs.shadow}/bin/login --issue-file /etc/issue:/etc/issue.d:/run/issue:/run/issue.d %I 115200"
+    ];
+  };
+
+  services.udev.extraRules = ''
+    KERNEL=="ttyACM0", TAG+="systemd", ENV{SYSTEMD_WANTS}="serial-getty@ttyACM0.service"
+  '';
 
   disko.devices.disk.main = {
     device = "/dev/nvme0n1";
