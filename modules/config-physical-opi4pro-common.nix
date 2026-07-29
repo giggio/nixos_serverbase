@@ -73,6 +73,10 @@ let
   #
   # IMPORTANT: the boot.cmd heredoc below MUST stay in sync with the `bootScript` derivation further down. They generate the
   # same script for two different moments (switch-time vs image-build-time). If you change memory addresses in one, change both.
+  # "In sync" here means BYTE-IDENTICAL output, not merely equivalent: a card flashed from the boot-only image
+  # (setup-opi4pro-boot-image.nix) is verified by comparing its four files against a running system's /boot/firmware, and this
+  # is the only one of the four that is generated rather than copied. The derivation keeps its explanatory comments in the
+  # source and strips them before mkimage; this heredoc has none to begin with. Do not add any here.
   installOpi4ProBootloader = pkgs.writeShellApplication {
     name = "install-opi4pro-bootloader";
     runtimeInputs = (
@@ -85,6 +89,14 @@ let
       set -euo pipefail
       toplevel="$1"
       fw=/boot/firmware
+
+      # Both artifacts this script wraps with mkimage (uInitrd and boot.scr) carry a legacy U-Boot header whose ih_time field
+      # is, by default, the wall clock at generation time - which also feeds the header CRC. That alone would make every
+      # switch-generated file differ from the nix-built one even when the payload is identical, and byte-identity is exactly
+      # what makes a flashed card verifiable against a running system (see setup-opi4pro-boot-image.nix). mkimage honours
+      # SOURCE_DATE_EPOCH, so pin it to the same value nix uses for its builds (1980-01-01, the epoch nix exports into every
+      # build sandbox). U-Boot never reads ih_time for anything, so freezing it costs nothing.
+      export SOURCE_DATE_EPOCH=315532800
 
       # Refuse to run if the FAT firmware partition is not mounted - otherwise we would silently write the kernel into an empty
       # directory on the root filesystem and the board would keep booting the old kernel with no visible error.
@@ -581,7 +593,12 @@ let
       bootArgs = "init=${config.system.build.toplevel}/init ${toString config.boot.kernelParams}";
     in
     /* bash */ ''
-      cat << EOF > boot.cmd
+      # The comments below document the memory map next to the lines they explain, but they must NOT reach the artifact:
+      # installOpi4ProBootloader emits the same commands WITHOUT them, and the two outputs have to be byte-identical. That is
+      # what lets a freshly flashed card (see setup-opi4pro-boot-image.nix) be verified with a plain `cmp` against a running
+      # system's /boot/firmware/boot.scr - otherwise every comparison reports a false mismatch on this one file. So the
+      # annotated script is written first and the comment/blank lines are stripped before mkimage sees it.
+      cat << EOF > boot.cmd.annotated
       # Armbian's hardware-tested sun60iw2 memory map. BL31 (the secure monitor) is RESIDENT at 0x48000000-0x48ffffff and is
       # still needed at handoff time - U-Boot calls into it via SMC to switch the CPU to 64-bit and enter the kernel. So the
       # kernel goes BELOW it and the FDT/initrd go ABOVE it.
@@ -609,6 +626,7 @@ let
       # this 32-bit U-Boot; the vendor's SMC handoff to BL31 is what actually enters the kernel.)
       booti \$kernel_addr_r \$ramdisk_addr_r \$fdt_addr_r
       EOF
+      sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' boot.cmd.annotated > boot.cmd
       mkimage -C none -A arm -T script -d boot.cmd boot.scr
       cp boot.scr $out
     ''
