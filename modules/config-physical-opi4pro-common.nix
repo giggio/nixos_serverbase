@@ -42,10 +42,33 @@
   modulesPath,
   pkgs,
   config,
+  inputs,
   ...
 }:
 
 let
+  # ---------------------------------------------------------------------------------------------------------------------------
+  # The boot chain builds against a PINNED nixpkgs, not the machine's.
+  # ---------------------------------------------------------------------------------------------------------------------------
+  # Everything below that takes hours to compile - the vendor kernel, vendor U-Boot, and the three cross toolchains they need -
+  # is built from `nixpkgs-bootchain` instead of from `pkgs`. The sources are pinned to vendor git revs with fixed hashes, so a
+  # nixpkgs bump can only ever change WHICH compiler builds them, never WHAT gets built; without this, one glibc security
+  # backport was enough to invalidate the whole chain and cost 4-6 emulated hours for an identical result.
+  # The kernel and U-Boot are pinned to vendor git revs of their own, so nixpkgs can never change
+  # what they contain - only which GCC compiles them. Following `nixpkgs` meant that any stdenv-level backport (a glibc CVE
+  # patch is enough) produced a byte-for-byte pointless rebuild, which on aarch64 is 4-6 hours under emulation and was the
+  # reason updates happened monthly instead of weekly.
+  # Everything outside the boot chain still follows `nixpkgs` and gets every patch as before.
+  # Instantiated with an empty config and NO overlays on purpose: the boot chain must not be reachable from the machine's
+  # overlays, or an unrelated package set change would start invalidating it again through the back door.
+  # Deliberately NOT moved here: `installOpi4ProBootloader`, `flashUboot`, `bootScript` and `initrdUImage`. Those are cheap, and
+  # the first two are scripts that run as root on the live system, so they should keep tracking the patched coreutils/util-linux
+  # the rest of the system uses. They also embed the current generation's store path, so they rebuild on every switch regardless.
+  bootchainPkgs = import inputs.nixpkgs-bootchain {
+    inherit (pkgs.stdenv.hostPlatform) system;
+    config = { };
+  };
+
   # ---------------------------------------------------------------------------------------------------------------------------
   # Cross toolchain for the 32-bit ARM vendor U-Boot.
   # ---------------------------------------------------------------------------------------------------------------------------
@@ -56,9 +79,10 @@ let
   # vendor tree's own typedefs.
   #
   # This is the same triple Armbian uses (UBOOT_COMPILER="arm-linux-gnueabi-" in config/sources/families/sun60iw2.conf).
-  # NOTE: the first build compiles GCC from source on the aarch64 build machine (slow - hours). It is cached afterwards.
-  pkgsArmLinuxGnueabi = import pkgs.path {
-    system = pkgs.stdenv.buildPlatform.system;
+  # NOTE: the first build compiles GCC from source on the aarch64 build machine (slow - hours). It is cached afterwards, and
+  # pinned via bootchainPkgs so a nixpkgs bump does not throw that cache away.
+  pkgsArmLinuxGnueabi = import bootchainPkgs.path {
+    system = bootchainPkgs.stdenv.buildPlatform.system;
     crossSystem = {
       config = "armv7l-unknown-linux-gnueabi";
     };
@@ -165,7 +189,7 @@ let
   #   - the board-specific boot0 blob       (packages/blobs/sunxi/sun60iw2/boot0_sdcard_orangepi4pro.fex)
   #   - the board-specific sys_config blob  (packages/blobs/sunxi/sun60iw2/sys_config_orangepi.fex)
   # The last two are per-board (DRAM timing, pin muxing); Armbian's board file states there is no valid generic default.
-  armbianBuild = pkgs.fetchFromGitHub {
+  armbianBuild = bootchainPkgs.fetchFromGitHub {
     owner = "armbian";
     repo = "build";
     rev = "v26.8.0-trunk.343";
@@ -175,7 +199,7 @@ let
   # Orange Pi's own build repo. We use it only for the proprietary x86 packing tools (external/packages/pack-uboot/tools/*) and
   # the shared SoC boot assets: boot_package.cfg, monitor.fex (BL31), scp.fex, and dts/. Pinned to the exact commit Armbian
   # pins, so the monitor/SCP blobs we pack are byte-identical to the ones in a working Armbian image (verified with sha256).
-  orangepiBuild = pkgs.fetchFromGitHub {
+  orangepiBuild = bootchainPkgs.fetchFromGitHub {
     owner = "orangepi-xunlong";
     repo = "orangepi-build";
     rev = "7f776a209b72b92e8c6a06abc83b1e7597eef5af";
@@ -188,13 +212,13 @@ let
   # These are `update_dtb`, `update_uboot`, `script`, and `dragonsecboot`. They assemble the TOC1 container (boot_package.fex)
   # and stamp Allwinner's private header into the U-Boot binary. They are statically linked, so the QEMU wrapper only needs the
   # -L library path as a fallback; it works regardless.
-  pkgsi686 = pkgs.pkgsCross.gnu32;
-  pkgsx86_64 = pkgs.pkgsCross.gnu64;
+  pkgsi686 = bootchainPkgs.pkgsCross.gnu32;
+  pkgsx86_64 = bootchainPkgs.pkgsCross.gnu64;
 
   sunxiPackTools =
-    pkgs.runCommand "sunxi-pack-tools"
+    bootchainPkgs.runCommand "sunxi-pack-tools"
       {
-        nativeBuildInputs = [ pkgs.qemu ];
+        nativeBuildInputs = [ bootchainPkgs.qemu ];
       }
       ''
         mkdir -p $out/bin
@@ -218,10 +242,10 @@ let
             # Some entries in tools/ are data files, not ELF binaries - copy those through untouched.
             if file "$f" | grep -q "ELF"; then
               if file "$f" | grep -q "x86-64"; then
-                QEMU_BIN="${pkgs.qemu}/bin/qemu-x86_64"
+                QEMU_BIN="${bootchainPkgs.qemu}/bin/qemu-x86_64"
                 LIB_PATH="$X86_64_LIBS"
               else
-                QEMU_BIN="${pkgs.qemu}/bin/qemu-i386"
+                QEMU_BIN="${bootchainPkgs.qemu}/bin/qemu-i386"
                 LIB_PATH="$X86_LIBS"
               fi
 
@@ -241,9 +265,9 @@ let
   # ---------------------------------------------------------------------------------------------------------------------------
   # Vendor U-Boot (32-bit ARM), built from source and packed into Allwinner's TOC1 container.
   # ---------------------------------------------------------------------------------------------------------------------------
-  ubootOrangePi4Pro = pkgs.buildUBoot {
+  ubootOrangePi4Pro = bootchainPkgs.buildUBoot {
     version = "6.6-vendor";
-    src = pkgs.fetchFromGitHub {
+    src = bootchainPkgs.fetchFromGitHub {
       owner = "orangepi-xunlong";
       repo = "u-boot-orangepi";
       rev = "v2018.05-sun60iw2";
@@ -286,7 +310,7 @@ let
       makeFlagsArray+=("KCFLAGS=-fcommon -fomit-frame-pointer -Wno-error -Wno-attributes -Wno-array-bounds -Wno-maybe-uninitialized -Wno-stringop-overflow")
     '';
 
-    nativeBuildInputs = with pkgs; [
+    nativeBuildInputs = with bootchainPkgs; [
       bison
       flex
       swig
@@ -336,7 +360,7 @@ let
     postPatch = ''
       echo "Patching hardcoded paths and setting up hermetic toolchains..."
       patchShebangs scripts/
-      if [ -f Makefile ]; then sed -i 's|/bin/bash|${pkgs.bash}/bin/bash|g' Makefile; fi
+      if [ -f Makefile ]; then sed -i 's|/bin/bash|${bootchainPkgs.bash}/bin/bash|g' Makefile; fi
 
       # The vendor Makefile tries to untar toolchains it expects to find in ../tools/toolchain/. We supply the toolchains via
       # symlinks below instead, so delete the tar/mkdir lines that would fail in the sandbox.
@@ -472,7 +496,7 @@ let
     "NFSD_V4"
   ];
   vendorKernelConfig =
-    pkgs.runCommand "linux-sun60iw2-vendor-md-nfsd.config"
+    bootchainPkgs.runCommand "linux-sun60iw2-vendor-md-nfsd.config"
       {
         base = "${armbianBuild}/config/kernel/linux-sun60iw2-vendor.config";
         symbols = kernelExtraEnabledSymbols;
@@ -489,13 +513,13 @@ let
   # Vendor Linux kernel (aarch64, 6.6.98).
   # ---------------------------------------------------------------------------------------------------------------------------
   orangepiVendorKernel =
-    (pkgs.linuxManualConfig {
-      inherit (pkgs) stdenv;
+    (bootchainPkgs.linuxManualConfig {
+      inherit (bootchainPkgs) stdenv;
 
       version = "6.6.98-sun60iw2";
       modDirVersion = "6.6.98";
 
-      src = pkgs.fetchFromGitHub {
+      src = bootchainPkgs.fetchFromGitHub {
         owner = "orangepi-xunlong";
         repo = "linux-orangepi";
         rev = "orange-pi-6.6-sun60iw2"; # the vendor branch carrying A733/sun60iw2 support
@@ -567,7 +591,7 @@ let
         '';
 
         nativeBuildInputs =
-          with pkgs;
+          with bootchainPkgs;
           [
             # GNU Make 4.4 changed how it handles some constructs this 2023-era vendor tree relies on; 4.2 builds it cleanly.
             # It must come first in PATH, hence prepending rather than appending.
@@ -734,7 +758,7 @@ in
   };
 
   boot = {
-    kernelPackages = pkgs.linuxPackagesFor orangepiVendorKernel;
+    kernelPackages = bootchainPkgs.linuxPackagesFor orangepiVendorKernel;
 
     # Nothing on this board is on ZFS (root and the array are ext4, see config-physical-opi4pro.nix and the NAS disko layout),
     # but the base profile still pulls the out-of-tree module in. Against this vendor tree that means compiling zfs-kernel for

@@ -3,6 +3,11 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
     nixpkgs-unstable.url = "github:nixos/nixpkgs/nixos-unstable";
+    # Toolchain for the opi4pro vendor boot chain (kernel, U-Boot, their cross compilers) - see the header of
+    # modules/config-physical-opi4pro-common.nix. Deliberately a REV, not a branch: `nix flake update` must not move it.
+    # Bump this at a nixpkgs release change, or when touching the kernel config/patches - i.e. when a rebuild is happening
+    # anyway. There is no security argument for bumping it on its own: nothing here links against the pinned userland.
+    nixpkgs-bootchain.url = "github:nixos/nixpkgs/8623c4c20aa4ca2f5fb81510d2944066c3fb0d96"; # nixos-26.05, 2026-07-26
     home-manager = {
       url = "github:nix-community/home-manager/release-26.05";
       inputs.nixpkgs.follows = "nixpkgs";
