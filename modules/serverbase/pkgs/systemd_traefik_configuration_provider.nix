@@ -1,29 +1,28 @@
+# Built with nixpkgs' own rustPlatform rather than a pinned-toolchain one (fenix). fenix tracks upstream Rust releases, so its
+# toolchain derivation moved on every flake update and dragged this whole crate graph into a rebuild with it - on aarch64 that
+# is a recompile under emulation, weekly, for a binary whose source is pinned to a fixed rev below. The release channel's rustc
+# only moves when the channel does. Nothing here needs a nightly feature.
 {
-  rust-toolchain-fenix,
   lib,
   fetchgit,
-  makeRustPlatform,
+  rustPlatform,
 }:
 
-(makeRustPlatform {
-  cargo = rust-toolchain-fenix;
-  rustc = rust-toolchain-fenix;
-}).buildRustPackage
-  rec {
-    pname = "systemd_traefik_configuration_provider";
-    version = "0.1.1";
+rustPlatform.buildRustPackage rec {
+  pname = "systemd_traefik_configuration_provider";
+  version = "0.1.1";
 
-    src = fetchgit {
-      url = "https://codeberg.org/giggio/systemd_traefik_configuration_provider.git";
-      rev = "a41445127280dc4983cd2ae3edf65394f1b914c2";
-      hash = "sha256-9N4Z7HnVEUW0d/YIf0FXIqJd6dx79JrCiMZb+fOb6ps=";
-    };
+  src = fetchgit {
+    url = "https://codeberg.org/giggio/systemd_traefik_configuration_provider.git";
+    rev = "a41445127280dc4983cd2ae3edf65394f1b914c2";
+    hash = "sha256-9N4Z7HnVEUW0d/YIf0FXIqJd6dx79JrCiMZb+fOb6ps=";
+  };
 
-    cargoLock.lockFile = "${src}/Cargo.lock";
+  cargoLock.lockFile = "${src}/Cargo.lock";
 
-    meta = with lib; {
-      description = "Traefik Configuration Provider from systemd";
-      homepage = "https://codeberg.org/giggio/systemd_traefik_configuration_provider";
-      license = licenses.mit;
-    };
-  }
+  meta = with lib; {
+    description = "Traefik Configuration Provider from systemd";
+    homepage = "https://codeberg.org/giggio/systemd_traefik_configuration_provider";
+    license = licenses.mit;
+  };
+}

@@ -28,7 +28,7 @@
   };
 
   nixpkgs.config.allowUnfree = false;
-  nixpkgs.overlays = import ./overlays.nix { inherit inputs; };
+  nixpkgs.overlays = import ./overlays.nix { };
 
   nix = {
     settings = {
