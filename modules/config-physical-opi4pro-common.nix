@@ -735,6 +735,13 @@ in
 
   boot = {
     kernelPackages = pkgs.linuxPackagesFor orangepiVendorKernel;
+
+    # Nothing on this board is on ZFS (root and the array are ext4, see config-physical-opi4pro.nix and the NAS disko layout),
+    # but the base profile still pulls the out-of-tree module in. Against this vendor tree that means compiling zfs-kernel for
+    # an aarch64 kernel nixpkgs has no binary for, and it recompiles on every toolchain bump - hours under emulation, for a
+    # module that is never loaded.
+    supportedFilesystems.zfs = lib.mkForce false;
+
     kernelParams = [
       # NOTE ON CONSOLE ORDER: the LAST console= wins and becomes /dev/console, where userspace (systemd's [ OK ] lines, getty)
       # writes. Kernel messages go to ALL consoles regardless. ttyS0 is last here, so SERIAL is primary; HDMI still shows kernel
