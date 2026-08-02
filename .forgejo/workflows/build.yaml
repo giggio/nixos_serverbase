@@ -1,0 +1,103 @@
+# Builds every machine, runs the check suite, and pushes both to the private attic cache.
+#
+# THIS IS MEANT TO RUN ON THE PRIVATE FORGEJO INSTANCE ONLY. This repository is mirrored to a public forge, where the
+# Actions unit is deliberately left disabled: on a public forge anyone can fork and open a pull request, a pull request
+# runs the workflow file from the fork's own commit, and that file chooses its own `runs-on` and container options - so
+# there is no way to keep a fork from asking for whatever runner it likes. The protection is that no runner is
+# registered against the public forge for this repository at all, and that its Actions unit is off. Runners register
+# against one forge with one token and only ever receive jobs from it, so `nix-kvm` below is unreachable from there.
+#
+# The `nix-kvm` runner is the privileged one: no kata, with /dev/kvm passed in. It is safe to build this repository on
+# it only because the private instance has registration disabled and a single account. That invariant is asserted in
+# the superproject's gmktec1-forgejo check - if registration is ever enabled, that check fails and says why.
+#
+# What the cache push is for: the opi4pro boot chain (the vendor kernel, vendor U-Boot and the armv7l/riscv64 cross
+# toolchains) is the only thing here that nixpkgs has no binary for, and on aarch64 it builds under emulation - hours.
+# It is also pinned (see nixpkgs-bootchain in flake.nix), so a revision of it stays valid until that pin is deliberately
+# moved. The superproject's opi4pronas machine and this repository's opi4pro machine share
+# modules/config-physical-opi4pro-common.nix and produce the IDENTICAL kernel derivation, so what this job pushes is
+# what a build over there substitutes instead of compiling. Pushing to `servers` rather than a public cache also means
+# every machine already has it: they carry the attic substituter and its netrc from sops.
+#
+# Everything is one job on purpose: the runner's container gets a fresh /nix every time, so a second job would
+# re-download the whole closure to reach the same state.
+name: Build
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "*.md"
+      - "**/*.md"
+      - .editorconfig
+      - .gitignore
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - "*.md"
+      - "**/*.md"
+      - .editorconfig
+      - .gitignore
+jobs:
+  build:
+    name: build and check
+    runs-on: nix-kvm
+    container:
+      # derived from nixos/nix:2.32.8
+      image: giggio/nixaction
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure nix
+        run: |
+          {
+            echo 'experimental-features = nix-command flakes'
+            # The aarch64 machines (pi4, opi4pro) build through the host's binfmt registration, which is shared with
+            # containers because the emulators are static (boot.binfmt.preferStaticEmulators on gmktec1). Nix still
+            # refuses to build for a platform it was not told it can reach, hence this line.
+            echo 'extra-platforms = aarch64-linux'
+            # nixosTest derivations declare requiredSystemFeatures = "kvm nixos-test"; nix will not schedule them
+            # unless it believes it offers both. /dev/kvm itself comes from the runner, which passes the host device in.
+            echo 'system-features = nixos-test benchmark big-parallel kvm'
+          } >> /etc/nix/nix.conf
+      # The endpoint is a secret rather than a literal because this repository is public and the endpoint is on a
+      # personal domain, which must not appear here. --set-default is what makes the bare cache name in the Makefile's
+      # `attic push servers` resolve.
+      - name: Log into the cache
+        run: |
+          source <(nix print-dev-env .#vm)
+          attic login --set-default servers "${{ secrets.ATTIC_ENDPOINT }}" "${{ secrets.ATTIC_TOKEN }}"
+      # `.#vm` rather than the default shell: the default one carries libguestfs-with-appliance and guestfs-tools, for
+      # writing disk images from a workstation, and they are not cached for this platform - entering it costs a
+      # multi-minute build before any real work starts. The base shell has everything the Makefile needs.
+      #
+      # This builds all six systems, the three machines and their dev variants; the dev variants share almost the whole
+      # closure, so the marginal cost over three is evaluation and a handful of config derivations. Narrow it to
+      # `make out/nix/system/pi4 out/nix/system/gmktec1 out/nix/system/opi4pro` if that stops being true.
+      - name: Build the machines
+        run: |
+          source <(nix print-dev-env .#vm)
+          make out/nix/system
+      # Before the checks, not after: the machine closures are the expensive half and they are already built and valid
+      # at this point, so a failing check should not cost them.
+      - name: Push the machines to the cache
+        run: |
+          source <(nix print-dev-env .#vm)
+          make cache_systems
+      # `make checks` builds every check into its own log rather than letting nix interleave a dozen VM tests into one
+      # stream, keeps going after a failure so one broken check does not hide the state of the rest, prints a table
+      # naming each failure and its log, and exits non-zero if anything failed - so the job fails here.
+      - name: Run the checks
+        run: |
+          source <(nix print-dev-env .#vm)
+          make checks
+          for log in out/checks/*; do
+            echo "*** Log: $log ***"
+            cat "$log"
+            echo
+          done
+      - name: Push the checks to the cache
+        run: |
+          source <(nix print-dev-env .#vm)
+          make cache_checks
