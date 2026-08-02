@@ -37,7 +37,7 @@ result_iso_dir := $(result_nix_dir)/iso
 result_img_dir := $(result_nix_dir)/img
 result_system_dir := $(result_nix_dir)/system
 
-.PHONY: default help $(out_dir) $(out_nix_dir) $(out_iso_dir) $(out_img_dir) $(out_system_dir)
+.PHONY: default help cache_systems $(out_dir) $(out_nix_dir) $(out_iso_dir) $(out_img_dir) $(out_system_dir)
 
 machines_details := $(shell nix run .#list_machines)
 machines := $(shell for x in $$(echo "$(machines_details)" | sed 's/|/\n/g' | grep '^machines ' | sed 's/^machines //'); do printf '%s ' "$$x"; done)
@@ -495,6 +495,11 @@ cache_machines := $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do pr
 $(cache_machines): cache_%:
 	@echo -e "Pushing cache for machine \e[32m$*\e[0m"
 	nix build .#nixosConfigurations.$*.config.system.build.toplevel --no-link --print-out-paths | attic push servers --stdin
+
+## Pushes every machine's system closure to the cache - the counterpart of `cache_checks`, and what CI runs after
+## building, so the expensive derivations (the opi4pro vendor kernel and U-Boot above all) are pushed even if a later
+## step fails. Serial on purpose: these are evaluations and uploads, not builds, so there is nothing to overlap.
+cache_systems: $(cache_machines)
 
 ## Default target (do not use)
 default:

@@ -650,6 +650,8 @@
             zstd
             util-linux
             sops
+            iproute2
+            attic-client
           ]
           ++ extraModules;
         shellHook = /* bash */ ''
