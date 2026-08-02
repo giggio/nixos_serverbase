@@ -68,6 +68,14 @@ jobs:
         run: |
           source <(nix print-dev-env .#vm)
           attic login --set-default servers "${{ secrets.ATTIC_ENDPOINT }}" "${{ secrets.ATTIC_TOKEN }}"
+          # Read FROM the cache too, not just write to it. The container's /nix starts empty on every run, so without a
+          # substituter the opi4pro vendor kernel and U-Boot - which no public cache has - would be compiled from
+          # source every time, which is the entire thing the pin is meant to stop. `attic use` takes the endpoint and
+          # the cache's public key from the login above, so neither has to be written down here.
+          attic use servers
+          # Printed on purpose: a substituter that failed to configure shows up as a four-hour build rather than as an
+          # error, so the log should say plainly whether it is there.
+          nix config show substituters
       # `.#vm` rather than the default shell: the default one carries libguestfs-with-appliance and guestfs-tools, for
       # writing disk images from a workstation, and they are not cached for this platform - entering it costs a
       # multi-minute build before any real work starts. The base shell has everything the Makefile needs.
