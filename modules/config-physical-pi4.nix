@@ -5,6 +5,55 @@
   ...
 }:
 
+let
+  # ---------------------------------------------------------------------------------------------------------------------------
+  # The kernel is CROSS-compiled from x86_64, not built natively under emulation.
+  # ---------------------------------------------------------------------------------------------------------------------------
+  # nixos-hardware builds `linux-rpi` from the raspberrypi/linux vendor tree, and Hydra does not build nixos-hardware, so this
+  # kernel is in no public cache - it is compiled on every nixpkgs bump. A stdenv-level backport (a glibc CVE patch is enough)
+  # rehashes the derivation even though the kernel source is byte-identical, so that happens weekly, and on x86_64 it happens
+  # through binfmt emulation at well over an hour. Cross-compiling makes it a native x86_64 compile targeting aarch64: the
+  # aarch64 GCC, binutils and glibc all come prebuilt from cache.nixos.org, and only the kernel itself is built.
+  #
+  # This does NOT make the kernel immune to nixpkgs bumps - it still rebuilds weekly, just far faster. Pinning it the way
+  # modules/config-physical-opi4pro-common.nix pins the opi4pro boot chain is what would take the cost to zero; the two
+  # compose, and this is the half that helps whenever a rebuild does have to happen.
+  #
+  # The build platform is hardcoded rather than taken from the evaluating machine on purpose: the pi has to evaluate the same
+  # derivation the builder pushed, or it would see a cache miss and start building its own kernel. The flip side is that a
+  # `nixos-rebuild` on the pi itself can no longer fall back to compiling this locally - it depends on the closure being in the
+  # cache, which is exactly what the weekly CI job guarantees.
+  crossPkgs = import inputs.nixpkgs {
+    localSystem = "x86_64-linux";
+    crossSystem = "aarch64-linux";
+    config = { };
+  };
+
+  # Rust has to be off for the cross build to be worth anything. nixpkgs' common-config turns CONFIG_RUST on whenever rustc is
+  # available for the host platform, which drags rustc, cargo, rustfmt and bindgen into nativeBuildInputs - and for a cross
+  # build those are `aarch64-unknown-linux-gnu-rustc` and friends, which Hydra does not build either. Leaving it on replaces an
+  # hour of emulated kernel build with a from-source cross Rust toolchain every week, which is worse. Nothing here uses an
+  # in-tree Rust driver; the cost of turning it off is DRM_PANIC and the Rust driver infrastructure, neither of which this
+  # board has ever used.
+  #
+  # It is injected by wrapping `buildLinux` rather than by passing `structuredExtraConfig`, because nixos-hardware's kernel.nix
+  # overwrites that argument with its own set (NR_CPUS, CMA_SIZE_MBYTES, the preempt model, ...). Wrapping intercepts the exact
+  # attribute set it hands to buildLinux, so their settings survive verbatim and a change on their side is picked up instead of
+  # being silently replaced by a stale copy.
+  kernel = crossPkgs.callPackage "${inputs.nixos-hardware}/raspberry-pi/common/kernel.nix" {
+    rpiVersion = 4;
+    buildLinux =
+      attrs:
+      crossPkgs.buildLinux (
+        attrs
+        // {
+          structuredExtraConfig = (attrs.structuredExtraConfig or { }) // {
+            RUST = lib.mkForce lib.kernel.no;
+          };
+        }
+      );
+  };
+in
 {
   imports = [
     "${modulesPath}/installer/sd-card/sd-image-aarch64.nix"
@@ -12,7 +61,9 @@
   ];
 
   boot = {
-    # kernelPackages is being set by nixos-hardware
+    # Overrides the `lib.mkDefault` nixos-hardware sets, with the same kernel built for the same board - the only difference
+    # is which machine compiles it, and the CONFIG_RUST above.
+    kernelPackages = crossPkgs.linuxPackagesFor kernel;
     supportedFilesystems.zfs = lib.mkForce false; # todo: remove this when zfs is supported
     kernelModules = [ "bcm2835-v4l2" ]; # originally missing, as we are not using the vendored kernel
     kernelParams = lib.mkForce [

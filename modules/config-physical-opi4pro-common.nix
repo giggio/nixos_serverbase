@@ -64,8 +64,20 @@ let
   # Deliberately NOT moved here: `installOpi4ProBootloader`, `flashUboot`, `bootScript` and `initrdUImage`. Those are cheap, and
   # the first two are scripts that run as root on the live system, so they should keep tracking the patched coreutils/util-linux
   # the rest of the system uses. They also embed the current generation's store path, so they rebuild on every switch regardless.
+  #
+  # It is also a CROSS package set: built on x86_64, targeting the board. Everything below used to be compiled by an aarch64
+  # toolchain, which on the only builders that exist here means binfmt emulation - 4-6 hours for the chain. Cross-compiling
+  # makes every compile in it native x86_64 work, and it is the same win in three places at once: the vendor kernel, the
+  # armv7l GCC that builds U-Boot (which was itself being compiled from source under emulation), and the i686/x86_64 package
+  # sets the Allwinner pack tools need, which as cross-from-aarch64 sets were in no cache either.
+  # `localSystem` is hardcoded rather than read from the evaluating machine on purpose - see the same argument in
+  # config-physical-pi4.nix: the board has to evaluate the derivation the builder pushed, not one of its own.
+  # NOTE: switching to cross changes the drvPath of everything under the pin, so it costs one full rebuild of the boot chain -
+  # deliberately, once - and the pin holds it steady again afterwards. The acceptance test for a nixpkgs bump is unchanged in
+  # form: the kernel drvPath must not move when `nixpkgs` does, only when `nixpkgs-bootchain` does.
   bootchainPkgs = import inputs.nixpkgs-bootchain {
-    inherit (pkgs.stdenv.hostPlatform) system;
+    localSystem = "x86_64-linux";
+    crossSystem = pkgs.stdenv.hostPlatform.system;
     config = { };
   };
 
@@ -79,8 +91,10 @@ let
   # vendor tree's own typedefs.
   #
   # This is the same triple Armbian uses (UBOOT_COMPILER="arm-linux-gnueabi-" in config/sources/families/sun60iw2.conf).
-  # NOTE: the first build compiles GCC from source on the aarch64 build machine (slow - hours). It is cached afterwards, and
-  # pinned via bootchainPkgs so a nixpkgs bump does not throw that cache away.
+  # NOTE: the first build compiles this GCC from source - no cache has it, the triple is too unusual. `buildPlatform.system`
+  # is what makes that compile follow bootchainPkgs: it is x86_64 now that the set above is a cross one, so the toolchain is
+  # built natively instead of under emulation. It is cached afterwards, and pinned via bootchainPkgs so a nixpkgs bump does
+  # not throw that cache away.
   pkgsArmLinuxGnueabi = import bootchainPkgs.path {
     system = bootchainPkgs.stdenv.buildPlatform.system;
     crossSystem = {
@@ -215,24 +229,40 @@ let
   pkgsi686 = bootchainPkgs.pkgsCross.gnu32;
   pkgsx86_64 = bootchainPkgs.pkgsCross.gnu64;
 
+  # Which branch applies is decided HERE, at evaluation time, rather than by `uname -m` inside the build. The build platform is
+  # already known while evaluating, and the difference matters: a `${}` interpolation puts its store path in the derivation's
+  # inputs whether or not the shell ever reaches that line, so a runtime `if` would make an x86_64 build depend on qemu and on
+  # the i686/x86_64 package sets regardless. That is not free - `buildPackages.qemu` is NOT the same derivation as a plain
+  # native qemu (nixpkgs' buildPackages differs subtly from a natively-instantiated set), so nothing has it cached, and it
+  # arrives with a GTK/SDL closure attached: ~180 derivations to build, for a branch that would never run.
+  #
+  # Everything here comes from `buildPackages`, not from `bootchainPkgs` directly: these tools RUN on the builder (they are a
+  # nativeBuildInput of the U-Boot build below), so under a cross set they must come from the build platform. Entries in a
+  # `nativeBuildInputs` list get spliced to the build platform automatically, but an interpolation does not - it would bake in
+  # an aarch64 qemu that cannot execute on an x86_64 builder. On a native build `buildPackages` is the same package set, so
+  # this reads identically there.
+  packToolsRunNatively = bootchainPkgs.stdenv.buildPlatform.isx86_64;
+
   sunxiPackTools =
-    bootchainPkgs.runCommand "sunxi-pack-tools"
-      {
-        nativeBuildInputs = [ bootchainPkgs.qemu ];
-      }
-      ''
+    if packToolsRunNatively then
+      bootchainPkgs.buildPackages.runCommand "sunxi-pack-tools" { } ''
         mkdir -p $out/bin
-        # On x86_64 the tools run natively - no emulation needed.
-        if [ "$(uname -m)" = "x86_64" ]; then
-          echo "Running on x86_64, copying binaries natively..."
-          for f in ${orangepiBuild}/external/packages/pack-uboot/tools/*; do
-            if [ ! -f "$f" ]; then continue; fi
-            fname=$(basename "$f")
-            cp "$f" $out/bin/$fname
-            chmod +x $out/bin/$fname
-          done
-        else
-          echo "Running on $(uname -m), using QEMU..."
+        echo "Building on x86_64, copying binaries natively..."
+        for f in ${orangepiBuild}/external/packages/pack-uboot/tools/*; do
+          if [ ! -f "$f" ]; then continue; fi
+          fname=$(basename "$f")
+          cp "$f" $out/bin/$fname
+          chmod +x $out/bin/$fname
+        done
+      ''
+    else
+      bootchainPkgs.buildPackages.runCommand "sunxi-pack-tools"
+        {
+          nativeBuildInputs = [ bootchainPkgs.buildPackages.qemu ];
+        }
+        ''
+          mkdir -p $out/bin
+          echo "Building on ${bootchainPkgs.stdenv.buildPlatform.system}, using QEMU..."
           X86_LIBS="${pkgsi686.glibc}/lib:${pkgsi686.stdenv.cc.cc.lib}/lib"
           X86_64_LIBS="${pkgsx86_64.glibc}/lib:${pkgsx86_64.stdenv.cc.cc.lib}/lib"
           for f in ${orangepiBuild}/external/packages/pack-uboot/tools/*; do
@@ -242,25 +272,24 @@ let
             # Some entries in tools/ are data files, not ELF binaries - copy those through untouched.
             if file "$f" | grep -q "ELF"; then
               if file "$f" | grep -q "x86-64"; then
-                QEMU_BIN="${bootchainPkgs.qemu}/bin/qemu-x86_64"
+                QEMU_BIN="${bootchainPkgs.buildPackages.qemu}/bin/qemu-x86_64"
                 LIB_PATH="$X86_64_LIBS"
               else
-                QEMU_BIN="${bootchainPkgs.qemu}/bin/qemu-i386"
+                QEMU_BIN="${bootchainPkgs.buildPackages.qemu}/bin/qemu-i386"
                 LIB_PATH="$X86_LIBS"
               fi
 
               cat <<EOF > $out/bin/$fname
-        #!/bin/sh
-        exec $QEMU_BIN -L $LIB_PATH "$f" "\$@"
-        EOF
+          #!/bin/sh
+          exec $QEMU_BIN -L $LIB_PATH "$f" "\$@"
+          EOF
               chmod +x $out/bin/$fname
             else
               cp "$f" $out/bin/$fname
               chmod +x $out/bin/$fname
             fi
           done
-        fi
-      '';
+        '';
 
   # ---------------------------------------------------------------------------------------------------------------------------
   # Vendor U-Boot (32-bit ARM), built from source and packed into Allwinner's TOC1 container.
@@ -360,7 +389,7 @@ let
     postPatch = ''
       echo "Patching hardcoded paths and setting up hermetic toolchains..."
       patchShebangs scripts/
-      if [ -f Makefile ]; then sed -i 's|/bin/bash|${bootchainPkgs.bash}/bin/bash|g' Makefile; fi
+      if [ -f Makefile ]; then sed -i 's|/bin/bash|${bootchainPkgs.buildPackages.bash}/bin/bash|g' Makefile; fi
 
       # The vendor Makefile tries to untar toolchains it expects to find in ../tools/toolchain/. We supply the toolchains via
       # symlinks below instead, so delete the tar/mkdir lines that would fail in the sandbox.
