@@ -7,23 +7,29 @@
 
 let
   # ---------------------------------------------------------------------------------------------------------------------------
-  # The kernel is CROSS-compiled from x86_64, not built natively under emulation.
+  # The kernel is PINNED to nixpkgs-bootchain and CROSS-compiled from x86_64, not built natively under emulation.
   # ---------------------------------------------------------------------------------------------------------------------------
   # nixos-hardware builds `linux-rpi` from the raspberrypi/linux vendor tree, and Hydra does not build nixos-hardware, so this
-  # kernel is in no public cache - it is compiled on every nixpkgs bump. A stdenv-level backport (a glibc CVE patch is enough)
-  # rehashes the derivation even though the kernel source is byte-identical, so that happens weekly, and on x86_64 it happens
-  # through binfmt emulation at well over an hour. Cross-compiling makes it a native x86_64 compile targeting aarch64: the
-  # aarch64 GCC, binutils and glibc all come prebuilt from cache.nixos.org, and only the kernel itself is built.
+  # kernel is in no public cache - whoever evaluates it compiles it. Left on the tracking `nixpkgs`, a stdenv-level backport - a
+  # glibc CVE patch is enough - rehashes the derivation even though the kernel source is byte-identical, so `nix flake update`
+  # rebuilt it EVERY WEEK. Measured on the CI runner: 3 hours cross-compiled, and over an hour more than that emulated. That is
+  # what the two measures below are for, and they address different halves of the problem.
   #
-  # This does NOT make the kernel immune to nixpkgs bumps - it still rebuilds weekly, just far faster. Pinning it the way
-  # modules/config-physical-opi4pro-common.nix pins the opi4pro boot chain is what would take the cost to zero; the two
-  # compose, and this is the half that helps whenever a rebuild does have to happen.
+  # PINNING (nixpkgs-bootchain) is what makes the rebuild stop happening. It is the same input, and for the same reason, as the
+  # opi4pro boot chain in modules/config-physical-opi4pro-common.nix - see the comment on the input in flake.nix. Only the
+  # toolchain that compiles the kernel is pinned; the kernel SOURCE comes from nixos-hardware, which `nix flake update` still
+  # moves, so kernel security updates arrive exactly as before. What is given up is stdenv fixes for a package that links
+  # against no pinned userland at runtime - a kernel image has no dynamic dependencies at all.
+  #
+  # CROSS-COMPILING is what makes the rebuild cheap on the weeks it does happen - a nixos-hardware bump to the vendor kernel, or
+  # a bump of the pin. It turns an emulated aarch64 compile into a native x86_64 one targeting aarch64: the aarch64 GCC,
+  # binutils and glibc all come prebuilt from cache.nixos.org, and only the kernel itself is built.
   #
   # The build platform is hardcoded rather than taken from the evaluating machine on purpose: the pi has to evaluate the same
   # derivation the builder pushed, or it would see a cache miss and start building its own kernel. The flip side is that a
   # `nixos-rebuild` on the pi itself can no longer fall back to compiling this locally - it depends on the closure being in the
   # cache, which is exactly what the weekly CI job guarantees.
-  crossPkgs = import inputs.nixpkgs {
+  crossPkgs = import inputs.nixpkgs-bootchain {
     localSystem = "x86_64-linux";
     crossSystem = "aarch64-linux";
     config = { };

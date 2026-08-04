@@ -3,10 +3,12 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
     nixpkgs-unstable.url = "github:nixos/nixpkgs/nixos-unstable";
-    # Toolchain for the opi4pro vendor boot chain (kernel, U-Boot, their cross compilers) - see the header of
-    # modules/config-physical-opi4pro-common.nix. Deliberately a REV, not a branch: `nix flake update` must not move it.
-    # Bump this at a nixpkgs release change, or when touching the kernel config/patches - i.e. when a rebuild is happening
-    # anyway. There is no security argument for bumping it on its own: nothing here links against the pinned userland.
+    # Toolchain for the vendor kernels that no cache has: the opi4pro boot chain (kernel, U-Boot, their cross compilers) and
+    # pi4's linux-rpi - see the headers of modules/config-physical-opi4pro-common.nix and modules/config-physical-pi4.nix.
+    # Deliberately a REV, not a branch: `nix flake update` must not move it. Bump this at a nixpkgs release change, or when
+    # touching the kernel config/patches - i.e. when a rebuild is happening anyway, and knowing that bumping it costs one full
+    # rebuild of both kernels. There is no security argument for bumping it on its own: nothing here links against the pinned
+    # userland, and the kernel sources themselves come from nixos-hardware and the vendor repos, which are not pinned to it.
     nixpkgs-bootchain.url = "github:nixos/nixpkgs/8623c4c20aa4ca2f5fb81510d2944066c3fb0d96"; # nixos-26.05, 2026-07-26
     home-manager = {
       url = "github:nix-community/home-manager/release-26.05";
