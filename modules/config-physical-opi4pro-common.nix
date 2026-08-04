@@ -558,7 +558,25 @@ let
       # Armbian's kernel config for this board - itself a verbatim copy of Orange Pi's own. Using a full config file (rather
       # than a `defconfig` make target) is what makes this tree build and boot; the in-tree defconfigs do not match the board.
       configfile = vendorKernelConfig;
-      allowImportFromDerivation = true;
+
+      # Declared rather than parsed out of the .config, which is what `allowImportFromDerivation = true` used to do here.
+      # That flag makes nixpkgs `readFile` the BUILT config file, so merely EVALUATING this machine first has to BUILD
+      # `vendorKernelConfig` - import-from-derivation. Since the boot chain became a cross set that derivation is
+      # x86_64-linux, so the board could no longer evaluate its own configuration: `nixos-rebuild` on the Orange Pi died
+      # with "platform mismatch" before building anything, and only a cache hit on that one output could rescue it.
+      # nixpkgs' own kernels never have this problem because generic.nix supplies these same three symbols directly.
+      #
+      # Only two of them are actually read (`isModular` and `withRust` in pkgs/os-specific/linux/kernel/build.nix); nothing
+      # consults the rest of the config, and DTB installation comes from `stdenv.hostPlatform.linux-kernel.DTB`, not from
+      # here. The values match what the vendor config really contains (`CONFIG_MODULES=y`, no `CONFIG_RUST`), which is why
+      # this leaves the kernel's drvPath byte-identical - it is not a rebuild, only a cheaper way to learn the same facts.
+      # If a future symbol here ever has to reflect the vendor config, read it from `kernelExtraEnabledSymbols`/the Armbian
+      # file at eval time; do NOT reach for the IFD flag again.
+      config = {
+        CONFIG_MODULES = "y";
+        CONFIG_FW_LOADER = "y";
+        CONFIG_RUST = "n";
+      };
 
       # The four device-tree fixups Armbian carries on top of the vendor tree for this specific board: correct model string,
       # disable the unpopulated UFS controller, disable the absent AXP515 battery-management chip, and disable the unpopulated
