@@ -9,12 +9,39 @@
 # the run ends with a table. A red row names one file that holds that test and nothing else.
 
 # How many checks to build at once. Every check is a VM, and starting all of them together is what makes the test
-# driver time out rather than fail - the guest shells stop answering long before any assertion is reached. Most checks
-# default `virtualisation.cores` to 1 (the nixos test driver's own default), so 4 at a time is one vCPU per physical
-# core on a 4-core box - already the ceiling before the host is oversubscribed. A few checks ask for more themselves
-# (gmktec1's boot and forgejo-runner checks both set `cores = 2`), so even at this number two of those landing in the
-# same batch oversubscribes slightly; that is tolerated, going higher is not.
+# driver time out rather than fail - the guest shells stop answering long before any assertion is reached. Every check
+# leaves `virtualisation.cores` at the test driver's default of 1, so 4 at a time is one vCPU per physical core on a
+# 4-core box - already the ceiling before the host is oversubscribed. A check that asks for more than one vCPU is not
+# accounted for here, so anything that starts doing so should be weighed against this number.
+#
+# This bounds vCPUs and nothing else. Memory is bounded separately, by $(check_memory) below, and on any host that is
+# not a roomy workstation that is the bound that actually binds.
 check_jobs ?= 4
+
+# Memory, in MiB, that the checks running at once may add up to - each one counted as its nodes' `memorySize` plus
+# $(check_overhead). The second bound, and the one a count alone cannot express, since nothing says the checks are
+# the same size.
+#
+# The absence of this bound killed the weekly update run of 2026-08-04 on gmktec1, whose runner shares its 8G with
+# everything that machine serves. The checks then declared 4G each (gmktec1's boot check 6G, pi4-servarr-live 8G), so
+# the four alphabetically first ones - exactly what a flat `-P 4` starts with - came to 18G of guest memory before a
+# single service inside them had started. The kernel OOM killer took 13 checks one at a time, and since it sends
+# SIGKILL, each log just stopped mid-boot with nothing in it: 14 failures, not one log naming a failure. Those
+# declarations have since been measured and cut to a uniform 1536, which is the other half of the fix - this bound is
+# what keeps the next such regression from being silent rather than what makes the suite fit.
+#
+# Read off the host instead of written down, because the same suite runs on a workstation and on a server, and on the
+# server what is free depends on what the server is doing at the time. MemAvailable rather than MemTotal for the same
+# reason: the question is what can be taken without evicting the services. The fraction is headroom for a guest that
+# overshoots and for everything qemu allocates outside the guest.
+check_memory ?= $(shell awk '/^MemAvailable:/ { available = $$2 } END { printf "%d", (available ? available * 0.7 / 1024 : 8192) }' /proc/meminfo)
+
+# What one check costs on top of its guests, in MiB. Each one runs its own `nix build`, which evaluates this flake -
+# the machine configurations included - before it starts a VM, and then stays resident for as long as the VM runs.
+# Measured with `/usr/bin/time -v nix eval --no-eval-cache ...drvPath` over a spread of checks: 0.9G for the
+# cheapest, 1.3G for gmktec1-nextcloud. This is not a rounding error next to a 1G guest, and it is the process the
+# OOM killer actually picked every time in the run above, qemu having faulted in only part of what it asked for.
+check_overhead ?= 1024
 
 # Cores nix itself may hand to a single derivation's own build step (distinct from a check's `virtualisation.cores`,
 # which sizes the qemu guest, not the build). Left at nix's own default (0, meaning "all available"), one derivation
@@ -32,6 +59,13 @@ check_out_dir := $(out_dir)/checks
 
 check_names_cmd = nix eval --raw --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrNames cs)' .\#checks.$(architecture)-linux
 
+# `<name> <MiB>` per check, for the scheduler in `checks`. A nixosTest carries its nodes on the derivation it
+# produces, so what a check will ask qemu for is readable without building anything; a check that is a plain
+# derivation has no `nodes` and boots nothing, and is charged $(check_overhead) alone. One evaluation answers for
+# every check at once, which is the only reason this is affordable - it costs about what one check's own `nix build`
+# spends evaluating, and it is paid before any VM starts, so it contends with nothing.
+check_memory_cmd = nix eval --raw --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrValues (builtins.mapAttrs (name: check: name + " " + builtins.toString (if check ? nodes then builtins.foldl'\'' (total: node: total + node.config.virtualisation.memorySize) 0 (builtins.attrValues check.nodes) else 0)) cs))' .\#checks.$(architecture)-linux
+
 .PHONY: checks full_checks checks_report list_checks dirty_checks cache_checks test
 
 ### Tests
@@ -43,27 +77,39 @@ test: check_boot-test
 list_checks:
 	@$(check_names_cmd); echo
 
-# Run like this to use every core:
-# make checks check_jobs=$(nproc) check_cores=1
-## Runs every check, check_jobs at a time, each into its own log, then prints a pass/fail table
+# Run like this to use every core, on a machine with the memory to back it:
+# make checks check_jobs=$(nproc) check_cores=1 check_memory=$$((64 * 1024))
+#
+# The scheduler is a bin-packing loop rather than `xargs -P` because the second bound is a weight, not a count: a slot
+# has to be given back with the size of the check that was in it, which is what the pid-to-cost map and `wait -n -p`
+# are for. Largest first, so the big checks pack around the small ones instead of the small ones finishing early and
+# leaving the biggest to run against a full budget at the end. A check bigger than the whole budget would otherwise
+# never be startable, so the memory bound is skipped when nothing else is running - it runs alone, which is the most
+# the host can do for it anyway.
+## Runs every check, as many at a time as check_jobs and check_memory allow, each into its own log, then prints a
+## pass/fail table
 checks:
 	@set -o pipefail; \
-	names=$$($(check_names_cmd)) || exit 1; \
-	if [ -z "$$names" ]; then echo "this flake defines no checks" >&2; exit 1; fi; \
+	schedule=$$($(check_memory_cmd)) || exit 1; \
+	if [ -z "$$schedule" ]; then echo "this flake defines no checks" >&2; exit 1; fi; \
 	rm -rf "$(check_out_dir)"; mkdir -p "$(check_out_dir)"; \
-	export checks_total=$$(echo $$names | wc -w); \
-	echo "running $$checks_total checks, $(check_jobs) at a time; logs in $(check_out_dir)/"; \
+	checks_total=$$(printf '%s\n' "$$schedule" | wc -l); budget=$(check_memory); \
+	echo "running $$checks_total checks, up to $(check_jobs) at a time within $$budget MiB; logs in $(check_out_dir)/"; \
+	alone=$$(printf '%s\n' "$$schedule" | awk -v overhead=$(check_overhead) -v budget="$$budget" '$$2 + overhead > budget { n++ } END { print n + 0 }'); \
+	if [ "$$alone" -gt 0 ]; then \
+	  echo "  $$alone of them cost more than that on their own and will run alone; if any is killed, this host is too small for it"; \
+	fi; \
 	echo; \
 	run_check() { \
 	  name="$$1"; log="$(check_out_dir)/$$name.log"; started=$$SECONDS; \
 	  if nix build ".#checks.$(architecture)-linux.$$name" \
-	      --no-link --print-build-logs --cores $(check_cores) --timeout $(check_timeout) > "$$log" 2>&1; then \
-	    result=pass; \
+	      --no-link --print-build-logs --cores $(check_cores) --timeout $(check_timeout) > "$$log" 2>&1 < /dev/null; then \
+	    result=pass; status=0; \
 	  else \
-	    result=fail; \
+	    status=$$?; result=fail; \
 	  fi; \
 	  elapsed=$$((SECONDS - started)); \
-	  printf '%s %s\n' "$$result" "$$elapsed" > "$(check_out_dir)/$$name.result"; \
+	  printf '%s %s %s\n' "$$result" "$$elapsed" "$$status" > "$(check_out_dir)/$$name.result"; \
 	  done_so_far=$$(ls "$(check_out_dir)"/*.result | wc -l); \
 	  if [ "$$result" = pass ]; then \
 	    printf '[%2s/%2s] \033[32mpass\033[0m  %s (%ss)\n' "$$done_so_far" "$$checks_total" "$$name" "$$elapsed"; \
@@ -72,8 +118,19 @@ checks:
 	      "$$done_so_far" "$$checks_total" "$$name" "$$elapsed" "$$log"; \
 	  fi; \
 	}; \
-	export -f run_check; \
-	printf '%s\n' $$names | xargs -P $(check_jobs) -n1 $(SHELL) -c 'run_check "$$0"'; \
+	declare -A running_memory; used=0; \
+	while read -r name memory; do \
+	  memory=$$((memory + $(check_overhead))); \
+	  while [ $${#running_memory[@]} -ge $(check_jobs) ] \
+	     || { [ $${#running_memory[@]} -gt 0 ] && [ $$((used + memory)) -gt $$budget ]; }; do \
+	    wait -n -p finished; \
+	    used=$$((used - running_memory[$$finished])); \
+	    unset "running_memory[$$finished]"; \
+	  done; \
+	  run_check "$$name" & \
+	  running_memory[$$!]=$$memory; used=$$((used + memory)); \
+	done < <(printf '%s\n' "$$schedule" | sort -k2,2nr -k1,1); \
+	wait; \
 	$(checks_report_body)
 
 ## Reprints the table from the last `make checks`, without building anything
@@ -155,6 +212,10 @@ cache_checks:
 # The table, and for every check that failed the lines that say why. A log path on its own is traceability only in the
 # sense that the evidence exists somewhere; lifting the driver's `!!!` lines and nix's `error:` lines into the summary
 # is what makes the common question - which assertion broke - answerable without a second command.
+#
+# The exit status is reported alongside, because the one failure the log cannot explain is the one where there is no
+# log: a check killed by a signal - 137 is SIGKILL, which off a build host means the OOM killer - stops mid-line with
+# nothing written after it, and without this reads as "failed for no stated reason".
 define checks_report_body
 set -o pipefail; \
 if [ ! -d "$(check_out_dir)" ]; then echo "no check run to report on; run 'make checks'" >&2; exit 1; fi; \
@@ -162,7 +223,7 @@ passed=0; failed=0; failures=""; \
 echo; \
 for result_file in $$(ls "$(check_out_dir)"/*.result 2>/dev/null); do \
   name=$$(basename "$$result_file" .result); \
-  read -r result elapsed < "$$result_file"; \
+  read -r result elapsed status < "$$result_file"; \
   if [ "$$result" = pass ]; then \
     passed=$$((passed + 1)); \
     printf '  \033[32mpass\033[0m  %-34s %5ss\n' "$$name" "$$elapsed"; \
@@ -174,11 +235,16 @@ done; \
 printf '\n  %s passed, %s failed\n' "$$passed" "$$failed"; \
 for name in $$failures; do \
   log="$(check_out_dir)/$$name.log"; \
+  read -r _ _ status < "$(check_out_dir)/$$name.result"; \
   printf '\n\033[31m== %s ==\033[0m %s\n' "$$name" "$$log"; \
+  if [ "$${status:-0}" -gt 128 ]; then \
+    printf '    killed by signal %s%s\n' "$$((status - 128))" \
+      "$$([ "$$status" = 137 ] && echo ' (SIGKILL - on a build host that is the OOM killer; see check_memory)')"; \
+  fi; \
   reason=$$(grep -aE '!!!|AssertionError|watchdog fired|^error:|error: builder for|timed out after' "$$log" \
     | sed 's/^[^>]*> //' | awk '!seen[$$0]++' | head -n 20); \
   if [ -n "$$reason" ]; then printf '%s\n' "$$reason" | sed 's/^/    /'; \
-  else echo "    nothing in the log names a failure; read all of $$log"; fi; \
+  elif [ "$${status:-0}" -le 128 ]; then echo "    nothing in the log names a failure; read all of $$log"; fi; \
 done; \
 [ "$$failed" -eq 0 ]
 endef
