@@ -66,7 +66,11 @@ check_names_cmd = nix eval --raw --apply 'cs: builtins.concatStringsSep "\n" (bu
 # spends evaluating, and it is paid before any VM starts, so it contends with nothing.
 check_memory_cmd = nix eval --raw --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrValues (builtins.mapAttrs (name: check: name + " " + builtins.toString (if check ? nodes then builtins.foldl'\'' (total: node: total + node.config.virtualisation.memorySize) 0 (builtins.attrValues check.nodes) else 0)) cs))' .\#checks.$(architecture)-linux
 
-.PHONY: checks full_checks checks_report list_checks dirty_checks cache_checks test
+check_drvs_cmd = nix eval --raw --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrValues (builtins.mapAttrs (name: check: name + " " + check.drvPath) cs))' .\#checks.$(architecture)-linux
+
+machine_drvs_cmd = nix eval --raw --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrValues (builtins.mapAttrs (name: machine: name + " " + machine.config.system.build.toplevel.drvPath) cs))' .\#nixosConfigurations
+
+.PHONY: checks full_checks checks_report list_checks dirty_checks cache_checks test eval
 
 ### Tests
 
@@ -76,6 +80,23 @@ test: check_boot-test
 ## Lists the checks this flake defines
 list_checks:
 	@$(check_names_cmd); echo
+
+# Every machine's toplevel and every check's derivation, forced but not built. The cheapest rung of the ladder
+# `eval` -> `dirty_checks` -> `checks`: it builds nothing, boots nothing and needs no /dev/kvm, so it costs a few
+# minutes (3m20s over 26 machines and 32 checks on a workstation) against the hour the full suite takes - and it is
+# still where nearly everything that breaks this repository shows up, since
+# a renamed option, a failed assertion, a module that stopped typechecking or a machine the tests no longer match are
+# all evaluation errors. Printing the paths is what forces them; the output doubles as a diffable fingerprint of what
+# a commit actually changed, which is the same question `dirty_checks` answers one level up.
+#
+# `nix flake check --no-build` is the obvious thing and does not work here: it also evaluates `nixosModules` as
+# standalone modules, and those need `_module.args.inputs`, which only a machine gives them.
+## Evaluates every machine and every check, building and booting nothing
+# `&& echo`, not `; echo`: with a semicolon the recipe line's status is the echo's, so an evaluation error - the whole
+# point of this target - would exit 0. The same shape in `list_checks` is harmless only because nothing gates on it.
+eval:
+	@$(machine_drvs_cmd) && echo
+	@$(check_drvs_cmd) && echo
 
 # Run like this to use every core, on a machine with the memory to back it:
 # make checks check_jobs=$(nproc) check_cores=1 check_memory=$$((64 * 1024))
@@ -174,10 +195,16 @@ full_checks: checks
 # would have to be rebuilt. That is a more reliable "what does this change affect" than a hand-written file-to-test
 # map: the map has to be maintained by hand and drifts, this reads it straight off the dependency graph nix already
 # has, transitively, for free.
-# Run with the number of processsors at a time: a dry-run re-evaluates the whole flake from scratch (nixpkgs, every module,
-# every other check) just to answer one name, so a serial loop over thirty of them pays that cost thirty times over and is the
-# slower half of this target, not the qemu-free half being asked for. Evaluation is memory-bound rather than
-# vCPU-bound, so it does not carry the same oversubscription risk `check_jobs` exists to bound for actual VM boots.
+# Run several at a time: a dry-run re-evaluates the whole flake from scratch (nixpkgs, every module, every other
+# check) just to answer one name, so a serial loop over thirty of them pays that cost thirty times over and is the
+# slower half of this target, not the qemu-free half being asked for.
+#
+# How many is a memory question, not a vCPU one, which is why this is not simply `nproc`. There is no qemu here, so
+# $(check_memory) is spent entirely on evaluators at $(check_overhead) each - about 1.2G apiece, measured. On a
+# workstation that resolves to more than there are cores and `nproc` wins; on the 8G box that runs CI it resolves to
+# two, and the difference is whether this target OOMs. `nproc` alone was the original value and would be four there.
+dirty_jobs ?= $(shell jobs=$$(( $(check_memory) / $(check_overhead) )); cores=$$(nproc); \
+  [ "$$jobs" -lt 1 ] && jobs=1; [ "$$jobs" -gt "$$cores" ] && jobs=$$cores; echo "$$jobs")
 dirty_checks:
 	@names=$$($(check_names_cmd)) || exit 1; \
 	report() { \
@@ -189,7 +216,7 @@ dirty_checks:
 	  esac; \
 	}; \
 	export -f report; \
-	printf '%s\n' $$names | xargs -P $$(nproc) -n1 $(SHELL) -c 'report "$$0"'
+	printf '%s\n' $$names | xargs -P $(dirty_jobs) -n1 $(SHELL) -c 'report "$$0"'
 
 ## Pushes one check's result to the cache, e.g. `make cache_check_gmktec1-boot` - builds it first if needed
 # stderr is sent to its own log, same as `checks` does per-check, not to $$log - this recipe's stdout is
