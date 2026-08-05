@@ -1,4 +1,14 @@
-# Builds every machine, runs the check suite, and pushes both to the private attic cache.
+# The full build: every machine, the whole check suite, both pushed to the private attic cache. Runs overnight rather
+# than on every push, because it costs around half an hour when the inputs move and the runner it needs has a capacity
+# of one - a push during the day would hold the only privileged runner for that long. Fast feedback on a push is
+# smoke.yaml's job; this is the half that needs to boot things.
+#
+# Unlike the superproject's build.yaml, this one is NOT guarded by a marker tag and builds whether or not anything
+# changed. Two reasons. A night over an unchanged tree costs a download and not a build - everything below is already
+# in the cache, checks included, since cache_checks pushes those too - so the saving would be small. And this
+# repository has no weekly update job of its own, which over there is what covers the case a guard cannot see: the
+# cache having lost a path that no commit touched. Running unconditionally makes this job that backstop, for the one
+# closure that has no public substitute.
 #
 # THIS IS MEANT TO RUN ON THE PRIVATE FORGEJO INSTANCE ONLY. This repository is mirrored to a public forge, where the
 # Actions unit is deliberately left disabled: on a public forge anyone can fork and open a pull request, a pull request
@@ -24,22 +34,14 @@
 name: Build
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
-    paths-ignore:
-      - "*.md"
-      - "**/*.md"
-      - .editorconfig
-      - .gitignore
-  pull_request:
-    branches:
-      - main
-    paths-ignore:
-      - "*.md"
-      - "**/*.md"
-      - .editorconfig
-      - .gitignore
+  schedule:
+    # UTC, so 02:00 in America/Sao_Paulo. Deliberately before the superproject's jobs - its nightly build is at 07:00
+    # and its weekly update at 06:00 on Mondays - because the superproject substitutes what this pushes rather than
+    # building it: its opi4pronas machine shares config-physical-opi4pro-common.nix with opi4pro here and produces the
+    # identical kernel derivation. The runner's capacity of one would make them queue anyway; this way they queue in
+    # the useful order. Forgejo only runs scheduled workflows from the default branch, so editing this on a branch has
+    # no effect until it is merged.
+    - cron: "0 5 * * *"
 jobs:
   build:
     name: build and check
@@ -99,12 +101,19 @@ jobs:
       - name: Run the checks
         run: |
           source <(nix print-dev-env .#vm)
-          make checks
+          # The logs are the point of the step when a check fails, and the step runs under `set -e`, so the failure
+          # has to be caught and re-raised after they are printed rather than allowed to abort the step first.
+          # nullglob keeps a run that died before writing any log from turning the unmatched glob into a
+          # `cat out/checks/*`.
+          status=0
+          make checks || status=$?
+          shopt -s nullglob
           for log in out/checks/*; do
             echo "*** Log: $log ***"
             cat "$log"
             echo
           done
+          exit $status
       - name: Push the checks to the cache
         run: |
           source <(nix print-dev-env .#vm)

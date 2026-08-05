@@ -1,0 +1,90 @@
+# The fast gate, on every push. Formats and evaluates every machine and every check, building nothing and booting no
+# VM. Minutes, against the half hour the full suite costs, which is why this is what runs on a push and build.yaml runs
+# on a schedule.
+#
+# The trade is deliberate: evaluation catches a renamed option, a failed assertion, a module that stopped
+# typechecking, a machine the tests no longer match - which is most of what actually breaks here - and catches none
+# of what only shows up once a service is running. That half waits until 02:00.
+#
+# Unlike build.yaml this runs on the ORDINARY runner, not the privileged one, because it needs neither /dev/kvm nor
+# anything else that runner exists to provide. Two things follow, both wanted. It runs under kata, so an evaluation
+# is confined to a real VM rather than to a container with the host's KVM device passed in. And it stops competing
+# with build.yaml for the privileged runner, whose capacity is one: pushing while the weekly update is running used
+# to mean waiting hours for a job that takes minutes.
+#
+# The consequence to know about: `docker` is the default label on every runner, including the one registered against
+# the public mirror, whereas `nix-kvm` exists only on the private instance. So this file no longer fails to find a
+# runner if the mirror's Actions unit is ever enabled - it would instead land on that instance's restricted kata
+# runner, the one whose daemon has LAN access blocked, which is exactly what that runner is for. The control remains
+# the same as in build.yaml: the mirror's Actions unit is off.
+#
+# The two paths-ignore lists below are one list written twice, because the workflow parser does not take YAML
+# anchors. What is left out is everything that cannot change the answer: `nix fmt` here is nixfmt-tree, which formats
+# .nix and nothing else, and `make eval` reaches only what the flake evaluates - so documentation, editor and tooling
+# configuration are inert, while every .nix file, flake.lock, and the Makefile fragments that define `eval` itself
+# are not, and are deliberately absent. It is a denylist rather than an allowlist on purpose: listing too little
+# costs a needless run, listing too much silently skips CI on a real change, so a new kind of file should default to
+# running this. Keep the two copies in step.
+name: Smoke
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
+      - docs/**
+      - LICENSE
+      - .editorconfig
+      - .gitignore
+      - .envrc # direnv only. CI enters the devshell with `nix print-dev-env`, which does not read it.
+      - .shellcheckrc # Nothing in CI runs shellcheck.
+      - ".forgejo/workflows/*.yaml" # The other workflows
+  pull_request:
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
+      - docs/**
+      - LICENSE
+      - .editorconfig
+      - .gitignore
+      - .envrc
+      - .shellcheckrc
+      - ".forgejo/workflows/*.yaml"
+jobs:
+  smoke:
+    name: format and evaluate
+    runs-on: docker
+    container:
+      # A bare runner label carries no image, so forgejo-runner gives it the built-in default of node:22-bookworm -
+      # and a job's own `container.image` overrides that, which is what this line is doing. Without it `docker` would
+      # mean node, not nix.
+      #
+      # derived from nixos/nix:2.32.8
+      image: giggio/nixaction
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure nix
+        run: |
+          {
+            echo 'experimental-features = nix-command flakes'
+            # Evaluating an aarch64 machine's derivation does not schedule it, so strictly this is not needed for
+            # what this job does. It stays because it costs nothing, and because the failure it prevents - a step
+            # that plans a build rather than just evaluating one - reads as a confusing platform error rather than as
+            # a missing line here. No `system-features` and no /dev/kvm: nothing in this job boots a VM.
+            echo 'extra-platforms = aarch64-linux'
+          } >> /etc/nix/nix.conf
+      # `.#vm` rather than the default shell: the default one carries libguestfs-with-appliance and guestfs-tools and
+      # they are not cached for this platform, so entering it costs a multi-minute build before any real work starts.
+      # The Makefile also needs `ip` and VMS_DIR at PARSE time, both of which the shell supplies.
+      - name: Check formatting
+        run: |
+          source <(nix print-dev-env .#vm)
+          nix fmt -- --fail-on-change
+      # One process per attribute, bounded by $(dirty_jobs) - see the comment on the target. Nothing here is built, so
+      # this needs no cache login, and therefore cannot be failed by a cache that is down or a token that expired.
+      - name: Evaluate every machine and every check
+        run: |
+          source <(nix print-dev-env .#vm)
+          make eval
