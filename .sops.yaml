@@ -1,10 +1,17 @@
 keys:
   - &giggio 275F6749AFD2379D1033548C1237AB122E6F4761 # this is the gpg key from yubikey
-  - &pi4 age1upyqeu440lchyjhr2742ahjydr5qzcfydvl85za7fh28hfd7rddqrw30s9 # generate with: nix shell nixpkgs#age -c age-keygen -o ./server.agekey
+  # This repository is public, and its secrets are deliberately independent of any real machine: the
+  # values checked in here are placeholders that let a bare machine build and install standalone, and
+  # nothing more. A superproject that has real credentials overrides `sops.defaultSopsFile` (it is
+  # `lib.mkDefault` in modules/serverbase/secrets.nix) and ships its own file.
+  #
+  # So this key corresponds to no server anywhere. Generate a fresh one with:
+  #   nix shell nixpkgs#age -c age-keygen -o ~/.config/nixos-secrets/serverbase.agekey
+  - &serverbase age1h38s3ywt24e8gqkvnep708rp5xw5xc5cplufq6zv8zczdspy8yys73f7ks
 creation_rules:
   - path_regex: secrets/[^/]+\.(yaml|json|env|ini|conf)$
     key_groups:
       - pgp:
           - *giggio
         age:
-          - *pi4
+          - *serverbase

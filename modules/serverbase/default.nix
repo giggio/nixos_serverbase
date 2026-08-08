@@ -47,7 +47,10 @@
   };
 
   sops.secrets.nixExtraSecretOptions = {
-    sopsFile = ./secrets/nix_extra_options.conf;
+    # Named explicitly rather than falling back to defaultSopsFile, so it needs its own mkDefault to
+    # stay overridable by a superproject. Same reasoning as secrets.nix: the real content is a private
+    # cache address, which is a value and does not belong in a public repository.
+    sopsFile = lib.mkDefault ./secrets/nix_extra_options.conf;
     format = "binary";
     mode = "0440";
     group = "users";
@@ -98,6 +101,10 @@
           serviceConfig = {
             Type = "oneshot";
             RemainAfterExit = true;
+            # Which age key this machine looks for on the stick. `setup.hostName`, not
+            # `networking.hostName`: the latter carries the dev/vm suffixes, and a gmktec1 dev VM must
+            # pick up gmktec1's key rather than look for one that was never generated.
+            Environment = "SOPS_KEY_HOSTNAME=${config.setup.hostName}";
             # route standard input/output directly to the boot console
             StandardInput = "tty";
             StandardOutput = "tty";

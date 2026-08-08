@@ -68,6 +68,10 @@ check_memory_cmd = nix eval --raw --apply 'cs: builtins.concatStringsSep "\n" (b
 
 machine_names_cmd = nix eval --raw --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrNames cs)' .\#nixosConfigurations
 
+# The VM images, the install media and the helper packages - everything `nix build .#<x>` reaches that is not a check.
+# Only `eval` uses this; see the comment there for why the install images especially need to be in it.
+package_names_cmd = nix eval --raw --apply 'ps: builtins.concatStringsSep "\n" (builtins.attrNames ps)' .\#packages.$(architecture)-linux
+
 .PHONY: checks full_checks checks_report list_checks dirty_checks cache_checks test eval
 
 ### Tests
@@ -79,11 +83,22 @@ test: check_boot-test
 list_checks:
 	@$(check_names_cmd); echo
 
-# Every machine's toplevel and every check's derivation, forced but not built. The cheapest rung of the ladder
-# `eval` -> `dirty_checks` -> `checks`: it builds nothing, boots nothing and needs no /dev/kvm, so it costs minutes
-# against the hour the full suite takes - and it is still where nearly everything that breaks this repository shows
-# up, since a renamed option, a failed assertion, a module that stopped typechecking or a machine the tests no longer
-# match are all evaluation errors. Printing the derivation path is what forces it.
+# Every machine's toplevel, every check's derivation and every package, forced but not built. The cheapest rung of
+# the ladder `eval` -> `dirty_checks` -> `checks`: it builds nothing, boots nothing and needs no /dev/kvm, so it costs
+# minutes against the hour the full suite takes - and it is still where nearly everything that breaks this repository
+# shows up, since a renamed option, a failed assertion, a module that stopped typechecking or a machine the tests no
+# longer match are all evaluation errors. Printing the derivation path is what forces it.
+#
+# `packages` is in the list because leaving it out cost real breakage: the install images (`opi4pro_img`,
+# `opi4pronas_img`) could not evaluate AT ALL for an unknown length of time, and nothing noticed. Nothing else covers
+# them. `nixosConfigurations` is a different attribute - an image wraps a machine in an sd-image/ISO builder with its
+# own nested `lib.nixosSystem`, and it was that nested system, not any machine, that was broken. `make checks` boots
+# machines and never builds an image; build.yaml's `make out/nix/system` builds the systems and not the media. So an
+# image is exercised only when someone reinstalls a server, which is exactly when a broken one is most expensive.
+#
+# It is deliberately the whole `packages` attribute set rather than a filtered subset. The `machine_*` packages
+# duplicate work `nixosConfigurations` already did, which is a few seconds; a filter is a thing that silently stops
+# matching, which is the failure mode this whole target exists to catch.
 #
 # ONE PROCESS PER ATTRIBUTE, deliberately, even though a single `nix eval` over the whole attribute set would share
 # all the work between them and finish sooner. Sharing the work also means holding every evaluated configuration live
@@ -97,11 +112,12 @@ list_checks:
 #
 # `nix flake check --no-build` is the obvious thing and does not work here: it also evaluates `nixosModules` as
 # standalone modules, and those need `_module.args.inputs`, which only a machine gives them.
-## Evaluates every machine and every check, building and booting nothing
+## Evaluates every machine, every check and every package, building and booting nothing
 eval:
 	@machines=$$($(machine_names_cmd)) || exit 1; \
 	checks=$$($(check_names_cmd)) || exit 1; \
-	echo "evaluating $$(echo $$machines | wc -w) machines and $$(echo $$checks | wc -w) checks, $(dirty_jobs) at a time"; \
+	packages=$$($(package_names_cmd)) || exit 1; \
+	echo "evaluating $$(echo $$machines | wc -w) machines, $$(echo $$checks | wc -w) checks and $$(echo $$packages | wc -w) packages, $(dirty_jobs) at a time"; \
 	eval_one() { \
 	  attribute="$$1"; \
 	  if drv=$$(nix eval --raw ".#$$attribute.drvPath"); then \
@@ -114,6 +130,7 @@ eval:
 	export -f eval_one; \
 	{ printf 'nixosConfigurations.%s.config.system.build.toplevel\n' $$machines; \
 	  printf 'checks.$(architecture)-linux.%s\n' $$checks; \
+	  printf 'packages.$(architecture)-linux.%s\n' $$packages; \
 	} | xargs -P $(dirty_jobs) -n1 $(SHELL) -c 'eval_one "$$0"'
 
 # Run like this to use every core, on a machine with the memory to back it:

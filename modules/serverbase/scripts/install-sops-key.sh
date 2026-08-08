@@ -3,18 +3,19 @@ set -eu
 
 copy_if_has_key() {
   # $1 is mounted path
-  if [ -f "$1/nixos-secrets/$key_file_name" ]; then
-    cp "$1/nixos-secrets/$key_file_name" "$install_dir/$key_file_name"
-    chmod 0400 "$install_dir/$key_file_name"
-    found=1
-    return 0
-  fi
-  if [ -f "$1/$key_file_name" ]; then
-    cp "$1/$key_file_name" "$install_dir/$key_file_name"
-    chmod 0400 "$install_dir/$key_file_name"
-    found=1
-    return 0
-  fi
+  # Tries every candidate name in order, in both layouts, and stops at the first hit. The candidates are
+  # the per-machine key first and the shared one second, so a stick carrying both hands each machine its
+  # own key while still working for a machine that has not been split yet.
+  for candidate in "${key_candidates[@]}"; do
+    for source in "$1/nixos-secrets/$candidate" "$1/$candidate"; do
+      [ -f "$source" ] || continue
+      cp "$source" "$key_file_destination"
+      chmod 0400 "$key_file_destination"
+      echo "Using $candidate"
+      found=1
+      return 0
+    done
+  done
   return 1
 }
 
@@ -66,10 +67,29 @@ search_for_key_in_drives() {
   done
 }
 
+# Each machine gets its own age key, so a stolen server decrypts only its own secrets. The key is named
+# after the machine on the USB stick - `gmktec1.agekey`, `pi4.agekey` - and SOPS_KEY_HOSTNAME is set by
+# the unit that runs this (modules/serverbase/default.nix) from `setup.hostName`, which is the machine
+# name without the dev/vm suffixes: a gmktec1 dev VM wants gmktec1's key, not a key of its own.
+#
+# `server.agekey` stays in the list as a fallback so a machine that has not been split yet still boots,
+# and so this keeps working standalone where per-machine keys may not exist at all.
+#
+# The DESTINATION is always server.agekey, whatever the source was named. That is deliberate: it keeps
+# `sops.age.keyFile` a single constant, so migrating a running machine is "drop the new key at the same
+# path" with no rebuild - rather than a rebuild that points keyFile at a file which is not there yet and
+# leaves sops-nix unable to decrypt anything on the next activation.
 key_file_name=server.agekey
+key_candidates=()
+# Not `[ ... ] && key_candidates+=(...)`: under `set -e` the false branch would make the whole line the
+# script's last command with a non-zero status, and the script would exit right here.
+if [ -n "${SOPS_KEY_HOSTNAME:-}" ]; then
+  key_candidates+=("$SOPS_KEY_HOSTNAME.agekey")
+fi
+key_candidates+=("$key_file_name")
 install_dir="/sysroot/etc/sops/age" # target root (stage-1 exposes /mnt-root)
 key_file_destination="$install_dir/$key_file_name"
-echo "Starting search for sops key at $key_file_name or to install it there"
+echo "Starting search for sops key (${key_candidates[*]}) or to install it at $key_file_destination"
 if [ -f "$key_file_destination" ]; then
   echo -e "\e[32mSops key already installed to $key_file_destination\e[0m"
   exit 0
@@ -102,8 +122,8 @@ fi
 
 # interactive fallback loop (useful for manual installs)
 while true; do
-  echo -e "\e[31m$key_file_name not found on removable media.\e[0m"
-  echo "Insert USB with 'nixos-secrets/$key_file_name' (or '$key_file_name') then press ENTER to retry."
+  echo -e "\e[31mNone of ${key_candidates[*]} found on removable media.\e[0m"
+  echo "Insert USB with 'nixos-secrets/<key>' (or '<key>') for one of those names, then press ENTER to retry."
   echo "Type:"
   echo -e "* '\e[32mshell\e[0m' to get an interactive shell to copy the file manually."
   echo -e "* '\e[32msh\e[0m' to get a bare shell to copy the file manually."

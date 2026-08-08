@@ -1,6 +1,6 @@
-# The fast gate, on every push. Formats and evaluates every machine and every check, building nothing and booting no
-# VM. Minutes, against the half hour the full suite costs, which is why this is what runs on a push and build.yaml runs
-# on a schedule.
+# The fast gate, on every push. Formats and evaluates every machine, every check and every package, building nothing
+# and booting no VM. Minutes, against the half hour the full suite costs, which is why this is what runs on a push and
+# build.yaml runs on a schedule.
 #
 # The trade is deliberate: evaluation catches a renamed option, a failed assertion, a module that stopped
 # typechecking, a machine the tests no longer match - which is most of what actually breaks here - and catches none
@@ -84,7 +84,7 @@ jobs:
           nix fmt -- --fail-on-change
       # One process per attribute, bounded by $(dirty_jobs) - see the comment on the target. Nothing here is built, so
       # this needs no cache login, and therefore cannot be failed by a cache that is down or a token that expired.
-      - name: Evaluate every machine and every check
+      - name: Evaluate every machine, every check and every package
         run: |
           source <(nix print-dev-env .#vm)
           make eval

@@ -84,7 +84,16 @@ $(out_vm_dir)/.run-%-vm.stamp: $(nix_deps)
 $(vm_files): $(out_vm_dir)/run-%-vm: $(out_vm_dir)/.run-%-vm.stamp;
 
 # See the comment above about the .stamp file
-sops_agekey := $(HOME)/.config/nixos-secrets/server.agekey
+#
+# Age keys. Each machine has its own (`gmktec1.agekey`, `pi4.agekey`, ...) so that a stolen server decrypts only its own
+# secrets; `server.agekey` is the shared key that predates the split and is still the fallback for any machine that does not
+# have one yet - which is the normal case when this Makefile runs standalone. `sops_key_for` resolves one machine name to a
+# path, preferring the specific key. Base machine names only: a `dev` variant shares its production machine's key, because
+# it decrypts the same files.
+sops_key_dir := $(HOME)/.config/nixos-secrets
+sops_agekey := $(sops_key_dir)/server.agekey
+sops_base_machines := $(sort $(patsubst %dev,%,$(machines)))
+sops_key_for = $(if $(wildcard $(sops_key_dir)/$(1).agekey),$(sops_key_dir)/$(1).agekey,$(sops_agekey))
 $(out_img_dir)/.%.img.zst.stamp: $(nix_deps)
 	nix build .#$*_img --print-build-logs --keep-going --out-link "$(result_img_dir)/"
 	mkdir -p "$(out_img_dir)"
@@ -115,8 +124,9 @@ $(out_img_dir)/.%.img.zst.stamp: $(nix_deps)
 	    ln -sf "$$(realpath "$(result_img_dir)/$*.img.zst")" "$(out_img_dir)/$*.img.zst"; \
 	    ;; \
 	  opi4pro*) \
-	    echo "Injecting sops age key and flake source into $* installer image..."; \
-	    test -f "$(sops_agekey)" || { echo "ERROR: missing $(sops_agekey)" >&2; exit 1; }; \
+	    agekey="$(call sops_key_for,$(patsubst %dev,%,$*))"; \
+	    echo "Injecting sops age key ($$agekey) and flake source into $* installer image..."; \
+	    test -f "$$agekey" || { echo "ERROR: missing $$agekey" >&2; exit 1; }; \
 	    zstd -d -f -o "$(out_img_dir)/$*.img" "$(result_img_dir)/$*.img.zst"; \
 	    chmod +w "$(out_img_dir)/$*.img"; \
 	    export staging="$$(mktemp -d)"; \
@@ -130,7 +140,7 @@ $(out_img_dir)/.%.img.zst.stamp: $(nix_deps)
 	      sed -i "s#git+file:$$esc_top#git+file:/etc/nixos#g" "$$staging/nixos/flake.nix"; \
 	    fi; \
 	    tar -C "$$staging/nixos" --owner=0 --group=0 -cf "$$staging/nixos.tar" .; \
-	    guestfish -a "$(out_img_dir)/$*.img" run : mount /dev/sda2 / : mkdir-p /etc/sops/age : upload "$(sops_agekey)" /etc/sops/age/server.agekey : chmod 0400 /etc/sops/age/server.agekey : mkdir-p /etc/nixos : tar-in "$$staging/nixos.tar" /etc/nixos : sync; \
+	    guestfish -a "$(out_img_dir)/$*.img" run : mount /dev/sda2 / : mkdir-p /etc/sops/age : upload "$$agekey" /etc/sops/age/server.agekey : chmod 0400 /etc/sops/age/server.agekey : mkdir-p /etc/nixos : tar-in "$$staging/nixos.tar" /etc/nixos : sync; \
 	    rm -rf "$$staging"; \
 	    zstd -f -o "$(out_img_dir)/$*.img.zst" "$(out_img_dir)/$*.img"; \
 	    rm -f "$(out_img_dir)/$*.img"; \
@@ -168,20 +178,29 @@ $(out_system_dir)/.%.stamp: $(nix_deps)
 ## Builds the systems files
 $(machine_systems): $(out_system_dir)/%: $(out_system_dir)/.%.stamp;
 
-## Create the qcow2 disk that holds the nixos secret key
-GUESTFISH_CMD="run;\
-mount /dev/sda1 /;\
-mkdir-p /nixos-secrets;\
-upload $(HOME)/.config/nixos-secrets/server.agekey /nixos-secrets/server.agekey;\
-chmod 0400 /nixos-secrets/server.agekey;\
-sync;\
-exit"
+## Create the qcow2 disk that holds the nixos secret keys
+#
+# One disk serves every VM, so it carries every machine's key rather than one machine's: install-sops-key.sh looks for
+# `<machine>.agekey` first and only then `server.agekey`, so each VM picks its own out of the same disk. Only keys named
+# after a machine in this flake are uploaded - never `pc.agekey` or the offline recovery key, which have no business on a
+# VM disk. A missing per-machine key is not an error; the machine just falls back to the shared one.
 $(secrets_qcow2):
 	@echo "Creating secrets qcow2 $@..."
 	mkdir -p "$$(dirname "$@")"
 	qemu-img create -f qcow2 $@ 4M
 	virt-format -a $@ --filesystem=ext4
-	echo -e $(subst ;,\n,${GUESTFISH_CMD}) | guestfish -a $@
+	@set -eu; \
+	  cmds='run\nmount /dev/sda1 /\nmkdir-p /nixos-secrets'; \
+	  uploaded=0; \
+	  for key in $(foreach m,$(sops_base_machines),$(sops_key_dir)/$(m).agekey) $(sops_agekey); do \
+	    [ -f "$$key" ] || continue; \
+	    name="$$(basename "$$key")"; \
+	    cmds="$$cmds\nupload $$key /nixos-secrets/$$name\nchmod 0400 /nixos-secrets/$$name"; \
+	    uploaded=$$((uploaded + 1)); \
+	  done; \
+	  test "$$uploaded" -gt 0 || { echo "ERROR: no age keys found in $(sops_key_dir)" >&2; exit 1; }; \
+	  echo "Uploading $$uploaded age key(s) to $@"; \
+	  printf '%b\n' "$$cmds\nsync\nexit" | guestfish -a $@
 
 $(empty_qcow2):
 	@echo "Creating empty qcow2 $@..."

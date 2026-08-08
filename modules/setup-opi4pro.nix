@@ -44,6 +44,7 @@
       hostName = finalSystem.config.setup.hostName;
 
       installerSystem = lib.nixosSystem {
+        specialArgs = { inherit inputs; };
         modules = [
           (
             {
@@ -129,11 +130,21 @@
               #   - attic_server + attic_token: assembled into a netrc so nix can AUTHENTICATE to the private cache. Without it,
               #     the cache answers 401 Unauthorized and nixos-install cannot substitute the closure.
               #   - attic_server (again): the bare cache hostname, read by the install script to poll for network readiness.
-              # The age key that decrypts them is /etc/sops/age/server.agekey. It CANNOT go through nix (it would end up
+              # The age key that decrypts them lands at /etc/sops/age/server.agekey. It CANNOT go through nix (it would end up
               # world-readable in the store), so it is written straight into the SD image's ext4 root AFTER the build - see the
-              # Makefile's out/nix/img/opi4pro.img.zst rule.
+              # Makefile's out/nix/img/opi4pro.img.zst rule, which picks the machine's own key (`<machine>.agekey`) and only
+              # falls back to the shared `server.agekey`. The destination name stays server.agekey either way, which is why
+              # this path is a constant.
+              #
+              # The sops FILES come from the final system rather than being named here. This repository is public, so what
+              # it checks in are placeholders (see .sops.yaml); a superproject overrides `sops.defaultSopsFile` with a file
+              # holding the real credentials, encrypted to its own machines' keys. Taking the paths off `finalSystem` means
+              # the installer decrypts exactly what the machine it is installing decrypts - standalone it gets the
+              # placeholders and falls back to the public cache, from a superproject it gets the real private cache - with
+              # no extra plumbing to thread a file through mkInstallerPackages. Both are just paths, so this pulls nothing
+              # of the final closure into the image (the point of the "deliberately NOT referenced" note above).
               sops = {
-                defaultSopsFile = ./serverbase/secrets/shared.yaml;
+                defaultSopsFile = finalSystem.config.sops.defaultSopsFile;
                 age = {
                   keyFile = "/etc/sops/age/server.agekey";
                   generateKey = false;
@@ -141,7 +152,7 @@
                 secrets.attic_server = { };
                 secrets.attic_token = { };
                 secrets.nixExtraSecretOptions = {
-                  sopsFile = ./serverbase/secrets/nix_extra_options.conf;
+                  sopsFile = finalSystem.config.sops.secrets.nixExtraSecretOptions.sopsFile;
                   format = "binary";
                 };
                 # Same netrc the servers build (modules/serverbase/secrets.nix): credentials for the private cache.
