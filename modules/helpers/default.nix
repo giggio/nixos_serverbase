@@ -1,1 +1,2 @@
-{ ... }@args: (import ./network.nix args) // (import ./systemd.nix args)
+{ ... }@args:
+(import ./network.nix args) // (import ./systemd.nix args) // (import ./clevis.nix args)
