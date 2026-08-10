@@ -13,4 +13,5 @@
   custom-packages = ./custom-packages.nix;
   traefik-provider = ./traefik-provider.nix;
   gmktec1-docker = ./gmktec1-docker.nix;
+  opi4pro-kernel-config = ./opi4pro-kernel-config.nix;
 }

@@ -513,6 +513,17 @@ let
   # ignores their `extraConfig`. We drop each symbol's "is not set" line and append it as =y; `make oldconfig` in the kernel
   # build then reconciles and pulls in whatever each symbol selects. Sub-options that do not appear in the vendor config at all
   # (e.g. NFSD_V4, hidden while NFSD is off) simply have nothing to drop and are appended as =y.
+  #
+  # dm-crypt was added for the same reason: this kernel has NO device-mapper at all, so the NAS cannot hold an encrypted
+  # volume of any kind. `BLK_DEV_DM` and `DM_CRYPT` live under the same MD menu, so enabling MD above is what makes them
+  # reachable in the first place - before that they did not appear in the vendor .config even as "is not set" lines, which is
+  # precisely the shape of symbol `make oldconfig` will silently default back to `n`. Hence kernelConfigAssertions below.
+  # `BLK_DEV_LOOP` is already =y in the vendor config, so a LUKS container file needs nothing extra.
+  #
+  #   CRYPTO_XTS                the mode LUKS2 uses by default (aes-xts-plain64)
+  #   CRYPTO_AES_ARM64_CE_BLK   the A733's ARMv8 crypto-extension AES. Without it the generic C implementation is used and
+  #                             throughput on 1.4 TB of data is not acceptable; the CPU advertises `aes pmull sha2`.
+  #   CRYPTO_USER_API_SKCIPHER  the AF_ALG socket interface cryptsetup uses to benchmark and to check availability
   kernelExtraEnabledSymbols = [
     "MD"
     "BLK_DEV_MD"
@@ -523,7 +534,16 @@ let
     "MD_RAID456"
     "NFSD"
     "NFSD_V4"
+    "BLK_DEV_DM"
+    "DM_CRYPT"
+    "CRYPTO_XTS"
+    "CRYPTO_AES_ARM64_CE_BLK"
+    "CRYPTO_USER_API_SKCIPHER"
   ];
+  # Where the kernel's own outputs put the modules tree. Named once because kernelConfigAssertions has to find the
+  # post-oldconfig .config under exactly this path.
+  kernelModDirVersion = "6.6.98";
+
   vendorKernelConfig =
     bootchainPkgs.runCommand "linux-sun60iw2-vendor-md-nfsd.config"
       {
@@ -546,7 +566,7 @@ let
       inherit (bootchainPkgs) stdenv;
 
       version = "6.6.98-sun60iw2";
-      modDirVersion = "6.6.98";
+      modDirVersion = kernelModDirVersion;
 
       src = bootchainPkgs.fetchFromGitHub {
         owner = "orangepi-xunlong";
@@ -651,6 +671,50 @@ let
           ]
           ++ (old.nativeBuildInputs or [ ]);
       });
+
+  # ---------------------------------------------------------------------------------------------------------------------------
+  # Assert that every symbol we asked for actually survived `make oldconfig`.
+  # ---------------------------------------------------------------------------------------------------------------------------
+  # vendorKernelConfig above only *appends* `CONFIG_X=y` to a flat file. The kernel build then runs `make oldconfig`, which
+  # re-derives a self-consistent configuration from the Kconfig dependency graph - and a symbol whose dependencies are not met
+  # is silently turned back off. No error, no warning, the build succeeds, and the first symptom is a running NAS with no
+  # dm-crypt. Asking for a symbol is not the same as getting it.
+  #
+  # This cannot be caught by booting a VM: qemu cannot emulate an Allwinner A733 with its vendor DTB and boot chain, so there
+  # is no way to run this kernel outside the board. The check has to happen at build time, which is what this is.
+  #
+  # `make oldconfig` writes the reconciled configuration, and nixpkgs' build.nix copies it into the `dev` output. Reading it
+  # back and grepping is therefore checking what the kernel was really built with, not what we hoped.
+  #
+  # buildPackages.runCommand, not runCommand: bootchainPkgs is a cross set, so a plain runCommand here would produce an
+  # aarch64 derivation and need emulation to run a grep. The build platform is x86_64 and that is where this should run.
+  kernelConfigAssertions =
+    bootchainPkgs.buildPackages.runCommand "opi4pro-kernel-config-assertions"
+      {
+        kernelDev = orangepiVendorKernel.dev;
+        symbols = kernelExtraEnabledSymbols;
+      }
+      ''
+        cfg="$kernelDev/lib/modules/${kernelModDirVersion}/build/.config"
+        [ -f "$cfg" ] || { echo "FATAL: no reconciled .config at $cfg" >&2; exit 1; }
+
+        missing=""
+        for s in $symbols; do
+          grep -q "^CONFIG_$s=y\$" "$cfg" || missing="$missing $s"
+        done
+
+        if [ -n "$missing" ]; then
+          echo "FATAL: make oldconfig dropped these symbols from the vendor kernel config:" >&2
+          for s in $missing; do
+            echo "  CONFIG_$s -> $(grep -E "^(# )?CONFIG_$s( is not set|=)" "$cfg" || echo 'absent entirely')" >&2
+          done
+          echo "Their Kconfig dependencies are not met. Enabling a symbol requires enabling what it depends on." >&2
+          exit 1
+        fi
+
+        echo "all $(echo $symbols | wc -w) requested symbols are =y in the built kernel"
+        touch $out
+      '';
 
   # ---------------------------------------------------------------------------------------------------------------------------
   # boot.scr - the U-Boot script baked into the SD image (the image-build-time twin of installOpi4ProBootloader).
@@ -890,6 +954,9 @@ in
     opi4proFlashUboot = flashUboot;
     # Consumed by the installer image (setup-opi4pro.nix) to place this system's boot.scr on the FAT partition at build time.
     opi4proBootScript = bootScript;
+    # Exposed so tests/opi4pro-kernel-config.nix can pull it into `make checks`. Building it builds the kernel, which CI has
+    # already done and cached by the time the checks run.
+    opi4proKernelConfigAssertions = kernelConfigAssertions;
   };
 
   environment.systemPackages = [ flashUboot ];
