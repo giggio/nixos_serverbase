@@ -119,26 +119,36 @@
           daemon:
           let
             suffix = "-${daemon.name}";
-            defaultConfig = (
-              builtins.fromTOML (
-                builtins.unsafeDiscardStringContext (
-                  builtins.readFile "${pkgs.kata-runtime}/share/defaults/kata-containers/configuration.toml"
-                )
-              )
-            );
+            # kata ships a complete configuration.toml and only two values in it are ours, so patch the shipped file
+            # rather than regenerate one from a parsed copy: its comments survive, and a kata upgrade's new defaults
+            # arrive on their own instead of being flattened into whatever fromTOML/generate round-tripped.
+            #
+            # A derivation, and NOT `builtins.readFile "${pkgs.kata-runtime}/..."`. That path is a build output, so
+            # reading it during evaluation is import from derivation, and every machine with a kata daemon would then
+            # need kata-runtime - and the multi-gigabyte qemu closure it carries - substituted before it could be
+            # EVALUATED at all. Reading it as this derivation builds needs it exactly when it is needed anyway:
+            # kata-runtime is already a runtime dependency through `runtimeType` below.
+            #
+            # The count is checked rather than assumed because the sed expressions are anchored to a bare line and the
+            # shipped file happens to have exactly one `[hypervisor.qemu]` section. A kata release that adds a second
+            # hypervisor section would otherwise silently patch whichever came first.
+            configuration = pkgs.runCommand "kata-configuration${suffix}.toml" { } ''
+              install -m 644 ${pkgs.kata-runtime}/share/defaults/kata-containers/configuration.toml configuration.toml
+              patch_key() {
+                found=$(grep -c "^$1 = " configuration.toml || true)
+                if [ "$found" != 1 ]; then
+                  echo "kata's configuration.toml has $found lines setting '$1', expected exactly 1" >&2
+                  exit 1
+                fi
+                sed -i "s|^$1 = .*|$1 = $2|" configuration.toml
+              }
+              patch_key default_vcpus ${toString daemon.kata-runtime.cpus}
+              patch_key default_memory ${toString daemon.kata-runtime.memory}
+              mv configuration.toml $out
+            '';
           in
           lib.attrsets.optionalAttrs daemon.kata-runtime.enable {
-            "docker-kata${suffix}/configuration.toml".source = (
-              settingsFormatToml.generate "configuration${suffix}.toml" (
-                defaultConfig
-                // {
-                  hypervisor.qemu = defaultConfig.hypervisor.qemu // {
-                    default_vcpus = daemon.kata-runtime.cpus;
-                    default_memory = daemon.kata-runtime.memory;
-                  };
-                }
-              )
-            );
+            "docker-kata${suffix}/configuration.toml".source = configuration;
           }
         ) daemons
       );

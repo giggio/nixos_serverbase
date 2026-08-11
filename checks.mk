@@ -43,6 +43,21 @@ check_memory ?= $(shell awk '/^MemAvailable:/ { available = $$2 } END { printf "
 # OOM killer actually picked every time in the run above, qemu having faulted in only part of what it asked for.
 check_overhead ?= 1024
 
+# What one of `eval`'s evaluators costs, in MiB - deliberately NOT $(check_overhead), which is a third of it. That
+# figure is measured over checks; `eval` also evaluates `packages`, where the install media live, and an ISO wraps a
+# machine in an installer carrying its own nested `lib.nixosSystem`, so evaluating one holds TWO whole systems live.
+# Measured the same way over all 85 attributes: 0.97G mean, 1.3G for the worst check, 2.81G for gmktec1_iso. The four
+# `*_iso` packages are the only things in this flake anywhere near that, and they are what sets this number - on a
+# host small enough for it to bind, one of them is the whole budget.
+eval_overhead ?= 3072
+
+# Processes of $(1) MiB that fit in $(check_memory): never more than there are cores to run them on, never fewer than
+# one, since there is no lower gear than serial and a box too small for even one still has to try.
+jobs_that_fit = $(shell jobs=$$(( $(check_memory) / $(1) )); cores=$$(nproc); \
+  [ "$$jobs" -lt 1 ] && jobs=1; [ "$$jobs" -gt "$$cores" ] && jobs=$$cores; echo "$$jobs")
+
+eval_jobs ?= $(call jobs_that_fit,$(eval_overhead))
+
 # Cores nix itself may hand to a single derivation's own build step (distinct from a check's `virtualisation.cores`,
 # which sizes the qemu guest, not the build). Left at nix's own default (0, meaning "all available"), one derivation
 # that happens to compile something - a kernel, a package with no cached substitute - can burst across every core
@@ -104,8 +119,7 @@ list_checks:
 # all the work between them and finish sooner. Sharing the work also means holding every evaluated configuration live
 # at once: measured, that peaks at 18G over 26 machines, which is comfortable on a workstation and was killed
 # outright on the 8G box that runs CI - `make eval` died with `Error 137` there while passing here. One attribute at
-# a time peaks at about 1G, the same figure $(check_overhead) already models for a check's own evaluator, so the same
-# $(dirty_jobs) bound applies and the cost is bounded rather than proportional to how much this flake grows.
+# a time is bounded by $(eval_overhead), so the cost is bounded rather than proportional to how much this flake grows.
 #
 # xargs exits non-zero when any invocation did, which is what fails this target; the inner function has to report the
 # failure itself, because `nix eval` writes the error to stderr and xargs would otherwise swallow which one it was.
@@ -117,7 +131,7 @@ eval:
 	@machines=$$($(machine_names_cmd)) || exit 1; \
 	checks=$$($(check_names_cmd)) || exit 1; \
 	packages=$$($(package_names_cmd)) || exit 1; \
-	echo "evaluating $$(echo $$machines | wc -w) machines, $$(echo $$checks | wc -w) checks and $$(echo $$packages | wc -w) packages, $(dirty_jobs) at a time"; \
+	echo "evaluating $$(echo $$machines | wc -w) machines, $$(echo $$checks | wc -w) checks and $$(echo $$packages | wc -w) packages, $(eval_jobs) at a time"; \
 	eval_one() { \
 	  attribute="$$1"; \
 	  if drv=$$(nix eval --raw ".#$$attribute.drvPath"); then \
@@ -131,7 +145,7 @@ eval:
 	{ printf 'nixosConfigurations.%s.config.system.build.toplevel\n' $$machines; \
 	  printf 'checks.$(architecture)-linux.%s\n' $$checks; \
 	  printf 'packages.$(architecture)-linux.%s\n' $$packages; \
-	} | xargs -P $(dirty_jobs) -n1 $(SHELL) -c 'eval_one "$$0"'
+	} | xargs -P $(eval_jobs) -n1 $(SHELL) -c 'eval_one "$$0"'
 
 # Run like this to use every core, on a machine with the memory to back it:
 # make checks check_jobs=$(nproc) check_cores=1 check_memory=$$((64 * 1024))
@@ -238,8 +252,7 @@ full_checks: checks
 # $(check_memory) is spent entirely on evaluators at $(check_overhead) each - about 1.2G apiece, measured. On a
 # workstation that resolves to more than there are cores and `nproc` wins; on the 8G box that runs CI it resolves to
 # two, and the difference is whether this target OOMs. `nproc` alone was the original value and would be four there.
-dirty_jobs ?= $(shell jobs=$$(( $(check_memory) / $(check_overhead) )); cores=$$(nproc); \
-  [ "$$jobs" -lt 1 ] && jobs=1; [ "$$jobs" -gt "$$cores" ] && jobs=$$cores; echo "$$jobs")
+dirty_jobs ?= $(call jobs_that_fit,$(check_overhead))
 dirty_checks:
 	@names=$$($(check_names_cmd)) || exit 1; \
 	report() { \
