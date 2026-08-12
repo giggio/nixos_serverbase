@@ -51,9 +51,11 @@ note "state" "$(systemctl show -p ActiveState --value encrypted-state-unlock.ser
 # the only thing that says whether this is a boot in progress or a key server that has been gone for an hour.
 last=$(journalctl -u encrypted-state-unlock.service -n 1 --no-pager -o cat 2>/dev/null || true)
 [ -n "$last" ] && note "last" "$last"
-# When the machine will try again by itself, so nobody sits there wondering whether to intervene.
-next=$(systemctl show -p NextElapseUSecRealtime --value encrypted-state-retry.timer 2>/dev/null || true)
-[ -n "$next" ] && note "retry" "next at $next"
+# When the machine will try again by itself, so nobody sits there wondering whether to intervene. Monotonic, not
+# realtime: the timer is OnBootSec/OnUnitInactiveSec, and systemd leaves NextElapseUSecRealtime EMPTY for those -
+# reading the wrong one printed a blank line and looked like a timer that was never going to fire again.
+next=$(systemctl show -p NextElapseUSecMonotonic --value encrypted-state-retry.timer 2>/dev/null || true)
+[ -n "$next" ] && [ "$next" != "0" ] && note "retry" "next $next after boot"
 if [ -e "$OUTAGE_STAMP" ]; then
   note "down for" "$(($(date +%s) - $(cat "$OUTAGE_STAMP")))s$([ -e "$OUTAGE_NOTIFIED" ] && echo ", notified" || echo "")"
 fi
