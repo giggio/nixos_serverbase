@@ -105,6 +105,47 @@ container.** The unlock service and the mounts all carry `DefaultDependencies=no
 covers the units this module creates — anything already ordered against a path you add is your problem, and the
 check is what finds it.
 
+## What is underneath the bind mounts
+
+Every bound path has a directory under it that the mount hides, and it is not empty. `systemd-tmpfiles-setup` and
+services' `StateDirectory=` run at sysinit, long before the container can be unlocked, so they create the usual
+skeleton at the real path; the bind mount then covers it. On one machine, six of eleven bound paths had something
+underneath — `forgejo/{repositories,data,custom/conf,log,dump}`, a Maildir's `{tmp,new,cur}`, `traefik/letsencrypt`,
+two `postgres/` directories — and **zero regular files with any content**. It costs a few inodes and nothing else.
+
+**But it is why the guards are not paranoia.** If the container fails to unlock, a service does not find a bare empty
+directory that might make it hesitate. Forgejo finds `repositories/`, `data/` and `custom/conf/` already there: a
+plausible, empty, freshly-installed-looking tree. That is exactly the shape `RequiresMountsFor` plus the
+`checkMountScript` preStart exist to stop a service from starting on, and the reason "an empty directory looks like
+a fresh install" is a real failure rather than a theoretical one.
+
+### Looking under a mount without unmounting it
+
+Two ways, neither of which disturbs anything running.
+
+`unshare --mount` gives a shell its own copy of the mount table, and `--propagation private` stops anything done
+there travelling back:
+
+```bash
+mapfile -t binds < <(findmnt -rno TARGET,SOURCE \
+  | awk '$2 ~ /encrypted-state/ && $1 != "/encrypted" {print $1}' | sort -r)
+
+sudo unshare --mount --propagation private -- bash -c '
+  for m in "${binds[@]}"; do umount "$m"; done   # invisible outside this namespace
+  for m in "${binds[@]}"; do find "$m" -mindepth 1; done
+'
+```
+
+`sort -r` matters: deepest first, so a nested mount comes off before the one it sits inside.
+
+Or, without namespaces — `mount --bind` is **not** recursive, so binding a parent gives you a view with the
+submounts absent:
+
+```bash
+sudo mount --bind /var/lib /mnt/peek     # /mnt/peek/vaultwarden is the UNDERLYING directory
+sudo umount /mnt/peek
+```
+
 ## Where the commands come from
 
 `encrypted-state-init`, `encrypted-state-migrate`, `encrypted-state-grow` and `encrypted-state-close` are put on the
