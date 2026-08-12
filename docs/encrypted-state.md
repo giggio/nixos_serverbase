@@ -58,6 +58,50 @@ The converse is worth stating too: a unit that does *not* read the path should n
 ships an already-taken archive offsite reads the backup mount, not the container — guarding it just fails an offsite
 copy that had nothing to do with the outage, and alerts on it.
 
+## Rehearsing the failure, on purpose
+
+Everything above is a claim about what happens when the key server is gone, and nothing proves it except taking the
+key server away. `setup.encryptedState.simulateKeyServerOutage = true` does that, on a VM:
+
+```nix
+setup.encryptedState.simulateKeyServerOutage = true;   # VMs only, asserted
+```
+
+It installs one `iptables -I OUTPUT -d <key server> -j DROP` rule, with the address parsed out of `clevisConfig`
+so the rehearsal cannot end up blocking a box the machine does not actually unlock against.
+
+Two choices in that sentence are the whole point:
+
+- **A firewall rule, not a route.** Nothing typed at a shell survives a reboot here — a route is gone on the next
+  boot, and NixOS keeps `/etc/systemd/system` in the store, so there is nowhere to persist a unit that re-adds one
+  either. The rehearsal has to be in the configuration or it is not a rehearsal of a boot.
+- **DROP, not reject.** A blackhole route and a rejection both fail *immediately*, which the unlock handles
+  trivially. A server that is merely switched off gives silent drops and a TCP connect that hangs until the kernel
+  gives up — and it is the waiting, not the failing, that can drag a boot into the retries. That is the case
+  `DefaultDependencies=no` exists to survive, so that is the case to rehearse.
+
+Rebuild, reboot, and the machine should come up **promptly** with its databases down:
+
+```bash
+systemctl is-system-running          # degraded, not starting - it did not wait
+systemctl status encrypted-state-unlock.service   # failed, having tried unlockAttempts times
+findmnt --target /var/lib/<service>  # the root filesystem, not the container
+journalctl -b | grep "ordering cycle"             # nothing
+```
+
+And check that no guarded service is `active`. One that is has started on the empty directory underneath, which is
+the accident the whole design is against.
+
+Then lift it **without a rebuild** and watch the machine heal on its own:
+
+```bash
+sudo iptables -D OUTPUT -d <key server> -j DROP
+```
+
+`encrypted-state-retry` restarts every 30 seconds, backing off to five minutes, so the container should unlock and
+the services start with nothing else typed. That is the other half of the property — an outage that ends should not
+need an operator — and it is only observable from inside a rehearsed outage.
+
 ## Adding a service
 
 One line, in the service's own module, next to the units it defines:

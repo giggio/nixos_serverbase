@@ -34,6 +34,16 @@ let
   # flattened scheme would not.
   containerPathOf = path: "${cfg.mountPoint}${path}";
 
+  # The address `simulateKeyServerOutage` blocks, read out of the pin's own configuration rather than given as a
+  # second option. A rehearsal that names the key server separately can drift from the one the machine actually
+  # unlocks against, and then it proves nothing while looking like it passed.
+  keyServerAddress =
+    let
+      url = (builtins.fromJSON cfg.clevisConfig).url or null;
+      matched = if url == null then null else builtins.match "[a-z]+://([^:/]+).*" url;
+    in
+    if matched == null then null else builtins.head matched;
+
   # Everything the scripts below reach for. `clevis` is NOT self-contained - `clevis luks unlock` shells out to a
   # per-pin helper, which for the tang pin needs `curl` to reach the server and `jose` to do the JWE work - so all
   # three have to be here. That was found the hard way once already; see modules/helpers/clevis.nix.
@@ -193,6 +203,33 @@ in
       description = "Seconds between unlock attempts.";
     };
 
+    simulateKeyServerOutage = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Rehearse the degrade case: silently drop everything this machine sends to the key server named in
+        `clevisConfig`, so it boots exactly as it would with that server dead.
+
+        DROP rather than reject, and a firewall rule rather than a blackhole route, because the two fail
+        differently and only one of them is the case worth rehearsing. A route - or a rejection - fails
+        immediately, which the unlock handles trivially. A server that is simply off gives silent drops and a TCP
+        connect that hangs until the kernel gives up, and it is the waiting that can drag the boot: that is what
+        `DefaultDependencies=no` on every unit here exists to survive.
+
+        It also survives a reboot, which is the point. Nothing typed at a shell does - a route is gone on the next
+        boot, and NixOS keeps `/etc/systemd/system` in the store, so there is nowhere to persist one by hand.
+
+        Lift it without a rebuild to watch `encrypted-state-retry` heal the machine on its own:
+        `iptables -D OUTPUT -d <address> -j DROP`.
+
+        VMs and test nodes only, asserted. On a real machine this is an outage.
+
+        The checks do not use it: a nixosTest can shut the fixture key server down, which is the same silent drop
+        without a rule to install. This exists for the case a test cannot reach - a VM booting against the real key
+        server, where the only thing that can be taken away is this machine's route to it.
+      '';
+    };
+
     paths = mkOption {
       default = { };
       description = ''
@@ -230,6 +267,22 @@ in
         message = "setup.encryptedState.paths must be keyed by absolute paths.";
       }
       {
+        # The only guard between a rehearsal and an outage. Everything else about this option is recoverable by
+        # deleting one iptables rule; enabling it on a real machine takes its databases down until someone notices.
+        assertion = !cfg.simulateKeyServerOutage || config.setup.isVM || config.setup.isTest;
+        message = "setup.encryptedState.simulateKeyServerOutage cuts the machine off from its key server. It is for VMs and test nodes only.";
+      }
+      {
+        assertion = !cfg.simulateKeyServerOutage || !config.networking.nftables.enable;
+        message = "setup.encryptedState.simulateKeyServerOutage installs an iptables rule, which networking.nftables.enable ignores.";
+      }
+      {
+        # Silently blocking nothing is the failure that would matter here: the rehearsal reaches the key server,
+        # everything unlocks, and the degrade case reads as passed.
+        assertion = !cfg.simulateKeyServerOutage || keyServerAddress != null;
+        message = "setup.encryptedState.simulateKeyServerOutage needs a `url` in clevisConfig to know what to block.";
+      }
+      {
         # A path inside another declared path would be bound twice, and the inner bind would be shadowed or
         # unshadowed depending on mount order - which is not something to discover in production.
         assertion =
@@ -264,6 +317,13 @@ in
           + "(names here include the .service suffix; systemd.services keys do not).";
       }
     ];
+
+    # OUTPUT rather than INPUT: the point is that this machine cannot reach the key server, not that some packet
+    # cannot reach this machine. The stop command keeps `systemctl restart firewall` from stacking duplicates.
+    networking.firewall = lib.mkIf cfg.simulateKeyServerOutage {
+      extraCommands = "iptables -I OUTPUT -d ${keyServerAddress} -j DROP";
+      extraStopCommands = "iptables -D OUTPUT -d ${keyServerAddress} -j DROP || true";
+    };
 
     environment.systemPackages = [
       initScript
