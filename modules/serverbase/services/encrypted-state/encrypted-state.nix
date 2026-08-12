@@ -59,6 +59,9 @@ let
     PBKDF_MEMORY = toString cfg.pbkdfMemoryKiB;
     CLEVIS_PIN = cfg.clevisPin;
     CLEVIS_CONFIG = cfg.clevisConfig;
+    # init.sh needs it to decide whether finishing by starting encrypted-state.target is safe: with bindState
+    # already true and a container that has never been migrated into, it is not.
+    BIND_STATE = if cfg.bindState then "1" else "0";
     UNLOCK_ATTEMPTS = toString cfg.unlockAttempts;
     UNLOCK_DELAY = toString cfg.unlockDelaySeconds;
     # Newline-separated rather than an array, because this crosses into shell as one environment variable.

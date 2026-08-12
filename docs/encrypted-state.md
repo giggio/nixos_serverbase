@@ -212,6 +212,16 @@ sudo encrypted-state-init
 It allocates the file, formats LUKS2 with a pinned KDF, binds a second keyslot to the pin, **verifies the binding
 actually opens** before returning, makes the filesystem, and creates the declared directories inside.
 
+It then **starts `encrypted-state.target`**, so the container is mounted at `mountPoint` when it returns and the
+next step can run immediately. Everything above that point is opened and closed by hand; without this hand-off the
+container would be closed again and `encrypted-state-migrate` would answer *"the container is not mounted"*. Going
+through the target rather than mounting it directly is deliberate — it exercises the same unlock unit and mount
+unit that every later boot uses, and clears the `failed` state the unlock unit has been in since step 1.
+
+If `bindState` is already `true` it refuses to start the target and exits non-zero, because binding the empty
+directories of a brand-new container over live data is the accident the two deploys exist to prevent. The container
+is still created in that case — do not run `encrypted-state-init` again, fix `bindState` and start the target.
+
 It prints the **recovery passphrase once** and stores it nowhere. Record it before answering the prompt, in the two
 places the machine's own repository names — one of them offline and off this machine. It cannot go in a password
 manager whose database is itself inside the container.

@@ -36,6 +36,75 @@ let
   # because a helper that derived it the same way the module does would agree with the module by construction and
   # prove nothing about the name systemd actually picked.
   containerMountUnit = "encrypted.mount";
+
+  # Both client nodes, differing only in `bindState` - which is the one thing that differs between the two deploys
+  # of a real migration, and cannot be changed mid-test because a nixosTest node has exactly one configuration.
+  mkNode =
+    { hostName, bindState }:
+    { nodes, lib, ... }:
+    {
+      imports = [ testNodes.base ];
+      setup = {
+        inherit hostName;
+        username = "giggio";
+        encryptedState = {
+          enable = true;
+          inherit bindState image mountPoint;
+          size = initialSize;
+          # 32 MiB rather than the 256 MiB default. argon2id allocates this for real, twice per test run, on a node
+          # with 1 GiB - and what is being tested is the plumbing around the KDF, not the KDF.
+          pbkdfMemoryKiB = 32768;
+          clevisConfig = builtins.toJSON {
+            url = "http://${nodes.tang.networking.primaryIPAddress}:${toString tangPort}";
+          };
+          # Short, so the negative case fails inside the test's patience rather than at the driver's timeout.
+          unlockAttempts = 2;
+          unlockDelaySeconds = 2;
+          paths."${statePath}" = [ "testapp.service" ];
+        };
+      };
+
+      # Room for the container plus the grown container plus the pre-migration copy.
+      virtualisation.diskSize = 4096;
+
+      # Stands in for a database server, and specifically for the thing that makes one dangerous: finding no data,
+      # it creates some and calls that success. If this ever writes FRESH-INIT after the guard is in place, the
+      # guard has failed and a real database would have been silently replaced.
+      systemd.services.testapp = {
+        description = "a service that quietly reinitialises itself over an empty state directory";
+        wantedBy = [ "multi-user.target" ];
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+          StateDirectory = "testapp";
+        };
+        script = ''
+          if [ ! -f ${statePath}/data ]; then
+            echo FRESH-INIT > ${statePath}/data
+          fi
+          cat ${statePath}/data
+        '';
+      };
+
+      environment.systemPackages = with pkgs; [
+        cryptsetup
+        clevis
+        jose
+        curl
+      ];
+
+      # The non-interactive passphrase for encrypted-state-init. A real machine must never have this on a disk;
+      # tmpfiles puts it on /run, which is a tmpfs, and the script itself prints a warning when this is used.
+      systemd.tmpfiles.rules = [
+        "f ${passphraseFile} 0600 root root - ${passphrase}"
+      ];
+
+      # The healing retry loop is deliberately out of scope. Left on, an OnFailure firing between two steps of this
+      # script would start encrypted-state.target at a moment the test has arranged for it to be down, which is
+      # precisely when it is checking that it is. The unit itself is still built and still evaluated; only the
+      # trigger is removed.
+      systemd.services.encrypted-state-unlock.onFailure = lib.mkForce [ ];
+    };
 in
 {
   name = "encrypted-state";
@@ -60,76 +129,24 @@ in
         networking.firewall.allowedTCPPorts = [ tangPort ];
       };
 
-    client =
-      { nodes, lib, ... }:
-      {
-        imports = [ testNodes.base ];
-        setup = {
-          hostName = "client";
-          username = "giggio";
-          encryptedState = {
-            enable = true;
-            # True from the first boot, which is not how a real migration goes - a real one switches with this false,
-            # migrates, then switches again. Starting from `true` is what lets the first subtest observe the guard
-            # working before the container exists at all, which is the state a key-server outage puts the machine
-            # into and therefore the one worth asserting.
-            bindState = true;
-            inherit image mountPoint;
-            size = initialSize;
-            # 32 MiB rather than the 256 MiB default. argon2id allocates this for real, twice per test run, on a node
-            # with 1 GiB - and what is being tested is the plumbing around the KDF, not the KDF.
-            pbkdfMemoryKiB = 32768;
-            clevisConfig = builtins.toJSON {
-              url = "http://${nodes.tang.networking.primaryIPAddress}:${toString tangPort}";
-            };
-            # Short, so the negative case fails inside the test's patience rather than at the driver's timeout.
-            unlockAttempts = 2;
-            unlockDelaySeconds = 2;
-            paths."${statePath}" = [ "testapp.service" ];
-          };
-        };
+    client = mkNode {
+      hostName = "client";
+      # True from the first boot, which is not how a real migration goes - a real one switches with this false,
+      # migrates, then switches again. Starting from `true` is what lets the subtests below observe the guard
+      # working before the container exists at all, which is the state a key-server outage puts the machine into
+      # and therefore the one worth asserting. `phase1` covers the sequence an operator actually types.
+      bindState = true;
+    };
 
-        # Room for the container plus the grown container plus the pre-migration copy.
-        virtualisation.diskSize = 4096;
-
-        # Stands in for a database server, and specifically for the thing that makes one dangerous: finding no data,
-        # it creates some and calls that success. If this ever writes FRESH-INIT after the first subtest, the guard
-        # has failed and a real database would have been silently replaced.
-        systemd.services.testapp = {
-          description = "a service that quietly reinitialises itself over an empty state directory";
-          wantedBy = [ "multi-user.target" ];
-          serviceConfig = {
-            Type = "oneshot";
-            RemainAfterExit = true;
-            StateDirectory = "testapp";
-          };
-          script = ''
-            if [ ! -f ${statePath}/data ]; then
-              echo FRESH-INIT > ${statePath}/data
-            fi
-            cat ${statePath}/data
-          '';
-        };
-
-        environment.systemPackages = with pkgs; [
-          cryptsetup
-          clevis
-          jose
-          curl
-        ];
-
-        # The non-interactive passphrase for encrypted-state-init. A real machine must never have this on a disk;
-        # tmpfiles puts it on /run, which is a tmpfs, and the script itself prints a warning when this is used.
-        systemd.tmpfiles.rules = [
-          "f ${passphraseFile} 0600 root root - ${passphrase}"
-        ];
-
-        # The healing retry loop is deliberately out of scope. Left on, an OnFailure firing between two steps of this
-        # script would start encrypted-state.target - and therefore the bind mounts - at a moment the test has
-        # arranged for them to be down, which is precisely when it is checking that they are. The unit itself is
-        # still built and still evaluated; only the trigger is removed.
-        systemd.services.encrypted-state-unlock.onFailure = lib.mkForce [ ];
-      };
+    # The documented phase-1 machine: container enabled, nothing bound yet. It exists because both nodes here used
+    # to start the unlock unit and the mount BY HAND before calling migrate, so the runbook - which says nothing
+    # about either - was never the thing under test. It was wrong, and a rehearsal on a real VM found it rather
+    # than this file: `encrypted-state-init` closed the container it had just made, and the next documented step
+    # answered "the container is not mounted at /encrypted". Nothing in this node may type systemctl.
+    phase1 = mkNode {
+      hostName = "phase1";
+      bindState = false;
+    };
   };
 
   testScript = # python
@@ -138,6 +155,55 @@ in
       tang.wait_for_unit("tangd.socket")
       tang.wait_for_open_port(${toString tangPort})
       client.wait_for_unit("multi-user.target")
+
+      # ---------------------------------------------------------------------------------------------------------
+      # The documented phase-1 sequence, on `phase1`, typed exactly as docs/encrypted-state.md says to type it.
+      # NOT ONE systemctl IN THIS SECTION - that is the point of it. Both nodes used to start the unlock unit and
+      # the mount by hand before calling migrate, which meant the runbook itself was never under test; it was
+      # missing a step, and a rehearsal on a real VM is what found that rather than this file.
+      #
+      # It runs first because a later subtest shuts the key server down for good.
+      # ---------------------------------------------------------------------------------------------------------
+      with subtest("phase 1: the machine boots with no container, and says why"):
+          # multi-user.target must be reached even though the unlock cannot possibly succeed. A machine whose
+          # container is missing has to come up far enough to be fixed over ssh.
+          phase1.wait_for_unit("multi-user.target")
+          phase1.wait_until_fails("systemctl is-active encrypted-state-unlock.service", timeout=60)
+          journal = phase1.succeed("journalctl -u encrypted-state-unlock.service --no-pager")
+          assert "encrypted-state-init" in journal, f"the failure does not say how to fix it: {journal}"
+          # And it does not spin: the retry unit is gated on the container file existing, so between the first
+          # deploy and encrypted-state-init it must stay out of the way rather than fail every thirty seconds.
+          # `retry_state`, not `retry`: the test driver puts its own `retry()` helper in this namespace and
+          # typechecks the script, so shadowing it fails the build rather than the run.
+          retry_state = phase1.succeed(
+              "systemctl show -p ActiveState --value encrypted-state-retry.service"
+          ).strip()
+          assert retry_state != "active", f"the retry loop is spinning with no container: {retry_state}"
+
+      # State as it exists on a machine that has been running for years, before any of this landed.
+      phase1.succeed("mkdir -p ${statePath}")
+      phase1.succeed("echo PHASE1-DATA > ${statePath}/data")
+
+      with subtest("phase 1: encrypted-state-init leaves the container MOUNTED"):
+          # The defect this node exists for. init opens the container by hand to mkfs it and then closes it, so
+          # returning there left nothing mounted - and the very next documented command answered "the container is
+          # not mounted at /encrypted". It now hands over to systemd before returning.
+          out = phase1.succeed("ENCRYPTED_STATE_PASSPHRASE_FILE=${passphraseFile} encrypted-state-init")
+          phase1.log(out)
+          phase1.succeed("findmnt -no TARGET ${mountPoint}")
+          # Handed to systemd, not mounted behind its back: the unit that will do this at every future boot is the
+          # unit that did it now, and its boot-time failure is cleared.
+          phase1.require_unit_state("encrypted-state-unlock.service", "active")
+          phase1.require_unit_state("${containerMountUnit}", "active")
+
+      with subtest("phase 1: encrypted-state-migrate runs straight after init, with nothing in between"):
+          out = phase1.succeed("encrypted-state-migrate")
+          phase1.log(out)
+          assert "PHASE1-DATA" in phase1.succeed("cat ${mountPoint}${statePath}/data")
+          assert "PHASE1-DATA" in phase1.succeed("cat ${statePath}.premigrated/data")
+          # bindState is still false, so the real path is now an empty mountpoint-to-be. That is the correct end
+          # of phase 1: the data is in the container and the services stay down until the second deploy binds it.
+          phase1.fail("test -f ${statePath}/data")
 
       with subtest("adding the container did not cost the machine its tmpfiles"):
           # Regression guard for a real defect. A mount unit under / is `Before=local-fs.target` by default, and
@@ -172,9 +238,19 @@ in
       client.succeed("echo ORIGINAL-DATA > ${statePath}/data")
 
       with subtest("encrypted-state-init creates a container bound to the key server"):
-          client.succeed(
-              "ENCRYPTED_STATE_PASSPHRASE_FILE=${passphraseFile} encrypted-state-init"
+          # Exits NON-ZERO here on purpose, and the failure is the assertion. This node has bindState=true over a
+          # container that has never been migrated into, so init makes the container and then refuses to start
+          # encrypted-state.target - which would bind its empty directories over the ORIGINAL-DATA seeded above,
+          # and a service starting on that empty mountpoint is the accident the whole design exists to prevent.
+          out = client.fail(
+              "ENCRYPTED_STATE_PASSPHRASE_FILE=${passphraseFile} encrypted-state-init 2>&1"
           )
+          client.log(out)
+          assert "NOT starting encrypted-state.target" in out, (
+              f"init did not refuse to bind an empty container over live data: {out}"
+          )
+          # It refused to hand over, not to build: the container is there and must not be made again.
+          client.succeed("test -f ${image}")
           dump = client.succeed("cryptsetup luksDump ${image}")
           client.log(dump)
           assert "clevis" in dump, f"the container has no key-server binding: {dump}"
