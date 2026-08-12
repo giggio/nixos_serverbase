@@ -21,10 +21,22 @@
                 let
                   arch = builtins.replaceStrings [ "_" ] [ "" ] machine.defaultArch;
                 in
+                # The architecture-free aliases. They exist so a name can be typed - by a person, and by
+                # `nixos-rebuild` inside a running machine, which derives the flake attribute from the hostname.
+                #
+                # `setup.derivedHostName` is `<name><dev><vm>` with NO architecture in it, so every alias below has
+                # to match that shape exactly or the machine cannot rebuild itself. The `vm` pair was missing, and
+                # the way it failed was worse than an error: `nixos-rebuild` inside a plain dev VM reported
+                # `does not provide attribute 'nixosConfigurations."gmktec1devvm"'` and helpfully suggested
+                # `gmktec1dev` - which is the PHYSICAL configuration, disko layout and all. Taking that suggestion
+                # inside a VM is not a typo, it is switching the machine to a different disk layout.
                 {
                   "${machine.name}" = nixosConfigurations."${machine.name}${arch}";
                   "${machine.name}dev" = nixosConfigurations."${machine.name}dev${arch}";
+                  "${machine.name}vm" = nixosConfigurations."${machine.name}${arch}vm";
+                  "${machine.name}devvm" = nixosConfigurations."${machine.name}dev${arch}vm";
                 }
+                # vmboot only exists for machines that produce an ISO, since that variant is installed from one.
                 // lib.attrsets.optionalAttrs machine.supportsIso {
                   "${machine.name}vmboot" = nixosConfigurations."${machine.name}${arch}vmboot";
                   "${machine.name}devvmboot" = nixosConfigurations."${machine.name}dev${arch}vmboot";
