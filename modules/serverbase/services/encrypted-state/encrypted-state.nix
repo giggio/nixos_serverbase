@@ -331,7 +331,7 @@ in
         # ownership and modes of exactly the directories the services are about to use. Re-running it once the
         # mounts are up is idempotent - it is the same thing nixos-rebuild does at activation - and it is the only
         # way those rules ever reach the filesystem they were written for.
-        encrypted-state-tmpfiles = lib.mkIf cfg.bindState {
+        encrypted-state-tmpfiles = lib.mkIf (cfg.bindState && cfg.paths != { }) {
           description = "Apply tmpfiles rules to paths that only exist once the container is mounted";
           after = [ containerMountUnit ] ++ bindMountUnits;
           requires = [ containerMountUnit ];
@@ -342,7 +342,27 @@ in
             RemainAfterExit = true;
             # --create only. Not --remove, which acts on `r`/`R` rules and would delete things, and not --boot,
             # whose `!` rules are written on the assumption that nothing is running yet.
-            ExecStart = "${pkgs.systemd}/bin/systemd-tmpfiles --create";
+            #
+            # ONE --prefix PER DECLARED PATH, and without them this unit fails. A bare `--create` re-applies the
+            # machine's ENTIRE ruleset, and a rule that was fine at sysinit is not necessarily fine now: the whole
+            # reason this unit exists is that the filesystem changed underneath it. Two real examples, both from
+            # the first rehearsal:
+            #
+            #   fchownat() of /var/lib/nextcloud/data failed: Invalid argument
+            #       - a network mount, absent at sysinit when the rule chowned an empty local directory, and
+            #         present now, where the server rejects the chown.
+            #   "/etc/authelia/main/config" already exists and is not a directory
+            #       - did not exist at sysinit; a service has since put something else there.
+            #
+            # Neither has anything to do with this container, and neither is fixable from here. systemd-tmpfiles
+            # keeps going after a failed line but exits 73, so the unit went red on every boot while doing its job
+            # perfectly well - which is worse than useless, because a permanently failed unit is one nobody reads.
+            #
+            # Restricting to the declared paths says what was always meant: re-apply the rules for the directories
+            # that only came into existence when the container was mounted.
+            ExecStart = "${pkgs.systemd}/bin/systemd-tmpfiles --create ${
+              lib.concatMapStringsSep " " (path: "--prefix=${path}") (lib.attrNames cfg.paths)
+            }";
           };
         };
 
