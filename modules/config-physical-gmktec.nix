@@ -1,4 +1,10 @@
-{ inputs, pkgs, ... }:
+{
+  config,
+  inputs,
+  lib,
+  pkgs,
+  ...
+}:
 
 {
   imports = [
@@ -10,7 +16,17 @@
 
   systemd.services."serial-getty@ttyACM0" = {
     enable = true;
-    wantedBy = [ "getty.target" ];
+    # NOT wanted by getty.target in a VM, where /dev/ttyACM0 does not exist and never will. `wantedBy` makes
+    # getty.target require the device unit, systemd waits DefaultDeviceTimeoutSec for it, and multi-user.target is
+    # therefore not reached for 90 seconds - during which `systemctl is-system-running` answers `starting` and
+    # nothing that reports on boot state can report anything. That cost 90 seconds of every dev VM boot and looked,
+    # from the outside, exactly like the encrypted-state units hanging the boot. They were not; this was.
+    #
+    # The udev rule below is what actually starts the console on the real machine when the CH340 bridge appears, so
+    # nothing is lost. Keeping the `wantedBy` on hardware is deliberate belt and braces: that console is the
+    # recovery path for a machine whose disk encryption depends on a box on the LAN. It does mean a gmktec1 booted
+    # with the bridge unplugged waits the same 90 seconds - worth knowing, not worth risking the console over.
+    wantedBy = lib.optionals (!config.setup.isVM) [ "getty.target" ];
     overrideStrategy = "asDropin";
     environment.TERM = "vt102";
     serviceConfig.ExecStart = [
