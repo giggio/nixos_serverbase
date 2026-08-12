@@ -1,0 +1,20 @@
+{
+  "config": {
+    "MD013": {
+      "line_length": 120,
+      "code_blocks": false,
+      // A table row cannot be wrapped: a line break inside one ends the row. Either the cells stay short enough to
+      // satisfy the limit, which decides content by column width, or the rule is off for tables. It is off.
+      "tables": false
+    },
+    "MD034": false
+  },
+  "globs": [
+    "**/*.md"
+  ],
+  "ignores": [
+    ".*/**/*",
+    ".*"
+  ],
+  "gitignore": true
+}

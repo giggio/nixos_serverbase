@@ -45,7 +45,21 @@
         swap = {
           size = "4G";
           type = "8200";
-          content.type = "swap";
+          content = {
+            type = "swap";
+            # Encrypted with a key generated fresh at every boot, and never stored anywhere.
+            #
+            # Swap is a hole straight through any other encryption on this machine. The kernel pages whatever is in
+            # RAM out to it - decrypted database rows, session tokens, key material that a service had open - and
+            # 4 G of that sits on the same disk in the clear. Encrypting application state while leaving swap
+            # readable protects the copy on disk and leaves the copy next to it.
+            #
+            # A random per-boot key is the right shape here because it costs nothing: no keyslot, no passphrase, no
+            # dependency on the key server, and nothing to lose or recover. The only thing it rules out is
+            # hibernation, which needs the swap contents to survive a power cycle - and these are servers that never
+            # hibernate.
+            randomEncryption = true;
+          };
         };
         nixos = {
           size = "100%";

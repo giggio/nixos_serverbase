@@ -72,27 +72,62 @@ check_timeout ?= 3600
 
 check_out_dir := $(out_dir)/checks
 
-check_names_cmd = nix eval --raw --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrNames cs)' .\#checks.$(architecture)-linux
+# Extra flags handed to every `nix` invocation in this file. Empty by default, so nothing changes for an ordinary run.
+#
+# What it is for: in a superproject that consumes this repository as a `git+file:` flake input, a build sees only the
+# COMMITTED submodule at the locked revision. Editing a module here and running `make checks` there therefore tests
+# the old code and passes, silently, which is the worst possible outcome for a test suite. The documented way round
+# it is `--override-input`, and without a hook like this there is no way to give that to the suite:
+#
+#     make checks nix_flags='--override-input serverbase path:/home/giggio/.config/nixos/nixos_serverbase'
+#
+# A variable rather than anything cleverer, because this repository has to keep working standalone, where there is no
+# superproject and no input to override.
+#
+# Interpolated AFTER the subcommand (`nix eval $(nix_flags)`, not `nix $(nix_flags) eval`): `--override-input` and
+# most of what would go here belong to the subcommand, and nix rejects them outright in the global position.
+nix_flags ?=
+
+check_names_cmd = nix eval $(nix_flags) --raw --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrNames cs)' .\#checks.$(architecture)-linux
 
 # `<name> <MiB>` per check, for the scheduler in `checks`. A nixosTest carries its nodes on the derivation it
 # produces, so what a check will ask qemu for is readable without building anything; a check that is a plain
 # derivation has no `nodes` and boots nothing, and is charged $(check_overhead) alone. One evaluation answers for
 # every check at once, which is the only reason this is affordable - it costs about what one check's own `nix build`
 # spends evaluating, and it is paid before any VM starts, so it contends with nothing.
-check_memory_cmd = nix eval --raw --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrValues (builtins.mapAttrs (name: check: name + " " + builtins.toString (if check ? nodes then builtins.foldl'\'' (total: node: total + node.config.virtualisation.memorySize) 0 (builtins.attrValues check.nodes) else 0)) cs))' .\#checks.$(architecture)-linux
+check_memory_cmd = nix eval $(nix_flags) --raw --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrValues (builtins.mapAttrs (name: check: name + " " + builtins.toString (if check ? nodes then builtins.foldl'\'' (total: node: total + node.config.virtualisation.memorySize) 0 (builtins.attrValues check.nodes) else 0)) cs))' .\#checks.$(architecture)-linux
 
-machine_names_cmd = nix eval --raw --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrNames cs)' .\#nixosConfigurations
+machine_names_cmd = nix eval $(nix_flags) --raw --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrNames cs)' .\#nixosConfigurations
 
 # The VM images, the install media and the helper packages - everything `nix build .#<x>` reaches that is not a check.
 # Only `eval` uses this; see the comment there for why the install images especially need to be in it.
-package_names_cmd = nix eval --raw --apply 'ps: builtins.concatStringsSep "\n" (builtins.attrNames ps)' .\#packages.$(architecture)-linux
+package_names_cmd = nix eval $(nix_flags) --raw --apply 'ps: builtins.concatStringsSep "\n" (builtins.attrNames ps)' .\#packages.$(architecture)-linux
 
-.PHONY: checks full_checks checks_report list_checks dirty_checks cache_checks test eval
+.PHONY: checks full_checks checks_report list_checks dirty_checks cache_checks test eval lint_md lint_md_all
 
 ### Tests
 
 ## Runs a quick boot test
 test: check_boot-test
+
+## Lints the markdown this working tree has TOUCHED - staged, unstaged and untracked - against
+## .markdownlint-cli2.jsonc. Run it from whichever repository you are changing; each has its own config, and the
+## submodule is a separate git tree so its files are not in the superproject's diff.
+##
+## Deliberately not every file in the repository. A whole-repo sweep on a tree that has never been linted reports on
+## files the current change never came near, and the only ways out of that are to commit unrelated fixes or to
+## ignore the output - both worse than a narrow check that is always green. `lint_md_all` is there for the one
+## commit that cleans up the rest.
+lint_md:
+	@files=$$({ git diff --name-only --diff-filter=d HEAD -- '*.md'; \
+	            git ls-files --others --exclude-standard -- '*.md'; } | sort -u); \
+	if [ -z "$$files" ]; then echo "no markdown changed in this working tree"; exit 0; fi; \
+	echo "$$files" | sed 's/^/  linting /'; \
+	markdownlint-cli2 --no-globs $$files
+
+## Lints every markdown file in the repository. For the sweep commit, not for everyday work - see lint_md.
+lint_md_all:
+	@markdownlint-cli2
 
 ## Lists the checks this flake defines
 list_checks:
@@ -134,7 +169,7 @@ eval:
 	echo "evaluating $$(echo $$machines | wc -w) machines, $$(echo $$checks | wc -w) checks and $$(echo $$packages | wc -w) packages, $(eval_jobs) at a time"; \
 	eval_one() { \
 	  attribute="$$1"; \
-	  if drv=$$(nix eval --raw ".#$$attribute.drvPath"); then \
+	  if drv=$$(nix eval $(nix_flags) --raw ".#$$attribute.drvPath"); then \
 	    printf '%s %s\n' "$$attribute" "$$drv"; \
 	  else \
 	    echo "FAILED to evaluate $$attribute" >&2; \
@@ -172,7 +207,7 @@ checks:
 	echo; \
 	run_check() { \
 	  name="$$1"; log="$(check_out_dir)/$$name.log"; started=$$SECONDS; \
-	  if nix build ".#checks.$(architecture)-linux.$$name" \
+	  if nix build $(nix_flags) ".#checks.$(architecture)-linux.$$name" \
 	      --no-link --print-build-logs --cores $(check_cores) --timeout $(check_timeout) > "$$log" 2>&1 < /dev/null; then \
 	    result=pass; status=0; \
 	  else \
@@ -211,7 +246,7 @@ checks_report:
 check_%:
 	@mkdir -p "$(check_out_dir)"
 	@set -o pipefail; \
-	nix build ".#checks.$(architecture)-linux.$*" \
+	nix build $(nix_flags) ".#checks.$(architecture)-linux.$*" \
 	  --no-link --print-build-logs --cores $(check_cores) --timeout $(check_timeout) 2>&1 | tee "$(check_out_dir)/$*.log"
 
 # A check that has passed once is a realised store path, so every later `nix build` of it is a no-op that prints
@@ -222,10 +257,10 @@ recheck_%:
 	@mkdir -p "$(check_out_dir)"
 	@set -o pipefail; \
 	{ \
-	  nix build ".#checks.$(architecture)-linux.$*" --no-link --print-build-logs \
+	  nix build $(nix_flags) ".#checks.$(architecture)-linux.$*" --no-link --print-build-logs \
 	    --cores $(check_cores) --timeout $(check_timeout) 2>&1 \
 	  && printf '\n=== that was the first build of this check; running it again ===\n\n' \
-	  && nix build ".#checks.$(architecture)-linux.$*" --no-link --print-build-logs --rebuild \
+	  && nix build $(nix_flags) ".#checks.$(architecture)-linux.$*" --no-link --print-build-logs --rebuild \
 	    --cores $(check_cores) --timeout $(check_timeout) 2>&1; \
 	} | tee "$(check_out_dir)/$*.log"
 
@@ -257,7 +292,7 @@ dirty_checks:
 	@names=$$($(check_names_cmd)) || exit 1; \
 	report() { \
 	  name="$$1"; \
-	  output=$$(nix build ".#checks.$(architecture)-linux.$$name" --dry-run 2>&1 >/dev/null); \
+	  output=$$(nix build $(nix_flags) ".#checks.$(architecture)-linux.$$name" --dry-run 2>&1 >/dev/null); \
 	  case "$$output" in \
 	    *"will be built"*) echo "$$name" ;; \
 	    *error:*) echo "$$name (dry-run itself failed - see \`make check_$$name\`)" >&2; echo "$$name" ;; \
@@ -276,7 +311,7 @@ dirty_checks:
 cache_check_%:
 	@echo -e "Pushing cache for check \e[32m$*\e[0m"
 	@mkdir -p "$(check_out_dir)"
-	nix build ".#checks.$(architecture)-linux.$*" --no-link --print-out-paths --cores $(check_cores) --timeout $(check_timeout) 2>"$(check_out_dir)/cache_$*.log" | attic push servers --stdin
+	nix build $(nix_flags) ".#checks.$(architecture)-linux.$*" --no-link --print-out-paths --cores $(check_cores) --timeout $(check_timeout) 2>"$(check_out_dir)/cache_$*.log" | attic push servers --stdin
 
 ## Pushes every check's result to the cache, check_jobs at a time - so a later run elsewhere can substitute instead
 ## of re-running a check nothing has invalidated

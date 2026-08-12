@@ -640,6 +640,10 @@
       pkgs,
       system,
       extraModules ? [ ],
+      # Appended to the shell hook, for a superproject with site-specific setup to do on entry - a directory of
+      # scripts to put on PATH, a file of local addresses to source. Empty here, and it has to stay that way: this
+      # repository must keep working standalone, and it has no site.
+      extraShellHook ? "",
     }:
     let
       baseShell = {
@@ -652,10 +656,12 @@
             sops
             iproute2
             attic-client
+            markdownlint-cli2 # `make lint_md`
           ]
           ++ extraModules;
         shellHook = /* bash */ ''
           export VMS_DIR=$HOME/vms
+          ${extraShellHook}
         '';
       };
       defaultShell = baseShell // {
