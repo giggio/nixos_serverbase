@@ -2,12 +2,8 @@
 #
 #   encrypted-state-grow 128G
 #
-# The size is the new TOTAL size, not an increment, and it must be larger than the current one - LUKS can shrink, but
-# shrinking means shrinking the filesystem first and that is an offline, error-prone operation this script
-# deliberately does not offer.
-#
-# Nothing here touches a partition table, and disko has no opinion about any of it: the container is a file inside a
-# filesystem, so growing it is growing a file. That is the whole reason to accept the loop device's overhead.
+# The size is the new TOTAL, not an increment, and shrinking is deliberately not offered. What each of the four
+# steps below is for, and why no partition table is involved: docs/encrypted-state.md.
 
 new_size="${1:-}"
 if [ -z "$new_size" ]; then

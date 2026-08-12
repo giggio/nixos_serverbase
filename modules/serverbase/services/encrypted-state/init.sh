@@ -1,14 +1,11 @@
 # Create the state container, once, on a machine that does not have one yet.
 #
-# Two keyslots come out of this and they answer different questions. The clevis slot is what the machine uses every
-# boot, and it is worth nothing to anyone holding the disk alone. The RECOVERY PASSPHRASE is what opens the
-# container when the key server is gone - burnt out, stolen, or its keys lost - and it is printed exactly once, here.
-# Nothing writes it to disk. If it is not recorded when this runs it cannot be recovered afterwards, and neither can
-# the container once the pin stops answering.
+# Two keyslots come out of it: the clevis one the machine uses every boot, and a RECOVERY PASSPHRASE printed
+# exactly once, here, and written nowhere. Not recorded when this runs, it cannot be recovered afterwards - and
+# neither can the container once the pin stops answering. What to do with it: docs/encrypted-state.md.
 #
-# Deliberately refuses to touch an existing container. Re-running luksFormat on a container that holds data destroys
-# every byte in it, irreversibly, and this is a script that will be run again years later by someone who has
-# forgotten what it does.
+# Deliberately refuses to touch an existing container. Re-running luksFormat on one that holds data destroys every
+# byte in it, and this is a script that will be run again years later by someone who has forgotten what it does.
 
 if [ -e "$IMAGE" ]; then
   echo "FATAL: $IMAGE already exists." >&2

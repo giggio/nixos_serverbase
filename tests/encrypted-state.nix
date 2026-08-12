@@ -8,12 +8,9 @@
 # bind-mounted out of, and the init/migrate/grow scripts that manage it.
 #
 # The subtest that justifies the whole file is "a locked container keeps the service DOWN". Everything else here is
-# ordinary plumbing that would be caught the first time someone looked; that one is not. If the container fails to
-# unlock, /var/lib/<service> is an empty directory on the root filesystem, and a database finding an empty data
-# directory does not report an error - it initialises a brand new empty database over the top of the mountpoint and
-# reports success. The real service would then be serving nothing, having overwritten nothing, and the only signal
-# would be a user saying their passwords are gone. So `testapp` below is written to behave exactly that badly on
-# purpose, and the test asserts it never gets the chance.
+# ordinary plumbing that would be caught the first time someone looked; that one is not - see the failure mode in
+# docs/encrypted-state.md. `testapp` below is written to behave exactly that badly on purpose (finds no data,
+# creates some, calls it success), and the test asserts it never gets the chance.
 #
 # The module takes any clevis pin; the fixture uses the tang one because it is the only pin that can be stood up
 # inside a test VM - a tpm2 pin would need a TPM and an sss pin is a composition of the others. That costs nothing,

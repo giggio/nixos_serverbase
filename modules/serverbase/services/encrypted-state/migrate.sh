@@ -5,14 +5,9 @@
 #   encrypted-state-migrate /var/lib/mything   move one path
 #   encrypted-state-migrate --cleanup          delete the .premigrated copies, once you trust the move
 #
-# This is the destructive half of the design, so the shape is: stop, copy, VERIFY, then swap - and the swap is a
-# rename, not a delete. The original stays on disk as <path>.premigrated until an explicit --cleanup, which means a
-# migration that went wrong is undone by renaming it back rather than by restoring a backup.
-#
-# Services are down from the moment this starts until the switch that follows it. That is the maintenance window,
-# and it is as long as the copy takes. Copying live and syncing the delta afterwards would shorten it, at the price
-# of a second pass whose correctness depends on the service not having rewritten the world underneath it - not a
-# trade worth making for a few gigabytes of database.
+# The destructive half of the design. The shape is stop, copy, VERIFY, then swap - and the swap is a RENAME, not a
+# delete, so a migration that went wrong is undone by renaming <path>.premigrated back. Where this sits in the
+# deploy, and how long the services are down for it: docs/encrypted-state.md.
 
 dry_run=0
 cleanup=0

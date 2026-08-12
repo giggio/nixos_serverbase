@@ -7,41 +7,17 @@
   ...
 }:
 
-# A LUKS2 container, held in a FILE on the ordinary root filesystem, whose key comes from a clevis pin rather than
-# from anything stored on the machine. Application state is bind-mounted out of it onto the paths the services
-# already use, so nothing downstream changes: a service still writes to /var/lib/<its own name>, and never learns
-# that the directory is somewhere else.
+# A LUKS2 container in a FILE on the root filesystem, keyed by a clevis pin, with the declared paths bind-mounted
+# out of it onto the locations the services already use.
 #
-# WHY A FILE AND NOT A PARTITION. Carving a partition needs free space at the end of a disk that may not have any,
-# and repartitioning a live root is the risk this whole approach exists to avoid. A file needs no repartitioning, no
-# resize2fs of the outer filesystem, and - the point - NO INITRD WORK AT ALL. It is not the root filesystem, so
-# unlocking it is an ordinary post-boot systemd unit. If the key server is unreachable the machine still boots, ssh
-# still answers, and the services that depend on the container stay down and say why. Encrypting the root itself is
-# a different, far riskier job (one live-USB window, no rollback) and is deliberately a separate exercise.
+# WHAT IT IS FOR AND HOW IT IS OPERATED: docs/encrypted-state.md. That covers why a file rather than a partition,
+# why disko is not involved, the failure mode the hard dependencies exist to prevent, and the two shapes that must
+# not go in the container.
 #
-# WHY THE SERVICES STAY DOWN RATHER THAN STARTING. This is the failure mode that matters, and it is why the
-# dependencies here are hard ones. If the container is not mounted, a service's state directory is an empty
-# directory on the root filesystem - and a database server, finding no data where its data should be, does not fail:
-# it initialises a brand new empty one over the top of the mountpoint and reports success. So every consuming unit
-# gets `RequiresMountsFor=`, which is Requires= plus After= on the bind mount, and a `checkMountScript` preStart on
-# top of it: a service whose data is in the container must not be able to start without it. A failed unlock has to
-# look like a failed unlock, never like an empty database.
-#
-# DISKO IS NOT INVOLVED. Disko describes how a physical disk is partitioned at install time. This container is a
-# file living inside a filesystem disko created - data, not layout - so disko neither knows nor needs to know about
-# it. Growing it later touches no partition table either; see docs/encrypted-state.md.
-#
-# EVERYTHING HERE IS DefaultDependencies=no, AND THAT IS THE SUBTLE PART. A mount that waits on a key server must
-# not be reachable from the early boot targets, because systemd's answer to an ordering cycle is to DELETE one of
-# the jobs in it and boot anyway - and because even without a cycle, anything basic.target waits for is something
-# sshd waits for. The promise this design makes is that a dead key server leaves a machine that boots, answers ssh,
-# and has its databases down; that promise is kept by the dependency declarations below and nothing else. The checks
-# assert the journal contains no ordering cycle, on a fixture and on a real machine, because this is not a property
-# that can be seen by reading a unit file.
-#
-# That covers the units this module creates. It cannot cover a unit somebody else already ordered against a path
-# added to `paths` - a mount nested inside one, or a .path unit watching a file in one. Both of those have happened;
-# see docs/encrypted-state.md, "What must not go in the container".
+# WHAT A READER OF THIS FILE HAS TO KNOW: every unit here is `DefaultDependencies=no`, and that is load-bearing
+# rather than tidy. Take it off and the machine still boots, still looks fine, and has silently dropped a job or
+# made sshd wait on a box on the LAN. Neither is visible in a unit file, which is why both checks assert the boot
+# journal contains no ordering cycle. The comments at each declaration say what that particular one is holding up.
 
 let
   cfg = config.setup.encryptedState;
@@ -130,14 +106,9 @@ in
       description = ''
         Whether to bind the declared paths out of the container onto their real locations.
 
-        This is the migration hatch, and it is why the default is `false`. Enabling the container and binding the
-        paths in one deploy would mount empty directories over live data: the services would come up against nothing
-        and, in the case of the databases, initialise a new empty cluster on top of the mountpoint. So the sequence
-        is deliberately two deploys - switch with this `false` to get the container created, unlocked and mounted at
-        `mountPoint` while everything keeps running off the plain root; run `encrypted-state-migrate` to copy the
-        data in and move the originals aside; then switch again with this `true`.
-
-        Once a machine has migrated it stays `true` forever. See docs/encrypted-state.md.
+        The migration hatch, and why the default is `false`: turning this on before `encrypted-state-migrate` has
+        run would mount empty directories over live data. Once a machine has migrated it stays `true` forever. The
+        two-deploy sequence is in docs/encrypted-state.md.
       '';
     };
 
@@ -163,12 +134,11 @@ in
       type = types.str;
       example = "64G";
       description = ''
-        Size of the container, in `fallocate -l` syntax. Allocated in full, NOT sparse: a sparse container on a
-        filesystem that later fills up fails writes from inside the container in confusing ways, and the failure
-        lands on a database rather than on whatever filled the disk.
+        Size of the container, in `fallocate -l` syntax. **Allocated in full, not sparse**, so this much disk goes
+        the moment `encrypted-state-init` runs and the machine must have it free.
 
-        Undersizing is cheap to fix - `encrypted-state-grow` handles it without touching the partition table - so
-        prefer a size that fits comfortably today over one that guesses at years of growth.
+        Undersizing is cheap to fix - `encrypted-state-grow` is online and touches no partition table - so prefer a
+        size that fits comfortably today over one that guesses at years of growth.
       '';
     };
 
@@ -176,13 +146,9 @@ in
       type = types.ints.positive;
       default = 262144; # 256 MiB
       description = ''
-        `--pbkdf-memory` for argon2id, in KiB, pinned rather than left to cryptsetup's self-calibration.
-
-        Calibration measures memory available AT THAT MOMENT, on the machine doing the format. On an idle server it
-        readily picks eight times this. Unlocking, however, happens post-boot on a machine that is already running
-        everything it serves - so a header calibrated against an idle box can demand memory a busy one cannot
-        spare, and fail at exactly the worst time. 256 MiB is still far beyond brute-force reach for a
-        high-entropy passphrase, and it always fits.
+        `--pbkdf-memory` for argon2id, in KiB, pinned rather than left to cryptsetup's self-calibration - which
+        measures free memory at FORMAT time on an idle box, while unlocking happens on a busy one. Lower it only
+        for a test VM; see docs/encrypted-state.md.
       '';
     };
 
@@ -200,13 +166,11 @@ in
       type = types.str;
       example = ''{"url":"http://10.0.0.1:7500","thp":"..."}'';
       description = ''
-        JSON configuration for the pin, passed to `clevis luks bind`. Its shape is the pin's business; for a network
-        pin it carries the server's address and the key it is expected to present. PIN THE KEY: a network pin
-        configured with an address alone trusts whatever answers, so anything that can win a race on the LAN can
-        make itself the key server.
+        JSON configuration for the pin, passed to `clevis luks bind`. Its shape is the pin's business.
 
-        This is deliberately not defaulted. It is site-specific, and the machine it points at belongs to whichever
-        repository owns the machine, not to this one.
+        PIN THE KEY. A network pin given an address alone trusts whatever answers, so anything that can win a race
+        on the LAN becomes the key server. Deliberately not defaulted: it is site-specific, and the machine it
+        points at belongs to whichever repository owns the machine, not to this one.
       '';
     };
 
@@ -230,21 +194,14 @@ in
       default = { };
       description = ''
         Application state directories to hold inside the container: the real absolute path, and the units that read
-        or write it.
+        or write it. Each unit named gets a hard dependency on the bind mount, so it cannot start while the
+        container is locked.
 
-        Each unit named is given a hard dependency on the bind mount, so it cannot start while the container is
-        locked - which is the whole point, because a database that starts against an empty mountpoint does not
-        fail, it creates a new empty database. Name every unit that touches the path, including the `-setup` and
-        backup ones. A unit left out here is a unit that will run against an empty directory the first time the key
-        server is down.
+        Name every unit that reads the LIVE directory, including `-setup` and backup ones - and only those. Both
+        mistakes cost something, and docs/encrypted-state.md says what.
 
-        This is an ordinary attribute set, so it merges the way NixOS options do: each service module declares the
-        path it keeps state in next to the units it defines, and the machine's configuration is their union.
-        Several modules may name the SAME path - the lists are concatenated - which is what lets a service and its
-        backup job be declared in separate files without either knowing about the other.
-
-        Everything else - the directory inside the container, the bind mount, the ordering, and the assertions -
-        follows from this.
+        An ordinary attribute set, so it merges as NixOS options do: declare each path in the module that defines
+        its units, and several modules may name the same path - the lists concatenate.
       '';
       example = literalExpression ''
         {
