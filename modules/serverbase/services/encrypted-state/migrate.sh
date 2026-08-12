@@ -52,16 +52,31 @@ wanted() {
 # data - the worst possible moment. Not every unit named in the configuration is loaded on every machine: one may
 # be masked, or belong to a service that has never been enabled here. Skipping those is correct; swallowing a
 # genuine failure to stop a RUNNING service would not be, so this stays narrow rather than becoming `|| true`.
+#
+# Stopping a service is not enough to keep it stopped. Whatever triggers it - a .timer, a .path - is still armed,
+# and on gmktec1's first real migration one fired mid-copy: mbsync ran against a directory rsync was reading, wrote
+# `.mbsyncstate.lock`, and the verification correctly refused to move a copy that no longer matched. So the
+# triggers go down first, and stay down: bringing them back here would re-arm them for the rest of the window, and
+# the deploy that follows starts them anyway.
 stop_units() {
-  local unit
+  local unit trigger rc=0
   # shellcheck disable=SC2086
   for unit in $1; do
-    if [ "$(systemctl show -p LoadState --value "$unit")" = "loaded" ]; then
-      systemctl stop "$unit"
-    else
+    if [ "$(systemctl show -p LoadState --value "$unit")" != "loaded" ]; then
       echo "  $unit is not loaded on this machine; nothing to stop"
+      continue
     fi
+    for trigger in $(systemctl show -p TriggeredBy --value "$unit"); do
+      echo "  stopping $trigger, which would otherwise start $unit again mid-migration"
+      systemctl stop "$trigger" || rc=1
+    done
+    # A stop that fails must not abort the run under `set -e`. It happened on gmktec1: stopping
+    # docker-immich_server let its .path unit re-trigger it, the conflicting job cancelled the stop of
+    # docker-immich_postgres, and the script died between two paths - leaving some data moved, some not, and the
+    # empty directories of the moved ones exposed. The caller skips this path instead and carries on.
+    systemctl stop "$unit" || rc=1
   done
+  return "$rc"
 }
 
 start_units() {
@@ -72,6 +87,35 @@ start_units() {
       systemctl start "$unit"
     fi
   done
+}
+
+# Nothing may start on the empty directory a moved path leaves behind. See the call site for what happened when
+# nothing did.
+#
+# A drop-in, not `systemctl mask`, and both halves of that matter on NixOS:
+#
+#   - `mask --runtime` writes /run/systemd/system/<unit>, but /etc/systemd/system OUTRANKS /run for unit files and
+#     NixOS puts every unit in /etc. The mask is created, systemd ignores it, and the guard silently does nothing.
+#     (Persistent `mask --force` would work by replacing NixOS's own symlink, and unmasking would then leave the
+#     unit with no definition at all until the next switch. Not a trade worth making.)
+#   - DROP-INS are collected from every search path rather than shadowed by the winner, so one in /run does apply.
+#
+# ConditionPathIsMountPoint says exactly what is meant: not "never start" but "do not start until this path is
+# really the container". It needs no undoing to become correct - the second deploy makes the condition true - it
+# cannot be overridden by a service that runs as root, and a unit whose condition fails is skipped quietly rather
+# than failed, which is the right noise level for a state the operator is deliberately in the middle of.
+guard_units() {
+  local unit dir
+  # shellcheck disable=SC2086
+  for unit in $2; do
+    dir="/run/systemd/system/${unit}.d"
+    mkdir -p "$dir"
+    printf '[Unit]\nConditionPathIsMountPoint=%s\n' "$1" >"$dir/$GUARD_DROPIN"
+  done
+  if [ -n "$2" ]; then
+    systemctl daemon-reload
+    echo "  guarded until $1 is bound: ${2}"
+  fi
 }
 
 if [ "$cleanup" -eq 1 ]; then
@@ -114,8 +158,17 @@ for line in "${spec_lines[@]}"; do
   fi
 
   if [ -e "$path.premigrated" ]; then
-    echo "  FAIL: $path.premigrated already exists - a previous run got this far. Resolve it by hand." >&2
-    failed=1
+    # A path an earlier run already moved. This is the normal shape of a resumed migration - the first real one on
+    # gmktec1 was interrupted twice - so it is a SKIP, not a failure. Reporting it as a failure made a run in which
+    # everything was correctly migrated end with "one or more paths did not migrate", which is the opposite of the
+    # truth and exactly the wrong thing to read at that moment.
+    if [ -d "$dest" ]; then
+      echo "  already migrated by an earlier run; nothing to do."
+    else
+      echo "  FAIL: $path.premigrated exists but $dest does not - an earlier run stopped somewhere it should" >&2
+      echo "  not have been able to. Resolve it by hand before going further." >&2
+      failed=1
+    fi
     continue
   fi
 
@@ -128,7 +181,12 @@ for line in "${spec_lines[@]}"; do
 
   if [ -n "$units" ]; then
     echo "  stopping ${units}"
-    stop_units "$units"
+    if ! stop_units "$units"; then
+      echo "  FAIL: could not stop everything that reads $path. Nothing has been moved." >&2
+      echo "  Stop them by hand - a container target or a .path unit may be re-triggering one - and run again." >&2
+      failed=1
+      continue
+    fi
   fi
 
   mkdir -p "$dest"
@@ -158,6 +216,19 @@ for line in "${spec_lines[@]}"; do
   mkdir "$path"
   chown --reference="$path.premigrated" "$path"
   chmod --reference="$path.premigrated" "$path"
+
+  # From here until the second deploy, $path is an EMPTY directory that nothing is guarding. bindState is still
+  # false, so there is no mount for RequiresMountsFor to hold a service back, and a service that starts now finds
+  # no data where its data should be - which for a database means initdb, not an error.
+  #
+  # That is not hypothetical. On gmktec1's first migration something pulled postgresql.service during this window
+  # and it built a brand new empty cluster on the root filesystem, seven minutes after its real one had been
+  # copied into the container. Nothing was lost, because the real data was already in two places, but it is the
+  # exact accident the whole design exists to prevent, arriving through the one gap where the guards do not apply.
+  #
+  # In /run, so an interrupted migration cannot leave a machine permanently crippled: a reboot clears the guards,
+  # and a reboot with the data already in the container is a machine one `nixos-rebuild switch` away from correct.
+  guard_units "$path" "$units"
 
   echo "  moved. original kept at $path.premigrated"
 done

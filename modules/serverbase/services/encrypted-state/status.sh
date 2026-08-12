@@ -84,8 +84,13 @@ while IFS="$(printf '\t')" read -r path units; do
 
   up=""
   down=""
+  masked=""
   for unit in $units; do
-    if [ "$(systemctl show -p ActiveState --value "$unit")" = "active" ]; then
+    # Held back by the migration is its own answer, not a kind of "down": it means the data has moved and the second
+    # deploy has not happened yet, which is a state an operator is deliberately in the middle of.
+    if [ -e "/run/systemd/system/${unit}.d/$GUARD_DROPIN" ]; then
+      masked="$masked $unit"
+    elif [ "$(systemctl show -p ActiveState --value "$unit")" = "active" ]; then
       up="$up $unit"
     else
       down="$down $unit"
@@ -95,6 +100,11 @@ while IFS="$(printf '\t')" read -r path units; do
   # on a perfectly healthy machine. Listed, not judged - the exit status above is what says whether to worry.
   [ -n "$up" ] && printf '    active:  %s\n' "${up# }"
   [ -n "$down" ] && printf '    down:    %s\n' "${down# }"
+  if [ -n "$masked" ]; then
+    printf '    held:    %s\n' "${masked# }"
+    printf '             (migrated but not yet bound - finish the second deploy)\n'
+    degraded=1
+  fi
 done <<EOF
 $STATE_SPEC
 EOF

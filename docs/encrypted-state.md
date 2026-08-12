@@ -213,6 +213,35 @@ plausible, empty, freshly-installed-looking tree. That is exactly the shape `Req
 `checkMountScript` preStart exist to stop a service from starting on, and the reason "an empty directory looks like
 a fresh install" is a real failure rather than a theoretical one.
 
+### Wiping what is under a mount
+
+Anything written to a path while the container was not bound is still there, hidden. Usually that is a harmless
+directory skeleton; after gmktec1's first migration it was a whole abandoned Postgres cluster. To remove it, work
+inside a private mount namespace so the unmount is yours alone and the running services never see it.
+
+**Look first.** The two commands differ by one line, and the destructive one is only safe because the `&&` chain
+proves the unmount happened:
+
+```bash
+sudo unshare --mount --propagation private bash -c '
+  umount /var/lib/postgresql &&
+  ! mountpoint -q /var/lib/postgresql &&
+  ls -la /var/lib/postgresql'
+```
+
+If that lists what you expect to delete — and nothing you recognise as live data — repeat it with the removal:
+
+```bash
+sudo unshare --mount --propagation private bash -c '
+  umount /var/lib/postgresql &&
+  ! mountpoint -q /var/lib/postgresql &&
+  rm -rf /var/lib/postgresql/* &&
+  ls -la /var/lib/postgresql'
+```
+
+Never run the `rm` without the `umount &&` in front of it in the same shell. With the mount in place that command
+deletes the live data instead, and the two situations look identical from a prompt.
+
 ### Looking under a mount without unmounting it
 
 Two ways, neither of which disturbs anything running.
@@ -377,6 +406,34 @@ restoring a backup.
 
 The services are down from here until the next switch. That is the maintenance window, and it is as long as the copy
 takes.
+
+### The window between the two deploys
+
+Once `encrypted-state-migrate` has moved a path, that path is an **empty directory with nothing guarding it**:
+`bindState` is still false, so there is no mount for `RequiresMountsFor` to hold anything back. A service that
+starts in this window finds no data where its data should be, and a database answers that by initialising a new
+one. On gmktec1's first real migration exactly that happened — something pulled `postgresql.service` seven minutes
+after its cluster had been copied into the container, and `initdb` built a fresh one on the root filesystem.
+Nothing was lost, because the real cluster was already in two places, but it is the accident this whole design
+exists to prevent, arriving through the one gap where the guards do not apply.
+
+So the migration closes the gap itself, in two ways:
+
+- **It stops each path's triggering units** — the `.timer`s and `.path`s — before stopping the services, and leaves
+  them stopped. Stopping a service while its timer is armed only means it starts again a few minutes later, in the
+  middle of the copy. That is not hypothetical either: a mailcache sync fired mid-rsync, wrote a lock file, and the
+  verification correctly refused to move a copy that no longer matched the original.
+- **It drops a `ConditionPathIsMountPoint` into `/run/systemd/system/<unit>.d`** for every unit of a moved path.
+  Nothing can start on the empty directory, including something running as root, and the condition becomes true by
+  itself the moment the second deploy binds the path. `encrypted-state-resume` then removes the drop-ins and starts
+  what was held back.
+
+`systemctl mask --runtime` was the obvious way to do that and it does not work on NixOS: `/etc/systemd/system`
+outranks `/run` for unit *files*, and NixOS puts every unit in `/etc`. The mask gets created and ignored. Drop-ins
+are the exception — they are collected from every search path rather than shadowed — which is why the guard is
+shaped this way.
+
+`encrypted-state-status` reports these units as `held`, not `down`, and exits non-zero while any remain.
 
 ### 4. Second deploy, with `bindState = true`
 

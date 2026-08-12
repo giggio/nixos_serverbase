@@ -80,6 +80,11 @@ let
     OUTAGE_NOTIFIED = "/run/encrypted-state-outage-notified";
     OUTAGE_NOTIFY_AFTER = toString cfg.outageNotifyAfterSeconds;
     OUTAGE_NOTIFY_UNITS = lib.concatStringsSep " " cfg.outageNotifyUnits;
+    # The drop-in `encrypted-state-migrate` leaves in /run/systemd/system/<unit>.d to keep a service off the empty
+    # directory a moved path becomes, and that `encrypted-state-resume` removes once the path is really bound. `zz-`
+    # so it sorts after anything else a unit may have picked up.
+    GUARD_DROPIN = "zz-encrypted-state-migration.conf";
+    RESUME_RESTART_UNITS = lib.concatStringsSep " " cfg.resumeRestartUnits;
     # Newline-separated rather than an array, because this crosses into shell as one environment variable.
     STATE_PATHS = lib.concatStringsSep "\n" (lib.attrNames cfg.paths);
     # One line per path: the path, a tab, then the units that read it. The migration needs both halves, and this is
@@ -116,6 +121,7 @@ let
   migrateScript = mkScript "encrypted-state-migrate" ./migrate.sh;
   statusScript = mkScript "encrypted-state-status" ./status.sh;
   retryScript = mkScript "encrypted-state-retry" ./retry.sh;
+  resumeScript = mkScript "encrypted-state-resume" ./resume.sh;
 in
 {
   options.setup.encryptedState = with lib; {
@@ -214,6 +220,24 @@ in
       description = ''
         How long the container must have been unavailable before `outageNotifyUnits` are started. Long enough that
         a power cut, where this machine and the key server come back at their own paces, does not page anyone.
+      '';
+    };
+
+    resumeRestartUnits = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      example = [ "systemd_traefik_configuration_provider.service" ];
+      description = ''
+        Units to restart after this module has started the guarded services itself — at the end of a heal, or when
+        the second deploy releases the migration guards.
+
+        For things that derive their configuration from what is *currently* running rather than from what exists.
+        A reverse proxy built that way has no route for a service that came up outside the ordering it watches, and
+        the symptom is one service missing from the proxy while everything else works — which reads as a fault in
+        that service.
+
+        Empty by default: whether a machine has anything of this shape is the machine's business, not this
+        module's.
       '';
     };
 
@@ -478,6 +502,25 @@ in
             ExecStart = "${pkgs.systemd}/bin/systemd-tmpfiles --create ${
               lib.concatMapStringsSep " " (path: "--prefix=${path}") (lib.attrNames cfg.paths)
             }";
+          };
+        };
+
+        # The other end of the migration window. `encrypted-state-migrate` masks each path's units as it moves the
+        # data out, because between that move and this deploy the path is an empty directory with no mount over it
+        # and no guard on it - and a database that starts there initialises a new one. This lifts the masks once the
+        # bind mounts are actually up, so masked ends exactly where guarded begins.
+        encrypted-state-resume = lib.mkIf (cfg.bindState && cfg.paths != { }) {
+          description = "Release the units the migration masked, now that their paths are bound";
+          after = [ containerMountUnit ] ++ bindMountUnits;
+          requires = [ containerMountUnit ];
+          wantedBy = [ targetUnit ];
+          partOf = [ targetUnit ];
+          unitConfig.DefaultDependencies = "no";
+          path = toolPath;
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+            ExecStart = "${resumeScript}/bin/encrypted-state-resume";
           };
         };
 

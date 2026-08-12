@@ -222,6 +222,29 @@ in
           # of phase 1: the data is in the container and the services stay down until the second deploy binds it.
           phase1.fail("test -f ${statePath}/data")
 
+      with subtest("phase 1: nothing can start on the empty directory the migration left"):
+          # The window between the migration and the second deploy, and the accident that happened in it on
+          # gmktec1's first real migration: something pulled postgresql.service, it found an empty PGDATA where its
+          # cluster used to be, and initdb built a new one on the root filesystem. bindState is still false here,
+          # so RequiresMountsFor has no mount to hold anything back - masking is the only guard there is.
+          # `succeed`, not `fail`: a unit whose condition is false is SKIPPED, and systemd calls that a successful
+          # start. The property under test is not that starting errors - it is that starting writes nothing.
+          phase1.succeed("systemctl start testapp.service")
+          state = phase1.succeed("systemctl show -p ActiveState --value testapp.service").strip()
+          assert state != "active", f"testapp ran on the empty directory the migration left: {state}"
+          phase1.fail("test -f ${statePath}/data")
+          # And the status command says so in its own words, rather than calling it "down" like an idle backup job.
+          out = phase1.fail("encrypted-state-status")
+          assert "held:" in out, f"status does not distinguish held-by-migration from down: {out}"
+
+      with subtest("phase 1: a resumed migration is a no-op, not a failure"):
+          # The first real migration was interrupted twice, so every later run met paths an earlier one had already
+          # moved. Reporting those as failures ended a run in which everything was correctly migrated with "one or
+          # more paths did not migrate" - the opposite of the truth, at the worst possible moment to read it.
+          out = phase1.succeed("encrypted-state-migrate")
+          phase1.log(out)
+          assert "already migrated" in out, f"a resumed migration did not recognise its own work: {out}"
+
       with subtest("adding the container did not cost the machine its tmpfiles"):
           # Regression guard for a real defect. A mount unit under / is `Before=local-fs.target` by default, and
           # this one requires a service that needs the network - which every ordinary service reaches only after
@@ -313,6 +336,13 @@ in
           mounts = client.succeed("findmnt -no SOURCE,TARGET ${statePath}")
           client.log(f"bind mount: {mounts}")
           assert "ORIGINAL-DATA" in client.succeed("cat ${statePath}/data")
+          # The migration masked this unit; encrypted-state-resume is what lifts that, ordered after the bind
+          # mounts so the mask ends exactly where the mount's own guard begins. Asserted before starting anything,
+          # because a test that unmasks by hand would pass on a machine where nothing ever does.
+          client.wait_for_unit("encrypted-state-resume.service")
+          client.fail(
+              "test -e /run/systemd/system/testapp.service.d/zz-encrypted-state-migration.conf"
+          )
           client.succeed("systemctl start testapp.service")
           data = client.succeed("cat ${statePath}/data")
           assert "FRESH-INIT" not in data, "testapp reinitialised over real data"
