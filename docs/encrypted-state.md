@@ -124,6 +124,23 @@ attempt takes. `systemctl --failed` can therefore be briefly empty during a genu
 `retryIntervalSeconds` defaults to five minutes rather than thirty seconds, and why `encrypted-state-status` reads
 the mounts instead of asking systemd how the units feel.
 
+### Opening the container is not the same as healing the machine
+
+The retry starts the guarded units itself, and it has to, for a reason that is not obvious and cost a rehearsal to
+find. When the unlock fails at boot, every guarded unit's job is **cancelled** with result `dependency` — not
+queued, cancelled. `RequiresMountsFor` is a condition on starting, not a trigger to start. So a container that
+opens twenty minutes later brings up the mounts and *nothing else*: `systemctl --failed` is empty,
+`encrypted-state-status` says OK because the paths genuinely are served from the container, and thirty services sit
+there dead.
+
+The in-unit retry hid this by accident. While the unlock sat in `activating`, the dependent jobs stayed **queued**,
+so a late success let them all proceed. That accident was doing real work, and failing fast threw it away. So after
+a successful heal the retry walks the declared units and starts anything loaded and not already running, with
+`--no-block` so systemd sequences them exactly as a boot would.
+
+It only does this when an outage was actually recorded. On a routine tick of a healthy machine it starts nothing —
+otherwise every timer-driven backup in the path lists would run every five minutes forever.
+
 ### Alerting
 
 `outageNotifyUnits` are started once the container has been down for `outageNotifyAfterSeconds`, **once per

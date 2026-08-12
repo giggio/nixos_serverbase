@@ -6,6 +6,40 @@
 #
 # Two jobs, and they are separate on purpose: healing is unconditional and immediate, alerting waits.
 
+# Opening the container is not the same as healing the machine, and this is the half that is easy to miss.
+#
+# When the unlock fails at boot, every guarded unit's job is CANCELLED with result 'dependency' - not queued,
+# cancelled. So when the container opens twenty minutes later, the mounts come up and nothing else does: there is no
+# pending job left for systemd to satisfy, and `RequiresMountsFor` is a condition on starting, not a trigger to
+# start. A machine in that state looks fine to `systemctl --failed`, reports OK from encrypted-state-status - the
+# paths really are served from the container - and serves nothing.
+#
+# The old in-unit retry hid this by accident: while the unlock sat there `activating`, the dependent jobs stayed
+# QUEUED, so a late success let them all proceed. Losing that is the price of the unit failing fast, and this is
+# what pays it back.
+start_guarded_units() {
+  local unit started=""
+  while IFS="$(printf '\t')" read -r _ units; do
+    for unit in $units; do
+      [ "$(systemctl show -p LoadState --value "$unit")" = "loaded" ] || continue
+      case "$(systemctl show -p ActiveState --value "$unit")" in
+      active | activating | reloading) continue ;;
+      esac
+      # --no-block, because this runs from a unit with a timeout and there may be thirty of these with ordering
+      # between them. Enqueue the lot and let systemd sequence them exactly as a boot would.
+      systemctl start --no-block "$unit" || echo "could not start $unit" >&2
+      started="$started $unit"
+    done
+  done <<EOF
+$STATE_SPEC
+EOF
+  if [ -n "$started" ]; then
+    echo "started:${started}"
+  else
+    echo "every guarded unit was already running"
+  fi
+}
+
 if [ ! -e "$IMAGE" ]; then
   # Not a fault. This is exactly where a machine sits between the first deploy and encrypted-state-init, and
   # retrying it every few minutes would fill the journal with "you have not run the next step yet".
@@ -14,8 +48,16 @@ if [ ! -e "$IMAGE" ]; then
 fi
 
 if grep -qF " $MOUNT_POINT " /proc/self/mounts; then
-  # Healthy. Clear the outage stamps so the next outage gets its own grace period and its own notification, rather
-  # than inheriting one from an outage that ended weeks ago.
+  # An outage stamp with the container already mounted means it came back some other way - an operator ran
+  # `systemctl start encrypted.mount`, or the boot-time unlock finally won - and the guarded units are still down
+  # for the same reason they would be after a heal here. Without the stamp this is just a healthy machine on a
+  # routine tick, and starting anything would mean starting timer-driven backups every five minutes forever.
+  if [ -e "$OUTAGE_STAMP" ]; then
+    echo "the container is mounted again"
+    start_guarded_units
+  fi
+  # Clear the stamps so the next outage gets its own grace period and its own notification, rather than inheriting
+  # one from an outage that ended weeks ago.
   rm -f "$OUTAGE_STAMP" "$OUTAGE_NOTIFIED"
   exit 0
 fi
@@ -34,6 +76,7 @@ systemctl start "$TARGET_UNIT" || true
 
 if grep -qF " $MOUNT_POINT " /proc/self/mounts; then
   echo "the container is open again"
+  start_guarded_units
   rm -f "$OUTAGE_STAMP" "$OUTAGE_NOTIFIED"
   exit 0
 fi

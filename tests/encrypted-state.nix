@@ -395,6 +395,7 @@ in
               client.succeed("rm /run/fake-notify-fired")
               client.succeed("systemctl start encrypted-state-retry.service")
               client.fail("test -e /run/fake-notify-fired")
+
           state = client.succeed("systemctl show -p ActiveState --value testapp.service").strip()
           assert state != "active", f"testapp ran without its container: {state}"
           # The mountpoint must be empty - not carrying a new database written over the top of it.
@@ -417,5 +418,29 @@ in
           assert "ORIGINAL-DATA" in client.succeed("cat /mnt/recovered${statePath}/data")
           client.succeed("umount /mnt/recovered && cryptsetup close recovered")
           client.succeed(f"losetup --detach {loop}")
+
+      with subtest("when the key server comes back, the SERVICES come back too"):
+          # The half of self-healing that opening the container does not buy, and which the move to a timer broke
+          # without anything noticing. When the unlock fails at boot every guarded unit's job is CANCELLED with
+          # result 'dependency' - not queued, cancelled - so a container that opens twenty minutes later brings up
+          # the mounts and nothing else. RequiresMountsFor is a condition on starting, not a trigger to start.
+          #
+          # The old in-unit retry hid this by accident: while the unlock sat there `activating`, the dependent jobs
+          # stayed queued, and a late success let them all proceed. Losing that is the price of failing fast, and
+          # encrypted-state-retry starting the units itself is what pays it back.
+          #
+          # Found on a VM rehearsal where the container healed, `systemctl --failed` was empty, and
+          # encrypted-state-status said OK - correctly, the paths really were served from the container - while all
+          # thirty services sat there dead. Last, because it is the only subtest that ends with a healthy machine.
+          tang.start()
+          tang.wait_for_unit("tangd.socket")
+          tang.wait_for_open_port(${toString tangPort})
+          client.succeed("systemctl start encrypted-state-retry.service")
+          client.wait_for_unit("encrypted-state-unlock.service")
+          source = client.succeed("findmnt -no SOURCE --target ${statePath}").strip()
+          assert "encrypted-state" in source, f"the retry did not bring the container back: {source}"
+          client.wait_for_unit("testapp.service")
+          # On the real data, not on a fresh directory created over the top of a bind mount that never happened.
+          assert "ORIGINAL-DATA" in client.succeed("cat ${statePath}/data")
     '';
 }
