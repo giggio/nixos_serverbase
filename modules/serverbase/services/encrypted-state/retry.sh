@@ -35,9 +35,23 @@ $STATE_SPEC
 EOF
   if [ -n "$started" ]; then
     echo "started:${started}"
+    restart_dependent_units
   else
     echo "every guarded unit was already running"
   fi
+}
+
+# Things that read what is RUNNING rather than what exists, and so are wrong until they look again. On gmktec1 that
+# is the Traefik configuration provider: services started outside the ordering it watches get no route, and the
+# symptom is one application missing from the proxy while everything else works - which reads as a fault in that
+# application rather than in the proxy. Only after something was actually started, so an ordinary tick is silent.
+restart_dependent_units() {
+  local unit
+  for unit in $RESUME_RESTART_UNITS; do
+    [ "$(systemctl show -p LoadState --value "$unit")" = "loaded" ] || continue
+    echo "restarting $unit so it sees what just came up"
+    systemctl restart --no-block "$unit" || echo "could not restart $unit" >&2
+  done
 }
 
 if [ ! -e "$IMAGE" ]; then
