@@ -42,36 +42,26 @@ detach_loop() {
   losetup --detach "$loop" 2>/dev/null || true
 }
 
-# The retry loop exists because this runs at boot and the key server is a small box on wifi behind a router that may
-# still be coming up. It is NOT there to paper over an outage: after the last attempt this exits non-zero, the mount
-# fails, the dependent services stay down, and the failure is visible - which is what has to happen, because the same
-# server is what unlocks everything else.
-opened=0
-for attempt in $(seq 1 "$UNLOCK_ATTEMPTS"); do
-  # -o passes straight through to `cryptsetup open`. The two workqueue flags take dm-crypt's per-I/O handoff out of
-  # the path: with AES-NI the cipher is faster than this disk, so the queueing latency is what a fsync-heavy database
-  # would otherwise feel. No --allow-discards, deliberately - see the `nodiscard` note in encrypted-state.nix.
-  # Bounded per attempt, because nothing else bounds it. clevis hands the network half to curl, and a key server
-  # that is switched off gives silent drops rather than a refusal - so the connect sits there. Without this the
-  # loop's own arithmetic is fiction: the 2026-08-12 rehearsal spent ~10s per attempt on top of the delay, so
-  # TimeoutStartSec killed the unit at attempt 17 of 20 and the last three never happened. Now an attempt costs at
-  # most UNLOCK_ATTEMPT_TIMEOUT, and unlockAttempts means what it says.
-  if timeout "$UNLOCK_ATTEMPT_TIMEOUT" clevis luks unlock -d "$loop" -n "$MAPPER" \
-    -o "--perf-no_read_workqueue --perf-no_write_workqueue"; then
-    opened=1
-    break
-  fi
-  if [ "$attempt" -lt "$UNLOCK_ATTEMPTS" ]; then
-    echo "unlock attempt $attempt/$UNLOCK_ATTEMPTS failed; the key server may not be up yet, retrying in ${UNLOCK_DELAY}s"
-    sleep "$UNLOCK_DELAY"
-  fi
-done
-
-if [ "$opened" -ne 1 ]; then
+# ONE attempt, then fail. Retrying belongs to encrypted-state-retry.timer, and the reason is worth stating because
+# the loop that used to be here looked obviously right: a unit that retries internally is `activating` for the whole
+# time it is failing. So `systemctl --failed` stays empty, `systemctl is-system-running` never leaves `starting`,
+# OnFailure= never fires - no alert - and `nixos-rebuild switch` blocks on the start job until the budget runs out.
+# The 2026-08-12 degrade rehearsal hit all four. A machine whose key server is dead has to LOOK dead, immediately,
+# and then heal quietly in the background.
+#
+# -o passes straight through to `cryptsetup open`. The two workqueue flags take dm-crypt's per-I/O handoff out of the
+# path: with AES-NI the cipher is faster than this disk, so the queueing latency is what a fsync-heavy database would
+# otherwise feel. No --allow-discards, deliberately - see the `nodiscard` note in encrypted-state.nix.
+#
+# `timeout` because nothing else bounds this: clevis hands the network half to curl, and a key server that is
+# switched off drops packets rather than refusing them, so the connect sits there until the kernel gives up.
+if ! timeout "$UNLOCK_ATTEMPT_TIMEOUT" clevis luks unlock -d "$loop" -n "$MAPPER" \
+  -o "--perf-no_read_workqueue --perf-no_write_workqueue"; then
   detach_loop
-  echo "FATAL: could not unlock $IMAGE after $UNLOCK_ATTEMPTS attempts." >&2
+  echo "FATAL: could not unlock $IMAGE." >&2
   echo "The key server is unreachable, or its keys no longer match what this container was bound to." >&2
   echo "Everything that keeps state in the container stays down until this succeeds." >&2
+  echo "encrypted-state-retry.timer keeps trying; encrypted-state-status says where things stand." >&2
   echo "To open it by hand with the recovery passphrase:" >&2
   echo "    cryptsetup open $loop $MAPPER" >&2
   exit 1

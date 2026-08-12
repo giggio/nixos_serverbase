@@ -87,27 +87,8 @@ encrypted-state-status               # what is open, what is bound, what is down
 journalctl -b | grep "ordering cycle"             # nothing
 ```
 
-### Why not `systemctl --failed`
-
-Because during an outage it is **usually empty**, and `systemctl is-system-running` says `starting` rather than
-`degraded`, forever. Both were expected to be the signal and neither is. Measured on the 2026-08-12 rehearsal:
-
-- `encrypted-state-retry` restarts the unlock every time it gives up, so the unit is `activating` for almost the
-  whole cycle and `failed` only in the seconds before the next retry starts. Look at a random moment and you see
-  nothing wrong.
-- That retry keeps a job permanently queued, and systemd does not call a boot finished while a job is pending. So
-  `is-system-running` never leaves `starting`, and a machine that has been down for an hour is indistinguishable
-  from one that booted forty seconds ago.
-
-This is a consequence of retrying forever, which is the right behaviour — an outage that ends should not need an
-operator. It just means the *reporting* has to come from somewhere else, and `encrypted-state-status` is that
-somewhere: it reads the mounts and the declared units directly, and its exit status is what an alert should watch.
-
-The one state where `systemctl --failed` does work is between the first deploy and `encrypted-state-init`: there is
-no container file, `encrypted-state-retry` is gated on it existing, so nothing restarts the unlock and it stays
-`failed` where you can see it.
-
-Whichever way you look, check that no guarded service is `active`. One that is has started on the empty directory
+`systemctl --failed` should name `encrypted-state-unlock.service`, and `systemctl is-system-running` should say
+`degraded`. Also check that no guarded service is `active`: one that is has started on the empty directory
 underneath, which is the accident the whole design is against — `encrypted-state-status` lists them per path.
 
 Then lift it **without a rebuild** and watch the machine heal on its own:
@@ -116,9 +97,43 @@ Then lift it **without a rebuild** and watch the machine heal on its own:
 sudo iptables -D OUTPUT -d <key server> -j DROP
 ```
 
-`encrypted-state-retry` restarts every 30 seconds, backing off to five minutes, so the container should unlock and
-the services start with nothing else typed. That is the other half of the property — an outage that ends should not
-need an operator — and it is only observable from inside a rehearsed outage.
+Within `retryIntervalSeconds` the container should unlock and the services start with nothing else typed. That is
+the other half of the property — an outage that ends must not need an operator — and it is only observable from
+inside a rehearsed outage.
+
+## Why the retry is a timer
+
+Because the obvious design is wrong in a way that took a rehearsal to see. The unlock used to retry inside its own
+`ExecStart`: twenty attempts, fifteen seconds apart, which reads as exactly what a boot-time network dependency
+should do. On 2026-08-12 a machine was cut off from its key server and it cost four things at once.
+
+A unit that is retrying is `activating`, not `failed`. So:
+
+- **`systemctl --failed` was empty.** For the whole outage.
+- **`systemctl is-system-running` said `starting`**, indefinitely — the queued job meant systemd never considered
+  the boot finished. A machine down for an hour looked like one that booted forty seconds ago.
+- **`OnFailure=` never fired**, so there was no way to alert on it at all.
+- **`nixos-rebuild switch` blocked** on the unlock's start job and had to be killed from the serial console.
+
+None of that is fixable by tuning the loop; it is what an internal loop *means*. So the unlock now makes exactly
+one bounded attempt and fails, and `encrypted-state-retry.timer` is what tries again. The failed state persists
+between ticks, which is what makes every one of those four work.
+
+The cost is real and worth stating: each tick starts the unlock again, which clears `failed` for as long as the
+attempt takes. `systemctl --failed` can therefore be briefly empty during a genuine outage, which is why
+`retryIntervalSeconds` defaults to five minutes rather than thirty seconds, and why `encrypted-state-status` reads
+the mounts instead of asking systemd how the units feel.
+
+### Alerting
+
+`outageNotifyUnits` are started once the container has been down for `outageNotifyAfterSeconds`, **once per
+outage**. Not on the first failure, because a power cut brings a machine and its key server back at their own paces
+and an alert for every one of those is an alert that gets muted. Not on every retry, for the same reason. The stamp
+files live in `/run`, so a reboot starts the clock — and the notification — again.
+
+`systemctl --failed` also works between the first deploy and `encrypted-state-init`, for a different reason: there
+is no container file, the retry script treats that as an operator action rather than a fault, and nothing restarts
+the unlock at all.
 
 ## Adding a service
 
@@ -375,8 +390,8 @@ Nothing to do. `encrypted-state-unlock.service` asks the pin at every boot, retr
 ### The key server is down but will come back
 
 The machine boots, ssh works, and everything with state in the container stays down.
-`encrypted-state-retry.service` keeps trying, so it heals itself once the pin answers. Nothing to do but fix the key
-server.
+`encrypted-state-retry.timer` keeps trying, so it heals itself once the pin answers. Nothing to do but fix the key
+server. The unlock unit sits in `failed` in the meantime, deliberately — that is the report, not a thing to clear.
 
 ### The key server is gone, and you have the passphrase
 

@@ -58,8 +58,11 @@ let
             url = "http://${nodes.tang.networking.primaryIPAddress}:${toString tangPort}";
           };
           # Short, so the negative case fails inside the test's patience rather than at the driver's timeout.
-          unlockAttempts = 2;
-          unlockDelaySeconds = 2;
+          unlockAttemptTimeoutSeconds = 20;
+          # Alerting, wired to a unit that only leaves a file behind. Zero grace would be untestable in the other
+          # direction, so this is one second: long enough to be a real comparison, short enough to have passed.
+          outageNotifyAfterSeconds = 1;
+          outageNotifyUnits = [ "fake-notify.service" ];
           paths."${statePath}" = [ "testapp.service" ];
         };
       };
@@ -99,11 +102,21 @@ let
         "f ${passphraseFile} 0600 root root - ${passphrase}"
       ];
 
-      # The healing retry loop is deliberately out of scope. Left on, an OnFailure firing between two steps of this
+      # Stands in for whatever the machine's repository uses to reach its owner. Starting a real notifier is not
+      # this test's business; proving that something gets started, once, after the grace period, is.
+      systemd.services.fake-notify = {
+        description = "records that the outage notification fired";
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = "${pkgs.coreutils}/bin/touch /run/fake-notify-fired";
+        };
+      };
+
+      # The healing retry timer is deliberately out of scope. Left on, a tick landing between two steps of this
       # script would start encrypted-state.target at a moment the test has arranged for it to be down, which is
-      # precisely when it is checking that it is. The unit itself is still built and still evaluated; only the
-      # trigger is removed.
-      systemd.services.encrypted-state-unlock.onFailure = lib.mkForce [ ];
+      # precisely when it is checking that it is. The units are still built and still evaluated, and the subtests
+      # that care about healing start the retry by hand; only the automatic trigger is removed.
+      systemd.timers.encrypted-state-retry.wantedBy = lib.mkForce [ ];
     };
 in
 {
@@ -171,14 +184,18 @@ in
           phase1.wait_until_fails("systemctl is-active encrypted-state-unlock.service", timeout=60)
           journal = phase1.succeed("journalctl -u encrypted-state-unlock.service --no-pager")
           assert "encrypted-state-init" in journal, f"the failure does not say how to fix it: {journal}"
-          # And it does not spin: the retry unit is gated on the container file existing, so between the first
-          # deploy and encrypted-state-init it must stay out of the way rather than fail every thirty seconds.
+          # And a retry tick here is a no-op rather than a failure: between the first deploy and
+          # encrypted-state-init there is no container to open, which is an operator action pending, not a fault.
+          # A retry that failed here would put a red unit in front of someone who is midway through a runbook.
           # `retry_state`, not `retry`: the test driver puts its own `retry()` helper in this namespace and
           # typechecks the script, so shadowing it fails the build rather than the run.
+          out = phase1.succeed("systemctl start encrypted-state-retry.service; echo started")
+          phase1.log(out)
           retry_state = phase1.succeed(
-              "systemctl show -p ActiveState --value encrypted-state-retry.service"
+              "systemctl show -p Result --value encrypted-state-retry.service"
           ).strip()
-          assert retry_state != "active", f"the retry loop is spinning with no container: {retry_state}"
+          assert retry_state == "success", f"a retry with no container should be a no-op, got: {retry_state}"
+          phase1.fail("test -e /run/encrypted-state-outage-since")
 
       # State as it exists on a machine that has been running for years, before any of this landed.
       phase1.succeed("mkdir -p ${statePath}")
@@ -353,6 +370,31 @@ in
           client.wait_for_unit("multi-user.target")
           client.wait_until_fails("systemctl is-active encrypted-state-unlock.service", timeout=120)
           client.fail("findmnt -no TARGET ${statePath}")
+
+          # The machine has to LOOK dead, and until 2026-08-12 it did not: the unlock retried inside its own
+          # ExecStart, so it was `activating` rather than `failed` for the whole outage. Nothing showed in
+          # `systemctl --failed`, `is-system-running` stayed at `starting` because the retry kept a job queued,
+          # OnFailure= never fired, and a `nixos-rebuild switch` blocked on the start job. Retrying moved to a
+          # timer for exactly these four lines.
+          failed = client.succeed("systemctl --failed --no-legend")
+          client.log(f"systemctl --failed: {failed}")
+          assert "encrypted-state-unlock" in failed, (
+              f"a dead key server left nothing in systemctl --failed: {failed}"
+          )
+          running = client.succeed("systemctl is-system-running || true").strip()
+          assert running == "degraded", f"the machine reports '{running}' with its state container down"
+
+          with subtest("the outage is reported once, and only after the grace period"):
+              # Started by hand because the timer is off in this test; what is under test is the script's decision,
+              # not systemd's ability to run a timer.
+              client.fail("test -e /run/fake-notify-fired")
+              client.succeed("systemctl start encrypted-state-retry.service")
+              client.succeed("test -e /run/encrypted-state-outage-since")
+              client.wait_for_file("/run/fake-notify-fired")
+              # Once. A notifier that fires on every tick is one that gets muted, and a muted alert is no alert.
+              client.succeed("rm /run/fake-notify-fired")
+              client.succeed("systemctl start encrypted-state-retry.service")
+              client.fail("test -e /run/fake-notify-fired")
           state = client.succeed("systemctl show -p ActiveState --value testapp.service").strip()
           assert state != "active", f"testapp ran without its container: {state}"
           # The mountpoint must be empty - not carrying a new database written over the top of it.

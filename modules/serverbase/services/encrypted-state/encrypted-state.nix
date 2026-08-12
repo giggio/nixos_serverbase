@@ -72,9 +72,14 @@ let
     # init.sh needs it to decide whether finishing by starting encrypted-state.target is safe: with bindState
     # already true and a container that has never been migrated into, it is not.
     BIND_STATE = if cfg.bindState then "1" else "0";
-    UNLOCK_ATTEMPTS = toString cfg.unlockAttempts;
-    UNLOCK_DELAY = toString cfg.unlockDelaySeconds;
     UNLOCK_ATTEMPT_TIMEOUT = toString cfg.unlockAttemptTimeoutSeconds;
+    TARGET_UNIT = targetUnit;
+    # /run, so a reboot starts the outage clock again: a machine that has just come back up into a dead key server
+    # deserves its own notification rather than inheriting the silence of the one before it.
+    OUTAGE_STAMP = "/run/encrypted-state-outage-since";
+    OUTAGE_NOTIFIED = "/run/encrypted-state-outage-notified";
+    OUTAGE_NOTIFY_AFTER = toString cfg.outageNotifyAfterSeconds;
+    OUTAGE_NOTIFY_UNITS = lib.concatStringsSep " " cfg.outageNotifyUnits;
     # Newline-separated rather than an array, because this crosses into shell as one environment variable.
     STATE_PATHS = lib.concatStringsSep "\n" (lib.attrNames cfg.paths);
     # One line per path: the path, a tab, then the units that read it. The migration needs both halves, and this is
@@ -110,6 +115,7 @@ let
   growScript = mkScript "encrypted-state-grow" ./grow.sh;
   migrateScript = mkScript "encrypted-state-migrate" ./migrate.sh;
   statusScript = mkScript "encrypted-state-status" ./status.sh;
+  retryScript = mkScript "encrypted-state-retry" ./retry.sh;
 in
 {
   options.setup.encryptedState = with lib; {
@@ -189,29 +195,50 @@ in
       '';
     };
 
-    unlockAttempts = mkOption {
+    retryIntervalSeconds = mkOption {
       type = types.ints.positive;
-      default = 20;
+      default = 300;
       description = ''
-        How many times to try the pin before giving up. Generous, because this runs at boot: a network pin's key
-        server may be a small box on wifi, and the router it depends on may still be coming up. Giving up too early
-        turns a slow start into a machine whose databases are down.
+        How often `encrypted-state-retry.timer` tries again while the container is down.
+
+        Deliberately not short. Each tick starts the unlock, which clears its `failed` state for as long as the
+        attempt runs - and that failed state is the only thing `systemctl --failed` and `is-system-running` have to
+        go on. Retrying every few seconds would hide the outage all over again, in a new way. The first tick after
+        boot is a minute, which covers the ordinary case of this machine booting before the key server does.
       '';
     };
 
-    unlockDelaySeconds = mkOption {
+    outageNotifyAfterSeconds = mkOption {
       type = types.ints.positive;
-      default = 15;
-      description = "Seconds between unlock attempts.";
+      default = 600;
+      description = ''
+        How long the container must have been unavailable before `outageNotifyUnits` are started. Long enough that
+        a power cut, where this machine and the key server come back at their own paces, does not page anyone.
+      '';
+    };
+
+    outageNotifyUnits = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      example = [ "notify_telegram@encrypted-state.service" ];
+      description = ''
+        Units to start once the container has been down for `outageNotifyAfterSeconds`, exactly once per outage.
+
+        Empty by default because how a machine reaches its owner is the business of whichever repository owns the
+        machine, not of this module. Without it the outage is still visible - the unlock unit sits in `failed` and
+        `encrypted-state-status` exits non-zero - but nothing goes looking for you.
+      '';
     };
 
     unlockAttemptTimeoutSeconds = mkOption {
       type = types.ints.positive;
       default = 60;
       description = ''
-        How long one attempt may take before it is killed and counted as failed. A key server that is switched off
-        drops packets rather than refusing them, so the connect inside clevis hangs; without a bound here a single
-        attempt can outlive the whole retry budget and `unlockAttempts` stops meaning anything.
+        How long the unlock may take before it is killed and counted as failed. A key server that is switched off
+        drops packets rather than refusing them, so the connect inside clevis hangs; without a bound here the unit
+        sits in `activating` for as long as the kernel keeps retrying the SYN, which is the state the whole design
+        is arranged to avoid - it is what `nixos-rebuild switch` waits on, and what hides the outage from
+        `systemctl --failed`.
       '';
     };
 
@@ -346,6 +373,22 @@ in
       pkgs.cryptsetup # so `luksDump`, `token export` and friends are at hand on a machine that has to be recovered
     ];
 
+    # Always running, not started by the unlock's OnFailure=, so that a container which goes away *after* boot -
+    # the key server rebooted, the LAN blipped, someone ran encrypted-state-close - is picked up too. The script is
+    # a no-op when the container is mounted or has never been created, so a tick costs nothing.
+    systemd.timers.encrypted-state-retry = {
+      description = "Retry the application state container unlock, and alert if it stays down";
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        # The first tick is short so the ordinary case - this machine booted before the key server did - heals in
+        # about a minute. After that the interval is long, because a slow drum of retries during a real outage buys
+        # nothing and each tick briefly clears the `failed` state that is the machine's only visible symptom.
+        OnBootSec = "1min";
+        OnUnitInactiveSec = cfg.retryIntervalSeconds;
+        AccuracySec = "10s";
+      };
+    };
+
     systemd.targets.encrypted-state = {
       description = "Application state held in the unlocked LUKS container";
       wantedBy = [ "multi-user.target" ];
@@ -355,7 +398,6 @@ in
       {
         encrypted-state-unlock = {
           description = "Unlock the application state container";
-          onFailure = [ "encrypted-state-retry.service" ];
           # network-online rather than network.target: a network pin needs to actually reach a box on the LAN, not
           # merely to have had interfaces configured.
           wants = [ "network-online.target" ];
@@ -393,12 +435,9 @@ in
             RemainAfterExit = true;
             ExecStart = "${unlockScript}/bin/encrypted-state-unlock";
             ExecStop = "${closeScript}/bin/encrypted-state-close";
-            # A backstop, and it must not be the thing that ends the retry loop - the script's own attempt count is.
-            # The first version of this budgeted unlockAttempts * unlockDelaySeconds and ignored what an attempt
-            # itself costs, so it killed the unit three attempts short. Now that each attempt is bounded by
-            # unlockAttemptTimeoutSeconds the worst case is arithmetic rather than a guess, plus room for argon2id.
-            TimeoutStartSec =
-              cfg.unlockAttempts * (cfg.unlockAttemptTimeoutSeconds + cfg.unlockDelaySeconds) + 120;
+            # One bounded attempt plus room for argon2id, and nothing else. This unit must fail FAST: everything
+            # that reports the outage keys on it having failed, and `nixos-rebuild switch` waits on its start job.
+            TimeoutStartSec = cfg.unlockAttemptTimeoutSeconds + 120;
           };
         };
 
@@ -444,27 +483,26 @@ in
 
         # Healing loop for the case that matters: the machine booted faster than the router, the key server was
         # unreachable, and the unlock failed. Without this the databases stay down until a human intervenes.
+        #
+        # A TIMER drives this, not `Restart=` on the unlock unit, and that is the whole point of the shape. Anything
+        # that restarts the unlock keeps it `activating`, and an `activating` unit is invisible: no `--failed` entry,
+        # no `degraded`, no OnFailure=, and a `nixos-rebuild switch` that waits out the retry budget. Leaving the
+        # unlock in `failed` between ticks is what makes the machine honest about its state; this unit is what makes
+        # it heal anyway.
         encrypted-state-retry = {
           description = "Retry the application state container unlock";
-          unitConfig = {
-            StartLimitIntervalSec = "0";
-            # Nothing to retry if the container has never been created, and that is not a hypothetical state - it is
-            # exactly where a machine sits between the first deploy and `encrypted-state-init`. Without this the
-            # retry loop would spin every thirty seconds through what may be a long coffee break, filling the
-            # journal with a failure whose cause is "you have not run the next step yet". A missing container is an
-            # operator action, not a transient fault; an unreachable key server is the transient fault this exists
-            # for. The condition is re-evaluated on every restart, so the loop starts working the moment the
-            # container appears.
-            ConditionPathExists = cfg.image;
-          };
+          # Nothing in the default graph: this must be able to run while the machine sits degraded, and it must not
+          # drag anything else into waiting on a box on the LAN. Same reasoning as the unlock unit above.
+          unitConfig.DefaultDependencies = "no";
+          after = [ "network-online.target" ];
+          wants = [ "network-online.target" ];
+          path = toolPath;
           serviceConfig = {
             Type = "oneshot";
-            ExecStart = "${pkgs.systemd}/bin/systemctl start ${targetUnit}";
-            RemainAfterExit = false;
-            Restart = "on-failure";
-            RestartSec = "30s";
-            RestartMaxDelaySec = "5m";
-            RestartSteps = "4";
+            ExecStart = "${retryScript}/bin/encrypted-state-retry";
+            # It starts the target, which starts the unlock, which is bounded by unlockAttemptTimeoutSeconds. Room
+            # for that plus the mounts, and no more: a retry that outlives its own interval would stack.
+            TimeoutStartSec = cfg.unlockAttemptTimeoutSeconds + 120;
           };
         };
       }
