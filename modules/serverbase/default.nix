@@ -237,6 +237,16 @@
     '';
   };
 
+  # Non-interactive sudo over ssh, on ANY virtual machine. Keyed on setup.isVM rather than living in one hardware
+  # module, because that is how it went wrong: the line was in config-virtual.nix, so the plain VM had it and the
+  # vmboot variant - the only one that can rehearse anything involving a bootloader or the disko layout - did not.
+  # The failure is `sudo: a terminal is required to read the password` from a scripted `ssh vm.localhost 'sudo …'`,
+  # on the exact variant a rehearsal has to use.
+  #
+  # Convenience only, and it does not reach a real machine: setup.isVM is `setup.vm.enable`, which nothing but the
+  # two virtual hardware modules sets.
+  security.sudo.wheelNeedsPassword = lib.mkIf config.setup.isVM false;
+
   security.pam.services.sshd.text =
     let
       pam_exec_ssh_session = pkgs.writeShellScript "pam_exec_ssh_session" ''
