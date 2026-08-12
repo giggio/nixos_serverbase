@@ -80,17 +80,35 @@ Two choices in that sentence are the whole point:
   gives up — and it is the waiting, not the failing, that can drag a boot into the retries. That is the case
   `DefaultDependencies=no` exists to survive, so that is the case to rehearse.
 
-Rebuild, reboot, and the machine should come up **promptly** with its databases down:
+Rebuild, reboot, and the machine should come up **promptly** with its databases down. Check it with:
 
 ```bash
-systemctl is-system-running          # degraded, not starting - it did not wait
-systemctl status encrypted-state-unlock.service   # failed, having tried unlockAttempts times
-findmnt --target /var/lib/<service>  # the root filesystem, not the container
+encrypted-state-status               # what is open, what is bound, what is down. Exits 1 when degraded.
 journalctl -b | grep "ordering cycle"             # nothing
 ```
 
-And check that no guarded service is `active`. One that is has started on the empty directory underneath, which is
-the accident the whole design is against.
+### Why not `systemctl --failed`
+
+Because during an outage it is **usually empty**, and `systemctl is-system-running` says `starting` rather than
+`degraded`, forever. Both were expected to be the signal and neither is. Measured on the 2026-08-12 rehearsal:
+
+- `encrypted-state-retry` restarts the unlock every time it gives up, so the unit is `activating` for almost the
+  whole cycle and `failed` only in the seconds before the next retry starts. Look at a random moment and you see
+  nothing wrong.
+- That retry keeps a job permanently queued, and systemd does not call a boot finished while a job is pending. So
+  `is-system-running` never leaves `starting`, and a machine that has been down for an hour is indistinguishable
+  from one that booted forty seconds ago.
+
+This is a consequence of retrying forever, which is the right behaviour — an outage that ends should not need an
+operator. It just means the *reporting* has to come from somewhere else, and `encrypted-state-status` is that
+somewhere: it reads the mounts and the declared units directly, and its exit status is what an alert should watch.
+
+The one state where `systemctl --failed` does work is between the first deploy and `encrypted-state-init`: there is
+no container file, `encrypted-state-retry` is gated on it existing, so nothing restarts the unlock and it stays
+`failed` where you can see it.
+
+Whichever way you look, check that no guarded service is `active`. One that is has started on the empty directory
+underneath, which is the accident the whole design is against — `encrypted-state-status` lists them per path.
 
 Then lift it **without a rebuild** and watch the machine heal on its own:
 

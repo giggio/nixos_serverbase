@@ -74,6 +74,7 @@ let
     BIND_STATE = if cfg.bindState then "1" else "0";
     UNLOCK_ATTEMPTS = toString cfg.unlockAttempts;
     UNLOCK_DELAY = toString cfg.unlockDelaySeconds;
+    UNLOCK_ATTEMPT_TIMEOUT = toString cfg.unlockAttemptTimeoutSeconds;
     # Newline-separated rather than an array, because this crosses into shell as one environment variable.
     STATE_PATHS = lib.concatStringsSep "\n" (lib.attrNames cfg.paths);
     # One line per path: the path, a tab, then the units that read it. The migration needs both halves, and this is
@@ -108,6 +109,7 @@ let
   closeScript = mkScript "encrypted-state-close" ./close.sh;
   growScript = mkScript "encrypted-state-grow" ./grow.sh;
   migrateScript = mkScript "encrypted-state-migrate" ./migrate.sh;
+  statusScript = mkScript "encrypted-state-status" ./status.sh;
 in
 {
   options.setup.encryptedState = with lib; {
@@ -201,6 +203,16 @@ in
       type = types.ints.positive;
       default = 15;
       description = "Seconds between unlock attempts.";
+    };
+
+    unlockAttemptTimeoutSeconds = mkOption {
+      type = types.ints.positive;
+      default = 60;
+      description = ''
+        How long one attempt may take before it is killed and counted as failed. A key server that is switched off
+        drops packets rather than refusing them, so the connect inside clevis hangs; without a bound here a single
+        attempt can outlive the whole retry budget and `unlockAttempts` stops meaning anything.
+      '';
     };
 
     simulateKeyServerOutage = mkOption {
@@ -330,6 +342,7 @@ in
       growScript
       migrateScript
       closeScript
+      statusScript
       pkgs.cryptsetup # so `luksDump`, `token export` and friends are at hand on a machine that has to be recovered
     ];
 
@@ -380,9 +393,12 @@ in
             RemainAfterExit = true;
             ExecStart = "${unlockScript}/bin/encrypted-state-unlock";
             ExecStop = "${closeScript}/bin/encrypted-state-close";
-            # The retry loop inside the script can run for unlockAttempts * unlockDelaySeconds, so the unit must be
-            # allowed at least that long plus room for argon2id.
-            TimeoutStartSec = cfg.unlockAttempts * cfg.unlockDelaySeconds + 120;
+            # A backstop, and it must not be the thing that ends the retry loop - the script's own attempt count is.
+            # The first version of this budgeted unlockAttempts * unlockDelaySeconds and ignored what an attempt
+            # itself costs, so it killed the unit three attempts short. Now that each attempt is bounded by
+            # unlockAttemptTimeoutSeconds the worst case is arithmetic rather than a guess, plus room for argon2id.
+            TimeoutStartSec =
+              cfg.unlockAttempts * (cfg.unlockAttemptTimeoutSeconds + cfg.unlockDelaySeconds) + 120;
           };
         };
 

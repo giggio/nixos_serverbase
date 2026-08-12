@@ -51,7 +51,12 @@ for attempt in $(seq 1 "$UNLOCK_ATTEMPTS"); do
   # -o passes straight through to `cryptsetup open`. The two workqueue flags take dm-crypt's per-I/O handoff out of
   # the path: with AES-NI the cipher is faster than this disk, so the queueing latency is what a fsync-heavy database
   # would otherwise feel. No --allow-discards, deliberately - see the `nodiscard` note in encrypted-state.nix.
-  if clevis luks unlock -d "$loop" -n "$MAPPER" \
+  # Bounded per attempt, because nothing else bounds it. clevis hands the network half to curl, and a key server
+  # that is switched off gives silent drops rather than a refusal - so the connect sits there. Without this the
+  # loop's own arithmetic is fiction: the 2026-08-12 rehearsal spent ~10s per attempt on top of the delay, so
+  # TimeoutStartSec killed the unit at attempt 17 of 20 and the last three never happened. Now an attempt costs at
+  # most UNLOCK_ATTEMPT_TIMEOUT, and unlockAttempts means what it says.
+  if timeout "$UNLOCK_ATTEMPT_TIMEOUT" clevis luks unlock -d "$loop" -n "$MAPPER" \
     -o "--perf-no_read_workqueue --perf-no_write_workqueue"; then
     opened=1
     break

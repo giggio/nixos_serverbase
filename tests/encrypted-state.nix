@@ -228,6 +228,16 @@ in
           client.log(f"testapp with no container: {state}")
           assert state != "active", f"testapp started without its state container: {state}"
 
+      with subtest("encrypted-state-status reports the outage that systemctl hides"):
+          # The reason this command exists: during a real outage `systemctl --failed` is usually empty and
+          # `is-system-running` says `starting` forever, because encrypted-state-retry keeps restarting the unlock
+          # and keeps a job queued. Found on the 2026-08-12 degrade rehearsal. So the EXIT STATUS is the contract -
+          # it is what an alert watches - and a status command that exited 0 here would be worse than none.
+          out = client.fail("encrypted-state-status")
+          client.log(out)
+          assert "DEGRADED" in out, f"status did not call this degraded: {out}"
+          assert "${statePath}" in out, f"status did not name the path that is unserved: {out}"
+
       with subtest("the unlock unit fails loudly, naming the container"):
           client.fail("systemctl start encrypted-state-unlock.service")
           journal = client.succeed("journalctl -u encrypted-state-unlock.service --no-pager")
@@ -289,6 +299,11 @@ in
           client.succeed("systemctl start testapp.service")
           data = client.succeed("cat ${statePath}/data")
           assert "FRESH-INIT" not in data, "testapp reinitialised over real data"
+          # And the other half of the status contract: zero once the container really is carrying the load. A
+          # command that only ever reports trouble is one nobody trusts when it stays quiet.
+          out = client.succeed("encrypted-state-status")
+          client.log(out)
+          assert "OK:" in out, f"status is not happy with a healthy container: {out}"
 
       with subtest("the performance flags asked for are the ones in the kernel"):
           # A flag that is silently dropped looks exactly like one that works, and the cost only shows up as latency
