@@ -95,7 +95,11 @@ check_names_cmd = nix eval $(nix_flags) --raw --apply 'cs: builtins.concatString
 # derivation has no `nodes` and boots nothing, and is charged $(check_overhead) alone. One evaluation answers for
 # every check at once, which is the only reason this is affordable - it costs about what one check's own `nix build`
 # spends evaluating, and it is paid before any VM starts, so it contends with nothing.
-check_memory_cmd = nix eval $(nix_flags) --raw --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrValues (builtins.mapAttrs (name: check: name + " " + builtins.toString (if check ? nodes then builtins.foldl'\'' (total: node: total + node.config.virtualisation.memorySize) 0 (builtins.attrValues check.nodes) else 0)) cs))' .\#checks.$(architecture)-linux
+#
+# A node's options are read off the node itself. The `node.config` that also resolves is the compatibility attribute
+# the test framework keeps for pre-22.11 tests, and touching it prints a deprecation warning per node - which here
+# means one for every node of every check, ahead of every `make checks` run.
+check_memory_cmd = nix eval $(nix_flags) --raw --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrValues (builtins.mapAttrs (name: check: name + " " + builtins.toString (if check ? nodes then builtins.foldl'\'' (total: node: total + node.virtualisation.memorySize) 0 (builtins.attrValues check.nodes) else 0)) cs))' .\#checks.$(architecture)-linux
 
 machine_names_cmd = nix eval $(nix_flags) --raw --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrNames cs)' .\#nixosConfigurations
 
