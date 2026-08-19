@@ -77,6 +77,47 @@ Worth saying plainly, because it is the assumption underneath the question: **ne
 corruption.** md RAID has no checksums, and ext4 checksums metadata but never data. Granular loss today is granular
 *and silent*. Encryption does not make that worse and does not make it better.
 
+### Detecting corruption: `--integrity`, and what it can and cannot be
+
+This module does not use dm-integrity today. The investigation behind that is recorded here because the decision is
+**format-time only** — `cryptsetup reencrypt` cannot add integrity to an existing volume, and there is no in-place
+conversion — so it is not a knob anyone can turn later, and a reader deciding for a new machine needs the same
+facts rather than a fresh afternoon of research.
+
+`cryptsetup luksFormat --integrity hmac-sha256` stacks dm-integrity under dm-crypt. Every sector gets an
+authentication tag; the kernel verifies it on read and returns `EIO` rather than handing up plausible garbage.
+
+**What it buys.** Two things, and the second is easy to miss. Silent corruption becomes a loud error at the exact
+offset, so whatever reads that sector — a backup job, most usefully — fails instead of faithfully copying wrong
+bytes onward. And it removes XTS's malleability: without a tag, someone who can write to the raw ciphertext can
+flip a 16-byte block to random plaintext and nothing detects it.
+
+**What it costs.**
+
+| | |
+| --- | --- |
+| Space | 32 bytes of tag per sector, so **entirely a function of sector size**: 32/512 = 6.25%, 32/4096 = 0.78%. Pin `--sector-size 4096` rather than letting cryptsetup autodetect — it is an 8× difference that cannot be changed afterwards. The dm-integrity journal is on top and has to be measured |
+| Writes | Roughly doubled, from the journalled data+tag write. Stacks with RAID's own read-modify-write on partial stripes, so small random writes are worse than 2× |
+| Format | A full-device wipe to initialise the tags, before any data moves. `--integrity-no-wipe` skips it and is a trap: unwritten sectors then read as integrity failures |
+| Kernel | `DM_INTEGRITY`, plus `CRYPTO_HMAC` and `CRYPTO_SHA256`. `DM_INTEGRITY` selects `BLK_DEV_INTEGRITY`, `DM_BUFIO`, `CRYPTO_SKCIPHER` and `ASYNC_XOR` itself |
+
+**`--integrity-no-journal` is not the way out of the write cost.** It removes the double write and leaves sectors
+whose tag does not match their data after a power cut — which reads as corruption. Trading real detection for false
+alarms defeats the purpose.
+
+**Bitmap mode is not reachable from cryptsetup.** `--integrity-bitmap-mode` tracks dirty regions instead of
+journalling and would give most of the detection at close to normal write speed. It is an **`integritysetup`
+option** — checked against cryptsetup 2.8.6, whose entire option list contains "bitmap" zero times. Building the
+stack by hand (`integritysetup format -B`, then `luksFormat` on the resulting mapper device) gets it back but costs
+the reason for wanting it: a standalone integrity layer has no key available before LUKS opens, so it runs
+`crc32c` — corruption detected, tampering not — while putting a bespoke layer in front of the unlock path.
+
+**Whether it is worth it depends on one question**, and it is not the encryption one: does anything else already
+detect corruption? On plain md RAID the answer is no. RAID has no checksums, ext4 checksums metadata and not data,
+and a scrub counts parity mismatches without being able to say which block lied — `repair` recomputes parity *from
+the data*, cementing corruption rather than fixing it. On a checksumming filesystem or with checksumming backups,
+most of the benefit is already there.
+
 ## The header backup
 
 ```bash
