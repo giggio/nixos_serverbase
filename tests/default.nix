@@ -16,4 +16,5 @@
   opi4pro-kernel-config = ./opi4pro-kernel-config.nix;
   clevis-unlock = ./clevis-unlock.nix;
   encrypted-state = ./encrypted-state.nix;
+  encrypted-state-integrity = ./encrypted-state-integrity.nix;
 }

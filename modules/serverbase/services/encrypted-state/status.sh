@@ -44,6 +44,14 @@ else
   degraded=1
 fi
 
+# Whether this container is authenticated, read off the header rather than off the configuration - the option
+# describes what a container would be created with today, and a container created before the option existed will
+# never gain it. That difference is exactly what step 6b turns on, so it has to be visible.
+if [ -e "$IMAGE" ] && [ -r "$IMAGE" ]; then
+  integrity_alg=$(cryptsetup luksDump "$IMAGE" 2>/dev/null | sed -n 's/^[[:space:]]*integrity:[[:space:]]*//p' | head -n1)
+  note "integrity" "${integrity_alg:-none - corruption is not detected, only encrypted}"
+fi
+
 # The header backup, which is the one thing here whose absence costs everything rather than an outage - and for that
 # exact reason it is reported but does NOT set `degraded`. The exit status answers "is application state coming from
 # the container", which alerting acts on immediately; folding a to-do into it would mean a healthy machine paging

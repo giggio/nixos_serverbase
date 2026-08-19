@@ -539,6 +539,19 @@ let
     "CRYPTO_XTS"
     "CRYPTO_AES_ARM64_CE_BLK"
     "CRYPTO_USER_API_SKCIPHER"
+    # Authenticated encryption for the state container: dm-integrity under dm-crypt, so a corrupt sector returns
+    # EIO at its own offset instead of plausible garbage. The array underneath detects nothing by itself - md RAID5
+    # has no checksums, and its ext4 was created in 2017 without metadata_csum - so without this a silently wrong
+    # sector is read, backed up faithfully, and found years later. See PLAN_ENCRYPTION.md step 6.
+    #
+    # DM_INTEGRITY selects BLK_DEV_INTEGRITY, DM_BUFIO, CRYPTO_SKCIPHER and ASYNC_XOR on its own; the three below
+    # are the hmac-sha256 profile and are not implied by anything.
+    "DM_INTEGRITY"
+    "CRYPTO_HMAC"
+    "CRYPTO_SHA256"
+    # The ARMv8 Crypto Extensions SHA-2 path. The A733 advertises `sha2`, and integrity hashes every sector on
+    # every read - the generic C implementation would make the tag check the bottleneck rather than the disk.
+    "CRYPTO_SHA2_ARM64_CE"
   ];
   # Where the kernel's own outputs put the modules tree. Named once because kernelConfigAssertions has to find the
   # post-oldconfig .config under exactly this path.

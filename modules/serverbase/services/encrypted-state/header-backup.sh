@@ -98,7 +98,7 @@ fi
 # the two situations that call for it are different - a header damaged on a healthy machine, and a machine that no
 # longer exists - and they are not reachable with the same key.
 export_backup() {
-  local recipient args=()
+  local recipient host args=()
   [ -n "$export_to" ] || return 0
   for recipient in $HEADER_EXPORT_RECIPIENTS; do
     args+=(--recipient "$recipient")
@@ -112,8 +112,11 @@ export_backup() {
   echo
   echo "  Copy it off the machine and DELETE IT HERE - a copy that stays is not an off-machine copy:"
   echo
-  echo "      scp $(hostname):$export_to ."
-  echo "      ssh $(hostname) rm -f $export_to"
+  # `uname -n` rather than `hostname`: coreutils is in this script's runtimeInputs and hostname is not, so the
+  # latter works only because writeShellApplication keeps the caller's PATH - which a systemd unit may not have.
+  host=$(uname -n)
+  echo "      scp $host:$export_to ."
+  echo "      ssh $host rm -f $export_to"
   echo
   echo "  Where the copies go, and how many there should be, is in the configuration repository's"
   echo "  docs/encrypted-state.md."

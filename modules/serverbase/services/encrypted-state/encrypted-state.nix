@@ -73,6 +73,9 @@ let
     MOUNT_POINT = cfg.mountPoint;
     SIZE = cfg.size;
     PBKDF_MEMORY = toString cfg.pbkdfMemoryKiB;
+    SECTOR_SIZE = toString cfg.sectorSize;
+    # Empty rather than absent when off, so init.sh tests one variable instead of branching on whether it is set.
+    INTEGRITY = if cfg.integrity == null then "" else cfg.integrity;
     HEADER_BACKUP = cfg.headerBackupPath;
     HEADER_NOTIFY_UNITS = lib.concatStringsSep " " cfg.headerNotifyUnits;
     HEADER_EXPORT_RECIPIENTS = lib.concatStringsSep " " cfg.headerExportRecipients;
@@ -237,8 +240,59 @@ in
         Size of the container, in `fallocate -l` syntax. **Allocated in full, not sparse**, so this much disk goes
         the moment `encrypted-state-init` runs and the machine must have it free.
 
-        Undersizing is cheap to fix - `encrypted-state-grow` is online and touches no partition table - so prefer a
-        size that fits comfortably today over one that guesses at years of growth.
+        How much slack to leave depends entirely on `integrity`:
+
+        - **without it**, undersizing is cheap to fix. `encrypted-state-grow` is online, touches no partition table
+          and needs no downtime, so prefer a size that fits comfortably today over one guessing at years of growth.
+        - **with it, this cannot be changed.** cryptsetup refuses to resize a volume with integrity protection and
+          there is no offline route, because the tag area is interleaved with the data. Growing means creating a
+          new container and migrating into it, with the services down. Size generously the first time.
+      '';
+    };
+
+    sectorSize = mkOption {
+      type = types.ints.positive;
+      default = 4096;
+      description = ''
+        `--sector-size` for `luksFormat`. Pinned rather than left to cryptsetup's autodetection, which reports what
+        the backing device happens to say - a loop device over a file on one filesystem and a loop device over a
+        file on another can disagree, and the answer is baked into the header for the life of the container.
+
+        It matters most with `integrity`, where the per-sector tag is a fixed 32 bytes: at 4096 that is 0.78% of
+        the container, at 512 it is 6.25%. Same data, eight times the overhead, decided by a value nobody chose.
+      '';
+    };
+
+    integrity = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "hmac-sha256";
+      description = ''
+        `--integrity` for `luksFormat`: stacks dm-integrity under dm-crypt so every sector carries an
+        authentication tag. A corrupt sector then returns `EIO` at the exact offset instead of plausible garbage,
+        which is what stops a backup job from faithfully copying corruption onward.
+
+        **Format-time only.** `cryptsetup reencrypt` cannot add or remove it, so changing this option on a machine
+        that already has a container does nothing at all to that container - it would have to be recreated and
+        migrated into. The module asserts nothing about this because it cannot see the existing header at
+        evaluation time; `cryptsetup luksDump` is the authority.
+
+        **It also makes the container unresizable.** `encrypted-state-grow` refuses, because cryptsetup cannot
+        resize a volume with integrity protection and interleaved tags leave no offline route either. That turns
+        `size` from a decision with an easy escape hatch into one taken once, so weigh it there rather than here.
+
+        Measured overhead at 4096-byte sectors: **0.87% of the container** past the LUKS header, on a 64 GiB
+        volume - the 32-byte tag per sector is 0.78% of that and the rest is dm-integrity's journal. Small
+        containers look far worse (1.59% at 256 MiB) because the journal has a floor; do not size from those.
+        `encrypted-state-init` prints the real number for the container it just made.
+
+        Costs, on top of the tags: writes are roughly doubled by dm-integrity's data+tag journal, and
+        `luksFormat` wipes the whole device to initialise the tags before it returns. Worth it where nothing else
+        detects corruption - plain md RAID has no checksums - and not worth it where something already does.
+
+        `--integrity-no-journal` and bitmap mode are deliberately not exposed. The first trades real detection for
+        false alarms after a power cut; the second is an `integritysetup` option that cryptsetup does not offer for
+        LUKS2 at all.
       '';
     };
 

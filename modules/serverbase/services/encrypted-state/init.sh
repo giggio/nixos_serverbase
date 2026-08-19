@@ -52,15 +52,31 @@ cleanup_failure() {
 }
 trap cleanup_failure ERR
 
-echo "Formatting LUKS2, argon2id pinned at ${PBKDF_MEMORY} KiB..."
-printf '%s' "$passphrase" | cryptsetup luksFormat \
-  --type luks2 \
-  --batch-mode \
-  --pbkdf argon2id \
-  --pbkdf-memory "$PBKDF_MEMORY" \
-  --label "$MAPPER" \
-  --key-file - \
-  "$IMAGE"
+format_args=(
+  --type luks2
+  --batch-mode
+  --pbkdf argon2id
+  --pbkdf-memory "$PBKDF_MEMORY"
+  # Pinned, not autodetected. cryptsetup reports what the backing device says, and with integrity the per-sector
+  # tag is a fixed 32 bytes - so 4096 costs 0.78% of the container and 512 costs 6.25%, for the same data. Baked
+  # into the header at this moment and not changeable afterwards.
+  --sector-size "$SECTOR_SIZE"
+  --label "$MAPPER"
+  --key-file -
+)
+
+if [ -n "$INTEGRITY" ]; then
+  format_args+=(--integrity "$INTEGRITY")
+  echo
+  echo "Integrity is on ($INTEGRITY), which means luksFormat WIPES THE WHOLE CONTAINER before it returns,"
+  echo "to initialise the per-sector tags. That is $SIZE of writing and it can take hours on spinning disks."
+  echo "It is not skippable: --integrity-no-wipe leaves every unwritten sector reading as an integrity failure."
+  echo "Leave it alone; interrupting here leaves a container that has to be deleted and started again."
+  echo
+fi
+
+echo "Formatting LUKS2, argon2id pinned at ${PBKDF_MEMORY} KiB, ${SECTOR_SIZE}-byte sectors..."
+printf '%s' "$passphrase" | cryptsetup luksFormat "${format_args[@]}" "$IMAGE"
 
 echo "Binding a second keyslot to the key server..."
 # `clevis luks bind` works directly on a file - no loop device needed, and no root beyond reading and writing the
@@ -77,6 +93,15 @@ shred -u /dev/shm/.encrypted-state-key.$$
 echo "Verifying the container opens against the key server..."
 loop=$(losetup --find --show --direct-io=on "$IMAGE")
 clevis luks unlock -d "$loop" -n "$MAPPER" -o "--perf-no_read_workqueue --perf-no_write_workqueue"
+
+# What the container actually yields, against what it cost on disk. Worth printing at creation because it is the
+# one moment the difference is decided and the only moment anyone is looking: the LUKS header is a flat 16 MiB, but
+# with integrity there is also 32 bytes of tag per sector and a dm-integrity journal whose size cryptsetup chooses.
+# An operator who sized the container against the data it has to hold needs to see the number it really offers.
+usable=$(blockdev --getsize64 "/dev/mapper/$MAPPER")
+image_bytes=$(stat -c %s "$IMAGE")
+echo "  $(numfmt --to=iec "$usable") usable inside a $(numfmt --to=iec "$image_bytes") container" \
+  "($(( (image_bytes - usable) * 1000 / image_bytes ))‰ overhead)"
 
 echo "Creating the filesystem..."
 # -m 0: the 5% reserved-for-root margin exists to keep a root filesystem recoverable when it fills. This is not a

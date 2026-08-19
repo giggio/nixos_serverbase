@@ -16,6 +16,27 @@ if [ ! -e "$IMAGE" ]; then
   exit 1
 fi
 
+# Refused up front, because cryptsetup cannot do it and finding that out halfway through leaves a mess. Without
+# this the fallocate and the `losetup --set-capacity` below both succeed and `cryptsetup resize` then answers
+# "Resize of LUKS2 device with integrity protection is not supported" - so the file and the loop device are bigger
+# while the LUKS device is not, and the difference is space nothing will ever use.
+#
+# Asked of the CONTAINER rather than of setup.encryptedState.integrity: the option describes what a container would
+# be created with today, and this container may predate the current configuration either way. A plain LUKS2 header
+# has no `integrity:` line at all, so the grep is the whole test.
+if cryptsetup luksDump "$IMAGE" | grep -qE '^[[:space:]]*integrity:'; then
+  echo "FATAL: $IMAGE has integrity protection, and cryptsetup cannot resize such a volume." >&2
+  echo >&2
+  echo "This is a limitation of cryptsetup, not of this script, and there is no offline workaround: the tag area" >&2
+  echo "is interleaved with the data, so extending one means rewriting the other." >&2
+  echo >&2
+  echo "The way to make it bigger is to make a NEW container and migrate into it - stop the services, move this" >&2
+  echo "image aside, encrypted-state-init a larger one, and copy from the *.premigrated directories the old" >&2
+  echo "migration left. That is a maintenance window, not an online operation, which is why an integrity" >&2
+  echo "container has to be sized generously at creation. See docs/encrypted-state.md." >&2
+  exit 1
+fi
+
 current_bytes=$(stat -c %s "$IMAGE")
 new_bytes=$(numfmt --from=iec "$new_size")
 if [ "$new_bytes" -le "$current_bytes" ]; then

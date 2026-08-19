@@ -79,10 +79,10 @@ corruption.** md RAID has no checksums, and ext4 checksums metadata but never da
 
 ### Detecting corruption: `--integrity`, and what it can and cannot be
 
-This module does not use dm-integrity today. The investigation behind that is recorded here because the decision is
-**format-time only** — `cryptsetup reencrypt` cannot add integrity to an existing volume, and there is no in-place
-conversion — so it is not a knob anyone can turn later, and a reader deciding for a new machine needs the same
-facts rather than a fresh afternoon of research.
+`setup.encryptedState.integrity` turns it on, at creation and only at creation. The decision is **format-time
+only** — `cryptsetup reencrypt` cannot add integrity to an existing volume, and there is no in-place conversion —
+so a machine that already has a container cannot gain it by changing the option. It would have to be recreated and
+migrated into.
 
 `cryptsetup luksFormat --integrity hmac-sha256` stacks dm-integrity under dm-crypt. Every sector gets an
 authentication tag; the kernel verifies it on read and returns `EIO` rather than handing up plausible garbage.
@@ -96,10 +96,35 @@ flip a 16-byte block to random plaintext and nothing detects it.
 
 | | |
 | --- | --- |
-| Space | 32 bytes of tag per sector, so **entirely a function of sector size**: 32/512 = 6.25%, 32/4096 = 0.78%. Pin `--sector-size 4096` rather than letting cryptsetup autodetect — it is an 8× difference that cannot be changed afterwards. The dm-integrity journal is on top and has to be measured |
+| Space | 32 bytes of tag per sector, so **largely a function of sector size**: 32/512 = 6.25%, 32/4096 = 0.78%, plus the journal. `sectorSize` pins it rather than letting cryptsetup report what the backing device happens to say — an 8× difference that cannot be changed afterwards |
 | Writes | Roughly doubled, from the journalled data+tag write. Stacks with RAID's own read-modify-write on partial stripes, so small random writes are worse than 2× |
 | Format | A full-device wipe to initialise the tags, before any data moves. `--integrity-no-wipe` skips it and is a trap: unwritten sectors then read as integrity failures |
 | Kernel | `DM_INTEGRITY`, plus `CRYPTO_HMAC` and `CRYPTO_SHA256`. `DM_INTEGRITY` selects `BLK_DEV_INTEGRITY`, `DM_BUFIO`, `CRYPTO_SKCIPHER` and `ASYNC_XOR` itself |
+| **Growth** | **Gone.** See below — this is the cost that is easiest to miss and hardest to undo |
+
+#### An integrity container cannot be grown
+
+`cryptsetup` answers `Resize of LUKS2 device with integrity protection is not supported`, and there is no offline
+workaround: the tag area is interleaved with the data, so extending one means rewriting the other.
+`encrypted-state-grow` therefore refuses **before touching anything** — checked against the container's own header
+rather than the option, since the two can disagree. Without that check it would `fallocate` the image and
+`losetup --set-capacity` the loop device first and fail after, leaving both larger than the LUKS device with the
+difference permanently unusable.
+
+So the escape hatch that makes sizing a plain container forgiving is not there. Growing means a maintenance window:
+stop the services, move the image aside, `encrypted-state-init` a larger one, copy in from the `*.premigrated`
+directories. Size generously at creation instead.
+
+**Measured overhead**, so generosity can be costed rather than guessed:
+
+| container | overhead past the LUKS header |
+| --- | --- |
+| 64 GiB | **0.87%** |
+| 256 MiB | 1.59% |
+
+The 32-byte tag per 4096-byte sector accounts for 0.78%; the rest is dm-integrity's journal, which has a floor and
+therefore dominates at small sizes. Size from the first row, not the second. `encrypted-state-init` prints the real
+figure for the container it just created.
 
 **`--integrity-no-journal` is not the way out of the write cost.** It removes the double write and leaves sectors
 whose tag does not match their data after a power cut — which reads as corruption. Trading real detection for false
@@ -430,6 +455,10 @@ or none, and there is no container there to act on anyway.
 
 ## Growing the container
 
+**Not possible if the container was created with `integrity`** — `encrypted-state-grow` refuses, and
+[the reason](#an-integrity-container-cannot-be-grown) is that cryptsetup cannot resize such a volume at all. The
+rest of this section is about containers without it.
+
 Online, with the services running, and **nothing to do with disko**:
 
 ```bash
@@ -672,7 +701,7 @@ damaged" from that sentence into a two-minute repair.
 
 ## Tests
 
-`tests/encrypted-state.nix` drives the mechanism end to end against a fixture key server: creation, binding,
+Two files. `tests/encrypted-state.nix` drives the mechanism end to end against a fixture key server: creation, binding,
 migration, the bind mounts, the dm-crypt performance flags, direct I/O, survival across a reboot, online growth,
 **the service staying down with the key server gone**, and recovery by passphrase.
 
@@ -689,6 +718,16 @@ one requires a service that needs the network, which closes a loop through `sysi
 by **deleting one of the jobs** and booting anyway. During development it chose `systemd-tmpfiles-setup.service`, so
 every tmpfiles rule on the machine silently did not run. The fix is `DefaultDependencies=no` on the mount units with
 the ordering written out explicitly; the test is what stops it coming back.
+
+`tests/encrypted-state-integrity.nix` covers `integrity` separately, because formatting with it wipes the whole
+container and changes the timing of everything downstream. Its one subtest that matters is **"a corrupted sector is
+refused, not returned"**: a byte is written into the raw container behind dm-crypt's back and the read must come
+back `EIO`. Every other assertion there would pass with integrity silently doing nothing — the container would
+format, bind, unlock, mount and serve identically — so the paired control that follows it is not optional. It
+repeats the same damage on a plain LUKS2 volume built the same way and asserts the bytes come back **changed and
+without an error**, which is both the status quo and the proof that the assertion above is about integrity rather
+than about `dd`. Neither uses a filesystem: a pattern is written straight to the mapper, so a refused read cannot
+be ext4 noticing its own metadata is wrong. It is also where the resize limitation was found.
 
 A superproject should add its own check driving the real machine's configuration. Thirty units and a nested network
 mount produce failures that a two-unit fixture structurally cannot.
