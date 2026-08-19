@@ -24,6 +24,18 @@
 let
   tangPort = 7500;
   image = "/var/lib/encrypted-state.img";
+  # The module's default for headerBackupPath, spelled out rather than read from the option, so that changing the
+  # default has to come past this test instead of quietly taking it along.
+  headerBackup = "/var/lib/encrypted-state-header.bak";
+
+  # A throwaway age identity, generated for this file and used nowhere else. The point of having the private half
+  # here is that the exported copy gets DECRYPTED and compared against the original - "a file was produced" is not
+  # the property under test, "the file opens for the configured recipient and is byte-identical" is. That is the
+  # failure this catches: a mistyped recipient produces a perfectly good file that opens for nobody, and the only
+  # moment anyone finds out is during a recovery.
+  testAgeRecipient = "age16sfgdqg7695kwu208q8tcuzg5jhy2e75kpld32mghwrra2gk9e5qfqh75h";
+  testAgeIdentity = "AGE-SECRET-KEY-1QUWJ72SG57XHU4A9VA6PSSMK8ZXVLJEF555Y8EWWCTVFSV9N9M9QXEHLX9";
+  identityFile = "/run/test-age-identity";
   mountPoint = "/encrypted";
   statePath = "/var/lib/testapp";
   passphraseFile = "/run/test-recovery-passphrase";
@@ -63,6 +75,10 @@ let
           # direction, so this is one second: long enough to be a real comparison, short enough to have passed.
           outageNotifyAfterSeconds = 1;
           outageNotifyUnits = [ "fake-notify.service" ];
+          headerNotifyUnits = [ "fake-header-notify.service" ];
+          # A throwaway age identity generated for this file, so the export can be decrypted back and compared
+          # rather than merely produced. Its private half is below; it protects nothing.
+          headerExportRecipients = [ testAgeRecipient ];
           paths."${statePath}" = [ "testapp.service" ];
         };
       };
@@ -94,12 +110,16 @@ let
         clevis
         jose
         curl
+        # To decrypt what `encrypted-state-header-backup --export` produces, which is the only way the export
+        # subtest can assert anything stronger than "a file appeared".
+        age
       ];
 
       # The non-interactive passphrase for encrypted-state-init. A real machine must never have this on a disk;
       # tmpfiles puts it on /run, which is a tmpfs, and the script itself prints a warning when this is used.
       systemd.tmpfiles.rules = [
         "f ${passphraseFile} 0600 root root - ${passphrase}"
+        "f ${identityFile} 0600 root root - ${testAgeIdentity}"
       ];
 
       # Stands in for whatever the machine's repository uses to reach its owner. Starting a real notifier is not
@@ -112,11 +132,24 @@ let
         };
       };
 
+      systemd.services.fake-header-notify = {
+        description = "records that the stale-header-backup notification fired";
+        serviceConfig = {
+          Type = "oneshot";
+          ExecStart = "${pkgs.coreutils}/bin/touch /run/fake-header-notify-fired";
+        };
+      };
+
       # The healing retry timer is deliberately out of scope. Left on, a tick landing between two steps of this
       # script would start encrypted-state.target at a moment the test has arranged for it to be down, which is
       # precisely when it is checking that it is. The units are still built and still evaluated, and the subtests
       # that care about healing start the retry by hand; only the automatic trigger is removed.
       systemd.timers.encrypted-state-retry.wantedBy = lib.mkForce [ ];
+
+      # Same reasoning for the header check: `Persistent = true` on a machine with no stamp fires at boot, and a
+      # tick landing between two steps below would touch the flag the test is about to assert is absent. The unit
+      # is still built and still evaluated, and the subtests start it by hand.
+      systemd.timers.encrypted-state-header-check.wantedBy = lib.mkForce [ ];
     };
 in
 {
@@ -321,6 +354,87 @@ in
           # The guard against the worst possible mistake: re-running init on a machine that already has data.
           client.fail("ENCRYPTED_STATE_PASSPHRASE_FILE=${passphraseFile} encrypted-state-init")
           client.succeed("test -f ${image}")
+
+      with subtest("init leaves a header backup, and it is a real header"):
+          # The one failure in this design that is total rather than granular. A damaged sector costs the file that
+          # owns it and nothing else - aes-xts-plain64 takes its tweak from the sector number and chains nothing, so
+          # damage cannot leave the sector it landed in - but the first 16 MiB are the keyslots, and the keyslots
+          # hold the master key. Lose those and every byte behind them is unreadable. LUKS2 keeps a spare copy of
+          # the BINARY header for exactly this, and cryptsetup falls back to it by itself, but the keyslot area is
+          # not duplicated: the spare does not cover the case that matters.
+          backup = "${headerBackup}"
+          client.succeed(f"test -f {backup}")
+          # The same header rather than merely 16 MiB of something: a header backup file is a LUKS device in its own
+          # right, so cryptsetup will read it directly.
+          assert client.succeed(f"cryptsetup luksUUID {backup}").strip() == client.succeed(
+              "cryptsetup luksUUID ${image}"
+          ).strip(), "the backup is not this container's header"
+          # Taken AFTER the clevis bind, which is the ordering that decides whether a restored container can still
+          # unlock by itself: the JWE lives in a LUKS2 token, inside the header, inside this file.
+          assert "clevis" in client.succeed(f"cryptsetup luksDump {backup}"), (
+              "the backup predates the key-server binding, so restoring it would leave only the passphrase"
+          )
+          client.succeed("encrypted-state-header-backup --check")
+          assert "${headerBackup} current" in client.succeed("encrypted-state-status || true")
+          # The timer is disabled on this node so it cannot fire mid-script, so assert instead that it is a real
+          # unit with the schedule the module claims - otherwise "disabled for the test" could hide "never built".
+          assert client.succeed(
+              "systemctl show -p TimersCalendar --value encrypted-state-header-check.timer"
+          ).strip() != "", "the daily header check timer is not configured"
+          # Idempotent, because the alternative is rewriting 16 MiB on every run of anything that calls it.
+          assert "unchanged" in client.succeed("encrypted-state-header-backup")
+
+          # The copy that leaves the machine. Decrypted and compared, not merely produced: a mistyped recipient
+          # yields a file that looks right, opens for nobody, and is discovered during a recovery.
+          client.succeed("encrypted-state-header-backup --export /run/exported.age")
+          client.succeed(
+              "age --decrypt --identity ${identityFile} -o /run/exported.bak /run/exported.age"
+          )
+          client.succeed(f"cmp /run/exported.bak {backup}")
+          # Refusing without a recipient matters more than it looks: the fallback would be writing the plaintext
+          # header wherever it was pointed, which is the one thing this whole procedure exists to avoid.
+          client.succeed("rm /run/exported.age /run/exported.bak")
+
+      with subtest("a changed keyslot makes it stale, and restoring it is what makes it a backup"):
+          # Negative control: if `--check` cannot tell a changed header from an unchanged one, "current" above was
+          # never an assertion about anything.
+          client.succeed("echo second-key > /run/second-key")
+          client.succeed(
+              "printf %s '${passphrase}' | cryptsetup luksAddKey --batch-mode --pbkdf argon2id"
+              " --pbkdf-memory 32768 --key-file=- ${image} /run/second-key"
+          )
+          out = client.fail("encrypted-state-header-backup --check 2>&1")
+          assert "STALE" in out, f"a third keyslot did not make the backup stale: {out}"
+          assert "${headerBackup} STALE" in client.succeed("encrypted-state-status || true")
+
+          # Reporting it to whoever runs a command is not enough, because the five commands that invalidate a
+          # header backup are run once every few years and nobody goes looking afterwards. The daily check is what
+          # turns "you should have remembered" into a message.
+          client.fail("test -e /run/fake-header-notify-fired")
+          client.succeed("systemctl start encrypted-state-header-check.service")
+          client.wait_for_file("/run/fake-header-notify-fired")
+          # Not a failed unit, deliberately: `--failed` and `degraded` mean "state is not coming from the container"
+          # on these machines, and lending that alarm to paperwork is how an alarm stops being read.
+          assert client.succeed(
+              "systemctl show -p Result --value encrypted-state-header-check.service"
+          ).strip() == "success"
+
+          # And now the direction the whole thing exists for. "A file is present" is not the property under test;
+          # putting it back and getting the original container is. Everything after this subtest unlocks through
+          # clevis against the restored header, so the restore is load-bearing for the rest of the file.
+          client.succeed(
+              f"cryptsetup luksHeaderRestore --batch-mode ${image} --header-backup-file {backup}"
+          )
+          dump = client.succeed("cryptsetup luksDump ${image}")
+          slots = [line for line in dump.splitlines() if line.strip().endswith(": luks2")]
+          assert len(slots) == 2, f"the restore did not put the original two keyslots back: {slots}"
+          assert "clevis" in dump, f"the restore lost the key-server binding: {dump}"
+          client.succeed("encrypted-state-header-backup --check")
+
+          # The nag has to stop when the problem is fixed, or it becomes the daily message everyone filters out.
+          client.succeed("rm /run/fake-header-notify-fired")
+          client.succeed("systemctl start encrypted-state-header-check.service")
+          client.fail("test -e /run/fake-header-notify-fired")
 
       with subtest("encrypted-state-migrate moves the data in and parks the original"):
           client.succeed("systemctl start encrypted-state-unlock.service")

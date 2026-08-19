@@ -99,12 +99,21 @@ cryptsetup close "$MAPPER"
 losetup --detach "$loop"
 trap - ERR
 
+# Both keyslots exist and the clevis token is in the header, so this is the earliest moment the backup is worth
+# anything - and the latest one at which taking it is still free. From here on the container holds data, and a
+# header lost before anyone thought to copy it takes that data with it. Deliberately not left to the runbook: the
+# step nobody does is the step that happens after the interesting part is over.
+echo
+echo "Backing up the header..."
+encrypted-state-header-backup
+
 thumbprint=$(cryptsetup luksDump "$IMAGE" | grep -c 'clevis' || true)
 echo
 echo "==========================================================================="
 echo "  The container at $IMAGE is ready."
 echo "  Keyslots: one bound to the key server, one recovery passphrase."
 echo "  clevis tokens found in the header: $thumbprint"
+echo "  Header backed up to $HEADER_BACKUP - copy it off this machine."
 echo "==========================================================================="
 if [ "$interactive" -eq 1 ]; then
   echo

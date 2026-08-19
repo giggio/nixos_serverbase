@@ -59,6 +59,12 @@ let
     e2fsprogs
     rsync
     systemd
+    # `cmp`, which is how the header backup is compared against the front of the container - by bytes, so the answer
+    # is exact and costs no write.
+    diffutils
+    # For `encrypted-state-header-backup --export`. On the machine rather than on a workstation, because there is
+    # no clean way to stream 16 MiB of root-owned key material off a server that asks for a sudo password.
+    age
   ];
 
   scriptEnv = {
@@ -67,6 +73,9 @@ let
     MOUNT_POINT = cfg.mountPoint;
     SIZE = cfg.size;
     PBKDF_MEMORY = toString cfg.pbkdfMemoryKiB;
+    HEADER_BACKUP = cfg.headerBackupPath;
+    HEADER_NOTIFY_UNITS = lib.concatStringsSep " " cfg.headerNotifyUnits;
+    HEADER_EXPORT_RECIPIENTS = lib.concatStringsSep " " cfg.headerExportRecipients;
     CLEVIS_PIN = cfg.clevisPin;
     CLEVIS_CONFIG = cfg.clevisConfig;
     # init.sh needs it to decide whether finishing by starting encrypted-state.target is safe: with bindState
@@ -94,11 +103,13 @@ let
     );
   };
 
-  mkScript =
-    name: file:
+  # `extra` is for the one script that drives another one. Keeping it out of `toolPath` is not tidiness: toolPath is
+  # what every script is built with, so a script in there would have to be built with itself.
+  mkScriptWith =
+    extra: name: file:
     pkgs.writeShellApplication {
       inherit name;
-      runtimeInputs = toolPath;
+      runtimeInputs = toolPath ++ extra;
       text = ''
         ${lib.concatStringsSep "\n" (
           lib.mapAttrsToList (k: v: "export ${k}=${lib.escapeShellArg v}") scriptEnv
@@ -114,12 +125,18 @@ let
     unit: !(lib.hasAttr (lib.removeSuffix ".service" unit) config.systemd.services)
   ) (lib.filter (lib.hasSuffix ".service") declaredUnits);
 
-  initScript = mkScript "encrypted-state-init" ./init.sh;
+  mkScript = mkScriptWith [ ];
+
+  # The header backup belongs to creation, not to a checklist item the operator may or may not reach: the container
+  # is bound and holding data from the moment init finishes, and that is already the moment its header matters.
+  initScript = mkScriptWith [ headerBackupScript ] "encrypted-state-init" ./init.sh;
   unlockScript = mkScript "encrypted-state-unlock" ./unlock.sh;
   closeScript = mkScript "encrypted-state-close" ./close.sh;
   growScript = mkScript "encrypted-state-grow" ./grow.sh;
   migrateScript = mkScript "encrypted-state-migrate" ./migrate.sh;
   statusScript = mkScript "encrypted-state-status" ./status.sh;
+  headerBackupScript = mkScript "encrypted-state-header-backup" ./header-backup.sh;
+  headerCheckScript = mkScriptWith [ headerBackupScript ] "encrypted-state-header-check" ./header-check.sh;
   retryScript = mkScript "encrypted-state-retry" ./retry.sh;
   resumeScript = mkScript "encrypted-state-resume" ./resume.sh;
 in
@@ -155,6 +172,62 @@ in
       type = types.str;
       default = "/encrypted";
       description = "Where the container's filesystem is mounted. The declared paths are bound out of it.";
+    };
+
+    headerBackupPath = mkOption {
+      type = types.str;
+      default = "/var/lib/encrypted-state-header.bak";
+      description = ''
+        Where `encrypted-state-header-backup` writes the container's LUKS2 header, and where
+        `encrypted-state-status` looks for it.
+
+        The header is the only single point of total loss in this design: damage anywhere else costs the sectors it
+        touched, damage here costs every byte in the container, because the keyslots hold the master key. LUKS2's
+        own second copy covers the binary header and not the keyslot area, so it does not cover this.
+
+        **A local copy is half the answer.** It survives a botched `luksKillSlot` and a corrupted first 16 MiB; it
+        does not survive the disk. The other half is copying it off the machine, which no module can do - see
+        docs/encrypted-state.md. The default deliberately sits under /var/lib rather than beside the container, so
+        on a machine whose container lives on separate storage the two are already on different devices.
+
+        Treat the file as key material: it holds the same keyslots the container does.
+      '';
+    };
+
+    headerNotifyUnits = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      example = [ "notify_telegram@encrypted-state-header-check.service" ];
+      description = ''
+        Units started by `encrypted-state-header-check.service` when the header backup has gone stale or missing.
+        Same shape as `outageNotifyUnits`, and normally the same notifier with this unit as the instance - so the
+        message carries this check's own explanation rather than the unlock unit's.
+
+        Why this exists at all: the honest answer to "when must the backup be re-taken?" is "after `luksAddKey`,
+        `luksKillSlot`, `luksChangeKey`, `clevis luks bind` or `clevis luks unbind`" - five commands run once every
+        few years. Nobody remembers that. A stale backup is silent, still looks like protection, and is discovered
+        while trying to use it.
+
+        Unlike `outageNotifyUnits` this fires every day until it is fixed. An outage ends on its own; this does not.
+      '';
+    };
+
+    headerExportRecipients = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      example = [ "age1..." ];
+      description = ''
+        age recipients for `encrypted-state-header-backup --export`, which writes an encrypted copy of the header
+        backup to hand to whatever carries it off the machine.
+
+        Declared here rather than typed at the prompt for two reasons. A recipient mistyped at 11pm produces a file
+        that looks fine and opens for nobody, and it is only discovered during a recovery. And the person doing
+        this in two years should not have to work out which keys were the right ones - `nixos-rebuild` has already
+        answered that.
+
+        **Use more than one.** The two situations that need this file are a header damaged on a machine that is
+        otherwise healthy, and a machine that no longer exists; the key that is reachable differs between them.
+      '';
     };
 
     size = mkOption {
@@ -360,6 +433,17 @@ in
         message = "setup.encryptedState.image cannot live inside setup.encryptedState.mountPoint - the container would have to be mounted to be found.";
       }
       {
+        # The same circularity, and worse: a header backup reachable only by opening the container it exists to
+        # reopen is not a backup. It would also be inside the encryption, so a recovery could not read it without
+        # the key it is there to supply.
+        assertion = !(lib.hasPrefix cfg.mountPoint cfg.headerBackupPath);
+        message = "setup.encryptedState.headerBackupPath cannot live inside setup.encryptedState.mountPoint - the container would have to be open to read the backup that reopens it.";
+      }
+      {
+        assertion = cfg.headerBackupPath != cfg.image;
+        message = "setup.encryptedState.headerBackupPath must not be setup.encryptedState.image; writing the header backup over the container would destroy it.";
+      }
+      {
         # A misspelled unit name is the most dangerous mistake available here, and the quietest: the guard is simply
         # attached to a unit that does not exist, the real one keeps its default ordering, and the first time the
         # container fails to unlock that service starts against an empty directory and initialises itself. Nothing
@@ -394,6 +478,7 @@ in
       migrateScript
       closeScript
       statusScript
+      headerBackupScript
       pkgs.cryptsetup # so `luksDump`, `token export` and friends are at hand on a machine that has to be recovered
     ];
 
@@ -410,6 +495,21 @@ in
         OnBootSec = "1min";
         OnUnitInactiveSec = cfg.retryIntervalSeconds;
         AccuracySec = "10s";
+      };
+    };
+
+    # Daily, and Persistent so a machine that is off overnight still gets asked rather than skipping the day. Cheap:
+    # it reads 16 MiB and compares, which is why it can afford to run unconditionally instead of trying to detect
+    # the five commands that would have invalidated the backup.
+    systemd.timers.encrypted-state-header-check = {
+      description = "Daily check that the LUKS header backup is still current";
+      wantedBy = [ "timers.target" ];
+      timerConfig = {
+        OnCalendar = "daily";
+        Persistent = true;
+        # Nothing here is urgent to the minute, and a fixed time would put this in the same second as every other
+        # daily job on the machine.
+        RandomizedDelaySec = "1h";
       };
     };
 
@@ -546,6 +646,20 @@ in
             # It starts the target, which starts the unlock, which is bounded by unlockAttemptTimeoutSeconds. Room
             # for that plus the mounts, and no more: a retry that outlives its own interval would stack.
             TimeoutStartSec = cfg.unlockAttemptTimeoutSeconds + 120;
+          };
+        };
+
+        # The header backup's own alarm. Everything else in this module reports availability; this reports the one
+        # thing whose failure is not an outage but a total loss, and which is otherwise completely silent.
+        encrypted-state-header-check = {
+          description = "Check that the LUKS header backup still matches the container";
+          # Reads two files. It does not touch the container, does not need it unlocked, and must run on a machine
+          # that is sitting degraded - a stale backup during an outage is worse, not less relevant.
+          unitConfig.DefaultDependencies = "no";
+          path = toolPath;
+          serviceConfig = {
+            Type = "oneshot";
+            ExecStart = "${headerCheckScript}/bin/encrypted-state-header-check";
           };
         };
       }

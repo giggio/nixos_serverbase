@@ -36,6 +36,113 @@ the services that depend on the container stay down and say why.
 file inside a filesystem disko created — data, not layout — so disko neither knows nor needs to know about it. That
 remains true when you grow it.
 
+## Does encryption make corruption worse?
+
+The natural fear is that a container turns a granular failure into a total one: today a bad sector costs one file,
+and inside a LUKS container it might cost all of them. For the **data**, it does not. For the **header**, it does,
+and that is the part worth spending effort on.
+
+### Data damage stays exactly where it landed
+
+LUKS2 uses `aes-xts-plain64`. XTS derives its tweak from the sector number and chains nothing across blocks, so a
+flipped bit corrupts the 16-byte AES block that contains it and nothing else — not the rest of the sector, not the
+next sector, not the file. Storage fails at 512- or 4096-byte granularity, which is coarser than that, so in
+practice a bad sector costs the same as it costs on a plain filesystem: whichever file owns it, and no other.
+
+The inner ext4 keeps its metadata the way the outer one does — inode tables per block group, not one central table
+— so metadata damage inside the container is scoped the way it is outside.
+
+This is a property of the mode, not of encryption in general. `aes-cbc-essiv` would smear damage across the rest of
+its sector. The default does not.
+
+### What is genuinely different
+
+Three things, in descending order of how much they should worry you:
+
+1. **The header is a single point of total loss.** The first 16 MiB hold the keyslots, and the keyslots hold the
+   master key. Lose those bytes and every byte behind them is unreadable — not degraded, unreadable, because the key
+   is gone. LUKS2 keeps a second copy of the *binary* header and falls back to it automatically, but the **keyslot
+   area is not duplicated**, so that fallback does not cover the case that matters. Nothing on a plaintext ext4 has
+   this shape; ext4 scatters backup superblocks across the whole volume.
+2. **It is one inode in the outer filesystem.** Losing that extent tree loses everything at once, where losing a
+   file's extent tree loses that file. Partly answered by the container being `fallocate`d in full: the extent tree
+   is built once and never grows, in large contiguous runs, so there is no ongoing metadata churn to get caught in.
+3. **Two filesystems instead of one.** Two journals, two things to `fsck`. Granularity inside is unchanged, but the
+   surface area is doubled.
+
+Item 1 is the one the module acts on, below. Items 2 and 3 are real and small, and the answer to them is the same
+as the answer before there was a container: backups.
+
+Worth saying plainly, because it is the assumption underneath the question: **neither arrangement detects
+corruption.** md RAID has no checksums, and ext4 checksums metadata but never data. Granular loss today is granular
+*and silent*. Encryption does not make that worse and does not make it better.
+
+## The header backup
+
+```bash
+sudo encrypted-state-header-backup                      # take or refresh it
+sudo encrypted-state-header-backup --check              # exit 0 if it still matches the container
+sudo encrypted-state-header-backup --export /tmp/h.age  # an encrypted copy, to carry off the machine
+```
+
+`encrypted-state-init` runs the first one for you, immediately after the clevis bind — the earliest moment the
+backup is worth anything and the last moment taking it is free. It lands at
+`setup.encryptedState.headerBackupPath`, 16 MiB, mode 0400.
+
+`--export` age-encrypts it to `setup.encryptedState.headerExportRecipients` and writes the result 0644, ready for an
+ordinary unprivileged `scp`. It exists because the alternative is bad in a specific way: there is no clean route for
+16 MiB of root-owned binary off a server that asks for a sudo password — `ssh host sudo cat` cannot authenticate,
+and `ssh -t` puts the terminal in cooked mode and mangles the stream — so by hand it means copying the plaintext to
+`/tmp`, scp-ing it, and remembering to shred it. Declaring the recipients in configuration also removes the failure
+where a recipient is mistyped at the prompt, the file looks perfect, and nobody discovers it opens for no one until
+a recovery.
+
+**It is key material.** It cannot be decrypted by itself, but it holds the same keyslots the container does:
+whoever has it plus either the recovery passphrase or reach to the key server opens the volume. Keep it with the
+recovery passphrase, not beside the container.
+
+**A local copy is half the answer.** It survives a botched `luksKillSlot`, a bad `luksChangeKey` and a corrupted
+first 16 MiB. It does not survive the disk. Copy it somewhere the loss of this machine does not reach — that half
+no module can do for you.
+
+### It goes stale, and stale is dangerous
+
+The backup describes the keyslots **as they were when it was taken**. Restoring an old one revives a keyslot that
+was killed since and drops one that was added — the first of which is a security problem, not an inconvenience.
+
+Re-take it after anything that writes the header: `luksAddKey`, `luksKillSlot`, `luksChangeKey`, `clevis luks bind`
+or `unbind`. Every one of those bumps the LUKS2 seqid, and both `--check` and `encrypted-state-status` compare the
+backup byte for byte against the front of the container, so none of them can slip past:
+
+```text
+container:
+  header     /var/lib/encrypted-state-header.bak STALE - the keyslots have changed since it was taken
+```
+
+`encrypted-state-status` reports this but does **not** count it toward its exit status. That status answers "is
+application state coming from the container", which alerting acts on immediately; folding a piece of paperwork into
+it would page on a healthy machine and teach everyone to ignore the signal.
+
+### Nobody remembers a five-command list, so the machine watches instead
+
+Those five commands are run once every few years. Expecting anyone to think "and now the header backup" afterwards
+is how the backup silently stops being one. So `encrypted-state-header-check.timer` runs daily, compares, and
+starts `setup.encryptedState.headerNotifyUnits` when the answer is wrong — normally the same notifier the machine
+uses for everything else, instanced on this unit so the message carries this check's own explanation.
+
+It alerts **every day until it is fixed**, unlike the outage notification which fires once. The difference is that
+an outage ends by itself and this does not, so the thing to guard against is not a burst of messages but a single
+one that gets scrolled past.
+
+The check unit deliberately **succeeds** when it finds a stale backup. A failed unit means one thing on these
+machines — `systemctl --failed` and `degraded` mean application state is not coming from the container, act now —
+and lending that alarm to a piece of paperwork is how an alarm stops being read.
+
+### A container created before this existed has no backup
+
+The header backup was added after the first machines were migrated. On those, `encrypted-state-status` says
+`MISSING` until you run the command once. Nothing else is wrong with them.
+
 ## The failure mode this is built around
 
 If the container is not mounted, a service's state directory is an empty directory on the root filesystem. A
@@ -271,8 +378,9 @@ sudo umount /mnt/peek
 
 ## Where the commands come from
 
-`encrypted-state-init`, `encrypted-state-migrate`, `encrypted-state-grow` and `encrypted-state-close` are put on the
-**machine's** `PATH` by the module, for **root**, whenever `setup.encryptedState.enable` is true. So every
+`encrypted-state-init`, `encrypted-state-migrate`, `encrypted-state-grow`, `encrypted-state-status`,
+`encrypted-state-header-backup` and `encrypted-state-close` are put on the **machine's** `PATH` by the module, for
+**root**, whenever `setup.encryptedState.enable` is true. So every
 `sudo encrypted-state-…` below is typed on the server itself, over ssh, and needs no repository checkout.
 
 They are deliberately not in any devshell. Each one is generated with that machine's image path, mapper name, size
@@ -492,15 +600,45 @@ sudo cryptsetup token export --token-id 0 /var/lib/encrypted-state.img | jq -r .
 A rebuilt server with the original keys, answering at the **original address**, unlocks it unchanged — the URL is
 inside the JWE's integrity-protected header and cannot be rewritten.
 
+### The header is damaged and nothing opens the container
+
+The symptom is `Device … is not a valid LUKS device`, or an unlock that fails with every key you have while the
+container file is plainly still there. Put the header back:
+
+```bash
+sudo systemctl stop encrypted-state.target
+sudo cryptsetup luksHeaderRestore /var/lib/encrypted-state.img \
+  --header-backup-file /var/lib/encrypted-state-header.bak
+sudo systemctl start encrypted-state.target
+```
+
+**This is the dangerous direction.** It overwrites the live keyslots with the ones in the file, so a stale backup
+silently reverts every keyslot change made since it was taken. Check what you are about to write first — the backup
+file is a LUKS device in its own right, so it dumps like one:
+
+```bash
+sudo cryptsetup luksDump /var/lib/encrypted-state-header.bak
+```
+
+Two keyslots and a `clevis` token is what a healthy one looks like. The data behind the header is untouched by any
+of this: restoring a header does not rewrite a single sector of the volume.
+
 ### You have neither
 
 The container is gone. That is the design: the passphrase and the key server's own backup are the only two ways in.
+This is also why the header backup is worth taking — it is the one artifact that turns "the first 16 MiB were
+damaged" from that sentence into a two-minute repair.
 
 ## Tests
 
 `tests/encrypted-state.nix` drives the mechanism end to end against a fixture key server: creation, binding,
 migration, the bind mounts, the dm-crypt performance flags, direct I/O, survival across a reboot, online growth,
 **the service staying down with the key server gone**, and recovery by passphrase.
+
+The header backup is tested in the direction that matters. Asserting that a file exists proves nothing, so the test
+adds a keyslot, watches `--check` and `encrypted-state-status` both report `STALE`, restores the backup, and
+confirms the original two keyslots and the clevis token came back. Everything after that subtest unlocks through
+the restored header — so if the restore were not a working one, the rest of the file would not pass.
 
 The module takes any clevis pin; the fixture uses the tang one because it is the only pin that can be stood up
 inside a test VM.

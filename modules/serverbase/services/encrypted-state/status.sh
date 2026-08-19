@@ -44,6 +44,28 @@ else
   degraded=1
 fi
 
+# The header backup, which is the one thing here whose absence costs everything rather than an outage - and for that
+# exact reason it is reported but does NOT set `degraded`. The exit status answers "is application state coming from
+# the container", which alerting acts on immediately; folding a to-do into it would mean a healthy machine paging
+# until someone did paperwork, and an operator learning to ignore the signal.
+#
+# Comparing bytes rather than taking a fresh backup: `luksHeaderBackup` writes exactly the front of the container, so
+# the backup is current precisely when it equals it, and every header write bumps the LUKS2 seqid inside that range.
+# One 16 MiB read, no writes, correct for added, killed and re-bound keyslots alike.
+if [ -e "$IMAGE" ]; then
+  if [ ! -e "$HEADER_BACKUP" ]; then
+    note "header" "$HEADER_BACKUP MISSING - run encrypted-state-header-backup"
+  elif [ ! -r "$HEADER_BACKUP" ] || [ ! -r "$IMAGE" ]; then
+    # Both are 0400/0600 root. Without this the comparison below fails on the read and reports STALE, which is the
+    # one answer that would send someone to re-take a backup that was fine.
+    note "header" "$HEADER_BACKUP present (needs root to verify)"
+  elif cmp -s -n "$(stat -c %s "$HEADER_BACKUP")" "$HEADER_BACKUP" "$IMAGE"; then
+    note "header" "$HEADER_BACKUP current"
+  else
+    note "header" "$HEADER_BACKUP STALE - the keyslots have changed since it was taken"
+  fi
+fi
+
 echo
 echo "unlock:"
 note "state" "$(systemctl show -p ActiveState --value encrypted-state-unlock.service) ($(systemctl show -p SubState --value encrypted-state-unlock.service))"
