@@ -64,6 +64,16 @@ restart_dependent_units() {
   done
 }
 
+# Somebody is creating, growing, migrating or closing the container right now. Retrying into that is worse than
+# doing nothing: the unlock this would start reuses the loop device the other operation is working through. Exit 0
+# rather than failing - an operator running encrypted-state-init has not broken anything.
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo "an encrypted-state operation is in progress; not retrying this tick."
+  exit 0
+fi
+exec 9>&-
+
 if [ ! -e "$IMAGE" ]; then
   # Not a fault. This is exactly where a machine sits between the first deploy and encrypted-state-init, and
   # retrying it every few minutes would fill the journal with "you have not run the next step yet".

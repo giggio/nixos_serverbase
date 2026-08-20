@@ -27,6 +27,9 @@ let
   # The module's default for headerBackupPath, spelled out rather than read from the option, so that changing the
   # default has to come past this test instead of quietly taking it along.
   headerBackup = "/var/lib/encrypted-state-header.bak";
+  # Likewise the mutual-exclusion lock: the test has to hold the same file the scripts do, and hard-coding it means
+  # moving it has to come past this test rather than silently making the exclusion untested.
+  lockFile = "/run/encrypted-state.lock";
 
   # A throwaway age identity, generated for this file and used nowhere else. The point of having the private half
   # here is that the exported copy gets DECRYPTED and compared against the original - "a file was produced" is not
@@ -507,6 +510,67 @@ in
               "losetup --associated ${image} --noheadings --output DIO"
           ).strip()
           assert dio == "1", f"the backing file is being cached twice: DIO={dio}"
+
+      with subtest("an operation in progress keeps the retry and the unlock off the container"):
+          # The incident this exists for, 2026-08-20 on opi4pronas. `encrypted-state-init` creates the image with
+          # `fallocate` and only THEN formats it, which for a 4 TiB integrity container is hours of writing. The
+          # retry timer's guard was "does the image exist yet", which stops being true the moment fallocate
+          # returns - so every tick for the whole format started an unlock, which found no readable header, and
+          # tore down the loop device the format was writing through on its way out. It killed the format
+          # nineteen minutes in, and would have done it again on every tick for the next nineteen hours.
+          #
+          # A transient unit stands in for the long-running operation: what matters is that something holds the
+          # lock, not what it is.
+          # Absolute paths on both: a systemd unit gets a minimal PATH, and `flock -c` shells out, so a bare
+          # `sleep` exits 127 and the unit dies before it has locked anything.
+          client.succeed(
+              "systemd-run --unit=fake-long-operation --quiet "
+              "/run/current-system/sw/bin/flock -x ${lockFile} /run/current-system/sw/bin/sleep 300"
+          )
+          # `flock -n` is its own probe: it fails exactly when somebody else holds the lock.
+          client.wait_until_fails("flock -n ${lockFile} -c true", timeout=30)
+
+          loop_before = client.succeed(
+              "losetup --associated ${image} --noheadings --output NAME"
+          ).strip()
+          assert loop_before, "no loop device attached, so this subtest cannot show one surviving"
+
+          # Through the unit, because neither the retry nor the unlock is in environment.systemPackages - they are
+          # units, not operator commands, and a test that ran them off $PATH would only prove they are not there.
+          client.succeed("systemctl start encrypted-state-retry.service")
+          out = client.succeed("journalctl -u encrypted-state-retry.service -n 20 --no-pager -o cat")
+          assert "not retrying this tick" in out, f"the retry ran anyway: {out}"
+          # A no-op, not a failure: an operator running encrypted-state-init has not broken anything, and a failed
+          # unit here would page for a planned operation.
+          state = client.succeed(
+              "systemctl show -p Result --value encrypted-state-retry.service"
+          ).strip()
+          assert state == "success", f"a planned operation left the retry in {state}"
+
+          # The unlock must refuse, and must say why in terms of the operation rather than of the key server. Run
+          # straight from the unit's own ExecStart: restarting the unit would take the mount with it.
+          unlock_bin = client.succeed(
+              "systemctl cat encrypted-state-unlock.service | sed -n 's/^ExecStart=//p' | head -n1"
+          ).strip()
+          out = client.fail(f"{unlock_bin} 2>&1")
+          assert "another encrypted-state operation is running" in out, (
+              f"the unlock did not recognise the operation in progress: {out}"
+          )
+
+          # The assertion that is really about the incident.
+          loop_after = client.succeed(
+              "losetup --associated ${image} --noheadings --output NAME"
+          ).strip()
+          assert loop_after == loop_before, (
+              f"the loop device was taken away from the running operation: {loop_before!r} -> {loop_after!r}"
+          )
+
+          client.succeed("systemctl stop fake-long-operation.service")
+          client.wait_until_succeeds("flock -n ${lockFile} -c true", timeout=30)
+
+          # And with the lock free again, everything works as before.
+          client.succeed("systemctl start encrypted-state-retry.service")
+          assert "ORIGINAL-DATA" in client.succeed("cat ${statePath}/data")
 
       with subtest("it all comes back by itself after a reboot"):
           # shutdown()/start() rather than reboot(): the driver runs qemu with -no-reboot, so a guest that reboots

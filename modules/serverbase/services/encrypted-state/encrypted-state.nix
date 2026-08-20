@@ -96,6 +96,9 @@ let
     # directory a moved path becomes, and that `encrypted-state-resume` removes once the path is really bound. `zz-`
     # so it sorts after anything else a unit may have picked up.
     GUARD_DROPIN = "zz-encrypted-state-migration.conf";
+    # Held by anything that creates, resizes or moves the container; respected by the unlock and the retry. See
+    # `lockPreamble` below for what happens without it. In /run so it cannot survive a reboot.
+    LOCK_FILE = "/run/encrypted-state.lock";
     RESUME_RESTART_UNITS = lib.concatStringsSep " " cfg.resumeRestartUnits;
     # Newline-separated rather than an array, because this crosses into shell as one environment variable.
     STATE_PATHS = lib.concatStringsSep "\n" (lib.attrNames cfg.paths);
@@ -106,10 +109,38 @@ let
     );
   };
 
+  # Anything that creates, resizes, moves or closes the container takes this lock; the unlock path checks it and
+  # backs off. Without it `encrypted-state-retry.timer` fires into the middle of a running `encrypted-state-init`:
+  # the unlock finds a half-written image, REUSES the loop device the format is writing through, fails to open it -
+  # there is no header yet - and then tears that loop device down on its way out.
+  #
+  # That is not a hypothetical. It killed a 4 TiB integrity format on opi4pronas nineteen minutes in, on
+  # 2026-08-20, and it would have done it again on every retry tick for the following nineteen hours. The retry's
+  # own guard was `[ ! -e "$IMAGE" ]`, which stops being true the moment `fallocate` returns - so the window is
+  # open for the entire format, which is exactly the longest and least interruptible operation in this module.
+  #
+  # flock on a file descriptor rather than a flag file, because a process that is killed releases it and a flag
+  # file would not. A stale flag needing a human to clear it, during a recovery, is the worst possible extra step.
+  lockPreamble = ''
+    exec 9>"$LOCK_FILE"
+    if ! flock -n 9; then
+      echo "FATAL: another encrypted-state operation already holds $LOCK_FILE." >&2
+      echo "Wait for it to finish - encrypted-state-init on a large container runs for hours - or find it with" >&2
+      echo "    ps -eo pid,etime,args | grep encrypted-state" >&2
+      exit 1
+    fi
+  '';
+
   # `extra` is for the one script that drives another one. Keeping it out of `toolPath` is not tidiness: toolPath is
   # what every script is built with, so a script in there would have to be built with itself.
-  mkScriptWith =
-    extra: name: file:
+  #
+  # `exclusive` takes the lock above for the whole run of the script.
+  mkScriptGeneric =
+    {
+      extra ? [ ],
+      exclusive ? false,
+    }:
+    name: file:
     pkgs.writeShellApplication {
       inherit name;
       runtimeInputs = toolPath ++ extra;
@@ -117,9 +148,11 @@ let
         ${lib.concatStringsSep "\n" (
           lib.mapAttrsToList (k: v: "export ${k}=${lib.escapeShellArg v}") scriptEnv
         )}
+        ${lib.optionalString exclusive lockPreamble}
         ${builtins.readFile file}
       '';
     };
+  mkScriptWith = extra: mkScriptGeneric { inherit extra; };
 
   # Every unit named across all the declared paths, and the ones the machine has no definition for. Read off
   # `config.systemd.services` rather than off the generated units, so this stays an evaluation-time question.
@@ -128,15 +161,24 @@ let
     unit: !(lib.hasAttr (lib.removeSuffix ".service" unit) config.systemd.services)
   ) (lib.filter (lib.hasSuffix ".service") declaredUnits);
 
-  mkScript = mkScriptWith [ ];
+  mkScript = mkScriptGeneric { };
+  mkExclusiveScript = extra: mkScriptGeneric {
+    inherit extra;
+    exclusive = true;
+  };
 
   # The header backup belongs to creation, not to a checklist item the operator may or may not reach: the container
   # is bound and holding data from the moment init finishes, and that is already the moment its header matters.
-  initScript = mkScriptWith [ headerBackupScript ] "encrypted-state-init" ./init.sh;
+  initScript = mkExclusiveScript [ headerBackupScript ] "encrypted-state-init" ./init.sh;
   unlockScript = mkScript "encrypted-state-unlock" ./unlock.sh;
+  # NOT exclusive, and it is the only one of the four that is not. This is the ExecStop of the unlock unit, so it
+  # runs on every stop and on every shutdown - including a shutdown that happens while `encrypted-state-init` is
+  # holding the lock. Refusing there would fail the stop job over a container that is not even open yet. Tearing
+  # down is also the one operation that is safe to run against a half-built container: it finds no mapper and does
+  # nothing.
   closeScript = mkScript "encrypted-state-close" ./close.sh;
-  growScript = mkScript "encrypted-state-grow" ./grow.sh;
-  migrateScript = mkScript "encrypted-state-migrate" ./migrate.sh;
+  growScript = mkExclusiveScript [ ] "encrypted-state-grow" ./grow.sh;
+  migrateScript = mkExclusiveScript [ ] "encrypted-state-migrate" ./migrate.sh;
   statusScript = mkScript "encrypted-state-status" ./status.sh;
   headerBackupScript = mkScript "encrypted-state-header-backup" ./header-backup.sh;
   headerCheckScript = mkScriptWith [ headerBackupScript ] "encrypted-state-header-check" ./header-check.sh;

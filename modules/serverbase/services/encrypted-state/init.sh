@@ -185,6 +185,16 @@ fi
 
 echo
 echo "Bringing the container up through systemd..."
+
+# The exclusive window ends HERE, and it has to: the target starts encrypted-state-unlock, which refuses to touch
+# the container while this lock is held. Holding it through the hand-off would deadlock this script against its
+# own unlock unit.
+#
+# Releasing is also correct rather than merely necessary. What needed protecting was the format - a container that
+# exists but has no readable header yet, over a loop device a retry would happily tear down. From this line on the
+# container is sound, and an unlock reaching it is exactly what is wanted.
+exec 9>&-
+
 if ! systemctl start encrypted-state.target; then
   echo >&2
   echo "The container was created and is sound - do NOT run encrypted-state-init again, it will refuse." >&2
