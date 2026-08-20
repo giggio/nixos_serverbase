@@ -36,6 +36,9 @@ for unit in $released; do
   case "$(systemctl show -p ActiveState --value "$unit")" in
   active | activating | reloading) continue ;;
   esac
+  # See the same call in retry.sh: `systemctl start` REFUSES a unit that has burned its start limit, so anything
+  # that spent the migration window failing would be skipped silently here.
+  systemctl reset-failed "$unit" 2>/dev/null || true
   systemctl start --no-block "$unit" || echo "could not start $unit" >&2
 done
 echo "started what was not already running"
@@ -45,5 +48,6 @@ echo "started what was not already running"
 for unit in $RESUME_RESTART_UNITS; do
   [ "$(systemctl show -p LoadState --value "$unit")" = "loaded" ] || continue
   echo "restarting $unit so it sees what just came up"
+  systemctl reset-failed "$unit" 2>/dev/null || true
   systemctl restart --no-block "$unit" || echo "could not restart $unit" >&2
 done

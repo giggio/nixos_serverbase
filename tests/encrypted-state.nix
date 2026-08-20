@@ -76,6 +76,9 @@ let
           outageNotifyAfterSeconds = 1;
           outageNotifyUnits = [ "fake-notify.service" ];
           headerNotifyUnits = [ "fake-header-notify.service" ];
+          # The heal's other job: kicking units that cannot come back by themselves. `fake-wedged` below is shaped
+          # like gmktec1's forgejo runners, which is the shape that breaks - see the last subtest.
+          resumeRestartUnits = [ "fake-wedged.service" ];
           # A throwaway age identity generated for this file, so the export can be decrypted back and compared
           # rather than merely produced. Its private half is below; it protects nothing.
           headerExportRecipients = [ testAgeRecipient ];
@@ -120,6 +123,9 @@ let
       systemd.tmpfiles.rules = [
         "f ${passphraseFile} 0600 root root - ${passphrase}"
         "f ${identityFile} 0600 root root - ${testAgeIdentity}"
+        # What fake-wedged tests for. Present by default, so a heal that restarts it in passing leaves a healthy
+        # unit; the subtest that cares removes it to make the unit fail on purpose.
+        "f /run/fake-wedged-works 0644 root root -"
       ];
 
       # Stands in for whatever the machine's repository uses to reach its owner. Starting a real notifier is not
@@ -137,6 +143,26 @@ let
         serviceConfig = {
           Type = "oneshot";
           ExecStart = "${pkgs.coreutils}/bin/touch /run/fake-header-notify-fired";
+        };
+      };
+
+      # Shaped exactly like gmktec1's forgejo runners, because that shape is what defeats a heal. A start budget
+      # that never refills (`StartLimitIntervalSec = "infinity"`) is a budget for the whole boot, so a unit that
+      # depends on something inside the container spends it during the outage and is then REFUSED - `systemctl
+      # start` does not try and fail, it declines to try at all. A heal that only calls `start` therefore looks
+      # like it serviced the unit and changes nothing.
+      #
+      # No `wantedBy`: nothing may start it before the subtest that measures it, or the budget is gone.
+      systemd.services.fake-wedged = {
+        description = "a unit whose start budget does not refill, like a forgejo runner";
+        unitConfig = {
+          StartLimitIntervalSec = "infinity";
+          StartLimitBurst = 1;
+        };
+        serviceConfig = {
+          Type = "oneshot";
+          RemainAfterExit = true;
+          ExecStart = "${pkgs.coreutils}/bin/test -e /run/fake-wedged-works";
         };
       };
 
@@ -586,5 +612,48 @@ in
           client.wait_for_unit("testapp.service")
           # On the real data, not on a fresh directory created over the top of a bind mount that never happened.
           assert "ORIGINAL-DATA" in client.succeed("cat ${statePath}/data")
+
+      with subtest("a unit that spent its start budget is still revived by the heal"):
+          # The heal starts units. systemd is allowed to REFUSE to start a unit - `Start request repeated too
+          # quickly` - and when it does, the job is never attempted, so `systemctl start` and `systemctl restart`
+          # both return failure without touching the unit. A heal built only out of those two calls services such a
+          # unit in the sense that it names it in the log, and leaves it exactly as dead as it found it.
+          #
+          # gmktec1's forgejo runners are that unit: they point at a Forgejo inside the container, and
+          # forgejo_runner.nix pins `StartLimitIntervalSec = "infinity"` on purpose so a runner cannot register
+          # itself thousands of times. Four attempts for the whole boot, spent within minutes of a dead key server.
+          # On 2026-08-20 they were still wedged ten minutes after every other service had healed, and came back
+          # only after `reset-failed` by hand. Hence the reset-failed in retry.sh and resume.sh, and hence this.
+          # Stop it first: the previous subtest's heal restarted it, successfully, and `RemainAfterExit` keeps a
+          # oneshot `active` afterwards - so `systemctl start` on it would be a no-op that returns success and the
+          # budget would never be spent.
+          client.succeed("systemctl stop fake-wedged.service")
+          # Not asserted: stopping drops the last reference to the unit, so systemd unloads it and the rate-limit
+          # counter goes with it, and `reset-failed` then answers "not loaded". Either outcome leaves a clean
+          # counter, which is all this line is for. The real runners are `failed` rather than stopped, which keeps
+          # them loaded - that is the state the reset in retry.sh exists for.
+          client.execute("systemctl reset-failed fake-wedged.service")
+          client.succeed("rm -f /run/fake-wedged-works")
+
+          # Spend the budget: the first start is allowed and fails on the missing file.
+          client.fail("systemctl start fake-wedged.service")
+          # The trap itself, asserted rather than assumed - without this the subtest below would pass just as well
+          # against a systemd that let the retry through, and would be proving nothing.
+          refusal = client.fail("systemctl start fake-wedged.service 2>&1")
+          assert "too often" in refusal, (
+              f"fake-wedged was not refused, so this subtest is not testing anything: {refusal}"
+          )
+
+          # The condition that kept it failing is now gone - the forge is back up, in the real version of this.
+          client.succeed("touch /run/fake-wedged-works")
+
+          # Arrange a heal: the container is up, so retry.sh only starts things when it can see that an outage
+          # happened (the stamp) AND it actually had something to start. Stopping testapp gives it both.
+          client.succeed("systemctl stop testapp.service")
+          client.succeed("touch /run/encrypted-state-outage-since")
+          client.succeed("systemctl start encrypted-state-retry.service")
+
+          client.wait_for_unit("testapp.service")
+          client.wait_for_unit("fake-wedged.service")
     '';
 }

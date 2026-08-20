@@ -25,6 +25,13 @@ start_guarded_units() {
       case "$(systemctl show -p ActiveState --value "$unit")" in
       active | activating | reloading) continue ;;
       esac
+      # A unit that spent the outage failing may have burned its start limit, and systemd REFUSES to start those:
+      # `Start request repeated too quickly`, with the job never attempted. Its own advice is to reset-failed first.
+      # Not hypothetical - gmktec1's forgejo runners pin StartLimitIntervalSec=infinity, so their four attempts are
+      # four for the lifetime of the boot, and after the 2026-08-20 outage they sat wedged while everything around
+      # them healed. Resetting here costs nothing when the unit is not failed, and a unit that fails again for its
+      # own reasons is back in `--failed` within seconds.
+      systemctl reset-failed "$unit" 2>/dev/null || true
       # --no-block, because this runs from a unit with a timeout and there may be thirty of these with ordering
       # between them. Enqueue the lot and let systemd sequence them exactly as a boot would.
       systemctl start --no-block "$unit" || echo "could not start $unit" >&2
@@ -50,6 +57,9 @@ restart_dependent_units() {
   for unit in $RESUME_RESTART_UNITS; do
     [ "$(systemctl show -p LoadState --value "$unit")" = "loaded" ] || continue
     echo "restarting $unit so it sees what just came up"
+    # Same start-limit problem as above, and worse here: `restart` on a start-limit-hit unit does not restart it,
+    # it fails - so without this the list would look serviced and change nothing.
+    systemctl reset-failed "$unit" 2>/dev/null || true
     systemctl restart --no-block "$unit" || echo "could not restart $unit" >&2
   done
 }
