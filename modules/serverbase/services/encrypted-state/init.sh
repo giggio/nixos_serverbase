@@ -29,6 +29,42 @@ else
   passphrase=$(head -c 32 /dev/urandom | base64 -w0)
 fi
 
+# The recovery passphrase is settled HERE, before a single byte is allocated, and the ordering is the point.
+#
+# It used to be printed and confirmed at the END, after luksFormat - which for an integrity container is after
+# hours of writing. That put the whole operation at the mercy of a terminal surviving to the finish: `read` gets
+# EOF from a session that has gone away, `set -e` kills the script on the spot, and the passphrase leaves with the
+# process. What is left is a container that is perfectly good, opens against the key server, and has a recovery
+# keyslot whose passphrase exists nowhere and cannot be produced again. On opi4pronas on 2026-08-20 that would
+# have been nineteen hours of formatting to do over.
+#
+# Nothing about the passphrase depends on the format having run. Deciding it first costs nothing when it goes
+# wrong - no file allocated, no header written, no time spent - and it lets the long part run with nobody
+# watching, which is the only way a nineteen hour operation can sensibly be run at all.
+if [ "$interactive" -eq 1 ]; then
+  echo
+  echo "==========================================================================="
+  echo "  RECOVERY PASSPHRASE for the container about to be created at $IMAGE."
+  echo "  Printed once, here, and stored nowhere:"
+  echo
+  echo "      $passphrase"
+  echo
+  echo "  Record it NOW, off this machine, in the two places your configuration repository's"
+  echo "  docs/encrypted-state.md names - one of them offline. It will exist nowhere else."
+  echo
+  echo "  Without it, losing the key server loses everything in this container."
+  echo "==========================================================================="
+  echo
+  read -r -p "Type the last six characters of the passphrase to confirm you recorded it: " confirm
+  if [ "$confirm" != "${passphrase: -6}" ]; then
+    echo >&2
+    echo "That does not match, so nothing has been created: $IMAGE does not exist and no time has been spent." >&2
+    echo "Run encrypted-state-init again when you have somewhere to write it down." >&2
+    exit 1
+  fi
+  echo "Recorded. Nothing after this point needs you at the keyboard."
+fi
+
 target_dir=$(dirname "$IMAGE")
 avail=$(df --output=avail -k "$target_dir" | tail -n1)
 echo "Creating a $SIZE container at $IMAGE ($(( avail / 1024 / 1024 )) GiB free on $target_dir)"
@@ -141,26 +177,8 @@ echo "  clevis tokens found in the header: $thumbprint"
 echo "  Header backed up to $HEADER_BACKUP - copy it off this machine."
 echo "==========================================================================="
 if [ "$interactive" -eq 1 ]; then
-  echo
-  echo "  RECOVERY PASSPHRASE - printed once, stored nowhere:"
-  echo
-  echo "      $passphrase"
-  echo
-  echo "  Record it NOW, off this machine, in the two places your configuration repository's"
-  echo "  docs/encrypted-state.md names - one of them offline. It exists nowhere else."
-  echo
-  echo "  Without it, losing the key server loses everything in this container."
+  echo "  The recovery passphrase was printed and confirmed before the format began; it is NOT repeated here."
   echo "==========================================================================="
-  echo
-  read -r -p "Type the last six characters of the passphrase to confirm you recorded it: " confirm
-  if [ "$confirm" != "${passphrase: -6}" ]; then
-    echo
-    echo "That does not match. The container exists and is bound to the key server, so the machine will boot," >&2
-    echo "but you have no recovery passphrase. Destroy it and start over:" >&2
-    echo "    rm -f $IMAGE && encrypted-state-init" >&2
-    exit 1
-  fi
-  echo "Recorded."
 fi
 
 # Hand the container over to systemd before returning, because the next documented step is

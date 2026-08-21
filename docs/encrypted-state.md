@@ -564,9 +564,34 @@ If `bindState` is already `true` it refuses to start the target and exits non-ze
 directories of a brand-new container over live data is the accident the two deploys exist to prevent. The container
 is still created in that case — do not run `encrypted-state-init` again, fix `bindState` and start the target.
 
-It prints the **recovery passphrase once** and stores it nowhere. Record it before answering the prompt, in the two
-places the machine's own repository names — one of them offline and off this machine. It cannot go in a password
-manager whose database is itself inside the container.
+It prints the **recovery passphrase once**, stores it nowhere, and asks for the last six characters back —
+**before** it creates anything. Record it at that prompt, in the two places the machine's own repository names, one
+of them offline and off this machine. It cannot go in a password manager whose database is itself inside the
+container.
+
+That the confirmation comes first is deliberate. Refusing it costs nothing: no file has been allocated and no
+header written, so the answer to a passphrase you were not ready to record is to run the command again. It used to
+come at the end, after `luksFormat` — which with `--integrity` is after hours of writing — where a wrong answer, or
+a dropped connection that `read` sees as the same thing, left a container whose recovery keyslot held a passphrase
+that no longer existed anywhere.
+
+**With `--integrity` the format runs for hours, so run it detached rather than from a login shell.** A terminal
+that has to survive the whole operation is a single point of failure, and on a machine with
+`services.logind.settings.Login.KillUserProcesses = true` — which serverbase sets — even `tmux` does not survive a
+disconnect, because its server lives in the session's cgroup. `systemd-run` puts the work in the system slice
+where none of that reaches it:
+
+```bash
+sudo systemd-run --unit=encrypted-state-init /run/current-system/sw/bin/encrypted-state-init
+sudo journalctl -u encrypted-state-init -f
+```
+
+Note that a transient unit has no terminal, so the passphrase prompt cannot be answered there. Either accept the
+prompt in a login shell and let the *format* be the only long part — which is what the ordering above makes
+possible — or, on a machine with no swap, pass a passphrase you generated and recorded yourself through
+`ENCRYPTED_STATE_PASSPHRASE_FILE` pointing at a root-only file under `/run`, and delete it afterwards. The
+script's warning about that variable is about passphrases reaching a *disk*; with no swap configured, `/run` is
+RAM and nothing in it does.
 
 It refuses to touch an existing container. Re-running `luksFormat` on one that holds data destroys every byte in it.
 

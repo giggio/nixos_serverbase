@@ -263,6 +263,24 @@ in
       phase1.succeed("mkdir -p ${statePath}")
       phase1.succeed("echo PHASE1-DATA > ${statePath}/data")
 
+      with subtest("phase 1: a passphrase nobody recorded costs nothing but the typing"):
+          # The interactive path, which every other subtest skips by passing ENCRYPTED_STATE_PASSPHRASE_FILE. It
+          # generates the passphrase, shows it, and asks for the last six characters back - and the ONLY thing
+          # this can assert about it is what happens when the answer is wrong, since the passphrase is random and
+          # the test cannot know it.
+          #
+          # That turns out to be the assertion worth having. The confirmation used to come after luksFormat, so a
+          # wrong answer - or a dropped connection, which `read` sees as the same thing - arrived after hours of
+          # writing and left a container whose recovery keyslot held a passphrase that existed nowhere. Now it
+          # comes first, and this is the property: refusing costs no file and no time.
+          out = phase1.fail("printf 'nope\\n' | encrypted-state-init 2>&1")
+          assert "does not match" in out, f"a wrong confirmation was accepted: {out}"
+          phase1.fail("test -e ${image}")
+          # And the loop devices and mappings it would have made along the way do not exist either.
+          assert not phase1.succeed("losetup --associated ${image} --noheadings").strip(), (
+              "a refused init left a loop device behind"
+          )
+
       with subtest("phase 1: encrypted-state-init leaves the container MOUNTED"):
           # The defect this node exists for. init opens the container by hand to mkfs it and then closes it, so
           # returning there left nothing mounted - and the very next documented command answered "the container is
