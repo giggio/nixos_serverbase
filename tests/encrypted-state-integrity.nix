@@ -488,6 +488,42 @@ in
         # container in service. It has to be gone the moment the init is genuinely finished.
         client.fail("test -e /var/lib/encrypted-state-wipe")
 
+    with subtest("close declines to tear down a container an operation owns"):
+        # encrypted-state-close is the ExecStop of the unlock unit, so it runs on every stop and every shutdown -
+        # and it detaches the loop device backing the image regardless of what is stacked on it. During a wipe
+        # that is the device the wipe writes through. It cannot take the lock, because a stop job that fails
+        # because something else holds a lock is worse than what it prevents, so it tests it instead.
+        client.succeed("mountpoint -q ${mountPoint}")
+        # Absolute paths on both halves. A transient unit gets systemd's compiled-in default PATH, which on NixOS
+        # points at /usr/bin and friends that do not exist - so `flock` would start and then fail to exec `sleep`.
+        # The same trap as the missing gawk, from the other direction.
+        client.succeed(
+            "systemd-run --unit=lock-holder /run/current-system/sw/bin/flock"
+            " /run/encrypted-state.lock /run/current-system/sw/bin/sleep 120"
+        )
+        client.wait_until_succeeds("systemctl is-active --quiet lock-holder", timeout=30)
+        client.wait_until_fails("flock -n /run/encrypted-state.lock true", timeout=30)
+
+        rc, out = client.execute("encrypted-state-close 2>&1")
+        client.log(out)
+        # Exit zero regardless: this runs at shutdown, where a non-zero exit marks the unit failed on an
+        # otherwise clean stop.
+        assert rc == 0, f"close returned {rc} while an operation held the lock: {out}"
+        assert "owns the container" in out, f"close did not decline: {out}"
+
+        # The two things that had to survive, checked against the world rather than against the message.
+        client.succeed("losetup -a | grep -q ${image}")
+        client.succeed("mountpoint -q ${mountPoint}")
+
+        # And once the lock is free it does its job as before, or this would be a guard that never opens.
+        client.succeed("systemctl stop lock-holder")
+        client.wait_until_succeeds("flock -n /run/encrypted-state.lock true", timeout=30)
+        client.succeed("umount ${mountPoint}")
+        out = client.succeed("encrypted-state-close 2>&1")
+        client.log(out)
+        assert "closed /dev/mapper/encrypted-state" in out, f"close did not run with the lock free: {out}"
+        client.fail("losetup -a | grep -q ${image}")
+
     with subtest("the boot journal has no ordering cycle"):
         # Same assertion as the other encrypted-state check, for the same reason: systemd answers a cycle by
         # deleting a job and booting anyway, and integrity adds another device layer under the mount.

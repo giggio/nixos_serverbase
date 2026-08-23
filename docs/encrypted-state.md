@@ -619,6 +619,11 @@ Two consequences worth knowing, because both are load-bearing:
 - **The key-server binding is made before the wipe, not after.** An interruption now leaves a container that opens
   normally and has some wiping left. Before, it left one with no `clevis` token at all — nothing could open it,
   and `encrypted-state-unlock` reported the key server as unreachable while the key server was up and answering.
+- **Nothing tears the container down while the wipe owns it.** `encrypted-state-close` is the `ExecStop` of the
+  unlock unit, so it runs on every stop and every shutdown, and it detaches the loop device backing the image
+  regardless of what is stacked on it — during a wipe, that is the device being written through. It tests the lock
+  and declines rather than taking it, because a stop job that fails because something else holds a lock is a worse
+  outcome than the one being prevented.
 - **A container whose wipe is unfinished will not open.** `encrypted-state-unlock` refuses it and fails the unit,
   because an ext4 laid over a half-initialised container works perfectly until the allocator reaches the
   uninitialised region and then returns EIO from somewhere unrelated. Finish the wipe first.
