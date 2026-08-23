@@ -1,6 +1,7 @@
 # Move application state into the container, once, per path.
 #
 #   encrypted-state-migrate --dry-run          what would move, and how much
+#   encrypted-state-migrate --preseed          copy ahead of time, services up, as often as you like
 #   encrypted-state-migrate                    move everything declared
 #   encrypted-state-migrate /var/lib/mything   move one path
 #   encrypted-state-migrate --cleanup          delete the .premigrated copies, once you trust the move
@@ -11,12 +12,14 @@
 
 dry_run=0
 cleanup=0
+preseed=0
 selected=()
 
 for arg in "$@"; do
   case "$arg" in
   --dry-run) dry_run=1 ;;
   --cleanup) cleanup=1 ;;
+  --preseed) preseed=1 ;;
   -*)
     echo "unknown option: $arg" >&2
     exit 2
@@ -24,6 +27,14 @@ for arg in "$@"; do
   *) selected+=("$arg") ;;
   esac
 done
+
+# The three modes do different things to the same paths, and any pair of them at once is a request nobody means.
+# --preseed with --cleanup is the dangerous one: cleanup deletes the .premigrated originals, and pre-seeding is by
+# definition something done BEFORE there are any.
+if [ $((dry_run + cleanup + preseed)) -gt 1 ]; then
+  echo "FATAL: --dry-run, --preseed and --cleanup do different things; pass one." >&2
+  exit 2
+fi
 
 if ! grep -qF " $MOUNT_POINT " /proc/self/mounts; then
   echo "FATAL: the container is not mounted at $MOUNT_POINT." >&2
@@ -132,6 +143,70 @@ if [ "$cleanup" -eq 1 ]; then
     echo "removing $path.premigrated ($(du -sh "$path.premigrated" | cut -f1))"
     [ "$dry_run" -eq 1 ] || rm -rf "$path.premigrated"
   done
+  exit 0
+fi
+
+# Copy ahead of the window, with everything still running. The migration itself is one rsync of the whole tree, and
+# on a large slow volume that is the entire outage: opi4pronas measured 1.6 T against a container that writes at
+# 33 MB/s, which is more than a day with the shares down. Pre-seeding turns that single copy into an INCREMENTAL
+# one - run this as many times as you like over as many days as you like, and the copy inside the window carries
+# only what changed since the last run.
+#
+# It is safe precisely because it changes nothing else. No unit is stopped, nothing is renamed, nothing is
+# verified, no guard drop-in is written, and $path stays the live copy throughout. A machine pre-seeded and then
+# never migrated is a machine with a redundant copy of its own data and no other difference.
+#
+# The correctness argument rests on the flags being IDENTICAL to the real pass below, which is the whole reason
+# this lives in the script instead of in the runbook as an rsync line to be retyped. Drop -H and the migration
+# re-links every hardlink; drop -A or -X and it rewrites every ACL and xattr; and either way the "incremental"
+# pass turns back into a full one at the worst moment. Change one, change both.
+if [ "$preseed" -eq 1 ]; then
+  # Absolute, and outside every destination tree, so a partial file never sits at the real filename looking
+  # complete. Interruption is expected here rather than exceptional - this runs for days on a USB-attached array -
+  # and without it every interrupted large file restarts from zero. Being outside the trees also means --delete
+  # will never reach it, so this block removes it itself, below, and only on the run that completes.
+  partial_dir="${MOUNT_POINT}/.encrypted-state-preseed-partial"
+
+  for line in "${spec_lines[@]}"; do
+    path="${line%%$'\t'*}"
+    wanted "$path" || continue
+
+    dest="${MOUNT_POINT}${path}"
+
+    echo
+    echo "=== $path -> $dest"
+
+    if grep -qF " $path " /proc/self/mounts; then
+      echo "  already a mount point, so this path is migrated and bound; nothing to pre-seed."
+      continue
+    fi
+
+    if [ -e "$path.premigrated" ]; then
+      echo "  already migrated by an earlier run; nothing to pre-seed."
+      continue
+    fi
+
+    if [ ! -d "$path" ]; then
+      echo "  $path does not exist on this machine; nothing to pre-seed."
+      continue
+    fi
+
+    mkdir -p "$dest"
+    echo "  copying with the services up; safe to interrupt and safe to repeat..."
+    rsync -aHAX --numeric-ids --delete --partial-dir="$partial_dir" --stats "$path/" "$dest/"
+  done
+
+  # Only reached when every rsync above returned successfully - `set -e` leaves the directory in place otherwise,
+  # which is exactly when the next run wants it.
+  rm -rf "$partial_dir"
+
+  echo
+  echo "==========================================================================="
+  echo "  Pre-seed done. NOTHING has been migrated: every path above is still live"
+  echo "  where it was, and the container holds a copy that is already stale."
+  echo "  Run this again as often as you like. The migration is still"
+  echo "  encrypted-state-migrate, and it re-syncs and verifies before it moves."
+  echo "==========================================================================="
   exit 0
 fi
 

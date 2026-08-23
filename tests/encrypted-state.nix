@@ -483,6 +483,50 @@ in
           client.succeed("systemctl start encrypted-state-header-check.service")
           client.fail("test -e /run/fake-header-notify-fired")
 
+      with subtest("--preseed copies ahead of the window without migrating anything"):
+          client.succeed("systemctl start encrypted-state-unlock.service")
+          client.succeed("systemctl start ${containerMountUnit}")
+
+          # The mode exists to take the bulk of the copy OUT of the outage, so the property under test is not "it
+          # copies" - it is that it copies while leaving every other thing about the machine alone. On opi4pronas
+          # the migration is 1.6 T against a container that writes at 33 MB/s; if pre-seeding were not safe to run
+          # with the services up it would buy nothing at all.
+          out = client.succeed("encrypted-state-migrate --preseed")
+          client.log(out)
+          assert "ORIGINAL-DATA" in client.succeed("cat ${mountPoint}${statePath}/data")
+          # Nothing moved, nothing parked, nothing masked: $path is still the live copy.
+          client.succeed("test ! -e ${statePath}.premigrated")
+          assert "ORIGINAL-DATA" in client.succeed("cat ${statePath}/data")
+          # Not one unit was stopped. testapp is not running here for its own reasons - it has already been
+          # refused a start against a container that had nothing in it - so its ActiveState proves nothing, and
+          # the honest assertion is that the pre-seed never went near it.
+          assert "stopping" not in out.lower(), f"--preseed stopped a unit: {out}"
+          client.fail(
+              "test -e /run/systemd/system/testapp.service.d/zz-encrypted-state-migration.conf"
+          )
+
+          # Repeatable, and incremental - the reason the outage shrinks. A second run has to pick up what changed
+          # since the first without being told, because that is exactly what the copy inside the window will be.
+          client.succeed("echo PRESEED-DELTA >> ${statePath}/data")
+          client.succeed("echo PRESEED-EXTRA > ${statePath}/extra")
+          client.succeed("encrypted-state-migrate --preseed")
+          assert "PRESEED-DELTA" in client.succeed("cat ${mountPoint}${statePath}/data")
+          assert "PRESEED-EXTRA" in client.succeed("cat ${mountPoint}${statePath}/extra")
+
+          # --delete, or the migration's own verify pass would fail on the leftovers. A file removed from the
+          # source between two pre-seeds must not survive in the container.
+          client.succeed("rm ${statePath}/extra")
+          client.succeed("encrypted-state-migrate --preseed")
+          client.fail("test -e ${mountPoint}${statePath}/extra")
+
+          # Its own partial directory is not left behind for the migration's verify pass to trip over.
+          client.fail("test -e ${mountPoint}/.encrypted-state-preseed-partial")
+
+          # --preseed --cleanup is the pair that must never run: cleanup deletes the .premigrated originals, and
+          # pre-seeding happens before any exist.
+          out = client.fail("encrypted-state-migrate --preseed --cleanup 2>&1")
+          assert "pass one" in out, f"the combined modes were not refused: {out}"
+
       with subtest("encrypted-state-migrate moves the data in and parks the original"):
           client.succeed("systemctl start encrypted-state-unlock.service")
           client.succeed("systemctl start ${containerMountUnit}")

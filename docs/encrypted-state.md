@@ -666,6 +666,42 @@ restoring a backup.
 The services are down from here until the next switch. That is the maintenance window, and it is as long as the copy
 takes.
 
+### Pre-seeding, when the copy is too big for one window
+
+"as long as the copy takes" is fine for a state directory and useless for bulk storage. opi4pronas has 1.61 T to
+move into a container that writes at 32.6 MB/s with nothing competing, on an array whose disks serve the read as
+well — 20 to 40 hours with the shares down.
+
+`--preseed` takes the bulk of that out of the window:
+
+```bash
+sudo systemd-run --unit=preseed /run/current-system/sw/bin/encrypted-state-migrate --preseed
+sudo journalctl -u preseed -f
+```
+
+It runs the same rsync with **everything still running**, and it can be run as many times as you like over as many
+days as you like. Each run carries only what changed since the last, so the copy inside the window shrinks to the
+delta. Re-run it until a pass finishes quickly; that pass is your estimate of the outage.
+
+It is safe because it changes nothing else. No unit is stopped, nothing is renamed, nothing is verified, no guard
+drop-in is written, and every path stays the live copy throughout. A machine that is pre-seeded and then never
+migrated is a machine with a redundant copy of its own data and no other difference. It refuses to run alongside
+`--dry-run` or `--cleanup`, and it skips any path that is already migrated or already bound.
+
+Two details that are the design rather than incidental:
+
+- **The flags are shared with the real pass**, which is why this is a mode of `encrypted-state-migrate` and not an
+  rsync line in this document. Drop `-H` and the migration relinks every hardlink; drop `-A` or `-X` and it
+  rewrites every ACL and xattr. Either way the incremental pass silently becomes a full one, in the window, which
+  is the one place the mistake cannot be absorbed. Change one, change both.
+- **Partial files go to `<mountPoint>/.encrypted-state-preseed-partial`**, outside every destination tree, so an
+  interrupted transfer never leaves a truncated file sitting at the real filename looking complete. Interruption is
+  expected here, not exceptional. The directory is removed by the run that completes, and survives the ones that do
+  not — which is exactly when the next run wants it.
+
+What it does **not** do is shorten the metadata walk. rsync still stats both trees on every pass, including the two
+inside the window, and on opi4pronas that is around 28 minutes per walk over 1.35 M inodes.
+
 ### The window between the two deploys
 
 Once `encrypted-state-migrate` has moved a path, that path is an **empty directory with nothing guarding it**:
