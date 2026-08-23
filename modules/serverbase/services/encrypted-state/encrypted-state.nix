@@ -59,6 +59,12 @@ let
     e2fsprogs
     rsync
     systemd
+    # `awk`, for the one thing shell arithmetic cannot do: a percentage with a decimal point. Easy to leave out
+    # and hard to notice, because writeShellApplication PREPENDS runtimeInputs to the inherited PATH - so a script
+    # run from a login shell finds the system's awk and works, and the same script run from a systemd unit, where
+    # PATH is minimal, does not. That is how it reached opi4pronas on 2026-08-23: every test passed, and the real
+    # run printed `awk: command not found` and a progress line reading `(% done)`.
+    gawk
     # `cmp`, which is how the header backup is compared against the front of the container - by bytes, so the answer
     # is exact and costs no write.
     diffutils

@@ -118,6 +118,8 @@ in
   };
 
   testScript = ''
+    import re
+
     start_all()
     tang.wait_for_unit("tangd.socket")
     tang.wait_for_open_port(${toString tangPort})
@@ -340,6 +342,11 @@ in
         client.wait_until_succeeds("test -e /var/lib/encrypted-state-wipe", timeout=300)
         client.succeed("systemctl kill --signal=KILL init-under-test || true")
         client.wait_until_fails("systemctl is-active --quiet init-under-test", timeout=60)
+        # And wait for the LOCK, not just for the unit. `systemctl kill` returns before the cgroup is reaped, so a
+        # lingering child can still hold the flock for a moment after the unit reports inactive - and the unlock
+        # checks the lock before it checks anything else, so whatever runs next would be refused for the wrong
+        # reason. Taking the lock non-blockingly is the only honest way to ask whether it is free.
+        client.wait_until_succeeds("flock -n /run/encrypted-state.lock true", timeout=60)
 
         # What has to be true of the wreckage: the container exists, it is bound to the key server, and the
         # binding happened BEFORE the long part rather than after it. That ordering is the whole reason a power
@@ -373,7 +380,14 @@ in
         client.succeed("systemctl stop encrypted-state-unlock.service || true")
         client.succeed("systemctl reset-failed encrypted-state-unlock.service || true")
         client.fail("systemctl start encrypted-state-unlock.service")
-        out = client.succeed("journalctl -u encrypted-state-unlock.service -n 40 --no-pager")
+        # Waited for rather than read once. `systemctl start` returns when the job is done, but the script's
+        # stdout reaches the journal through a separate path and is not necessarily committed yet - reading
+        # immediately gets systemd's own "Starting..." line and none of the script's.
+        client.wait_until_succeeds(
+            "journalctl -u encrypted-state-unlock.service --no-pager -n 100 | grep -q 'is not finished'",
+            timeout=30,
+        )
+        out = client.succeed("journalctl -u encrypted-state-unlock.service --no-pager -n 100")
         client.log(out)
         assert "not finished" in out, f"the unlock opened a container with an unfinished wipe: {out}"
         client.fail("test -e /dev/mapper/encrypted-state")
@@ -399,18 +413,67 @@ in
         assert "no record" in out, f"--resume ran without a record of an unfinished init: {out}"
         client.succeed("mv /root/wipe.saved /var/lib/encrypted-state-wipe")
 
-    with subtest("the wipe resumes where it stopped, and --resume finishes the container"):
+        # Undo the poisoned UUID here, in the subtest that set it, so what follows starts from a clean record.
         real_uuid = client.succeed("cryptsetup luksUUID ${image}").strip()
         client.succeed(
             f"sed -i 's/^wipe_uuid=.*/wipe_uuid={real_uuid}/' /var/lib/encrypted-state-wipe"
         )
+
+    with subtest("a container left open with an unfinished wipe is closed, not refused"):
+        # The exact sequence that failed on opi4pronas on 2026-08-23, reproduced rather than described. Salvaging
+        # a container means binding it by hand first, and between that and writing the progress record there is a
+        # window in which the retry timer and `nixos-rebuild switch` both legitimately open it - the guard has no
+        # record to read yet. The wipe then found a loop device that already carried a mapping and gave up with
+        # "Cannot use device /dev/loop0 which is in use".
+        # Test setup, not part of what is being proven: the SIGKILLed wipe earlier left `encrypted-state-wiping`
+        # mapped onto the loop device, and the unlock would trip over that instead of the condition under test.
+        client.succeed("cryptsetup close encrypted-state-wiping || true")
+        client.succeed("losetup -D || true")
+        client.succeed("mv /var/lib/encrypted-state-wipe /root/wipe.hidden")
+        client.succeed("systemctl reset-failed encrypted-state-unlock.service || true")
+        client.succeed("systemctl start encrypted-state-unlock.service")
+        client.succeed("test -e /dev/mapper/encrypted-state")
+        client.succeed("mv /root/wipe.hidden /var/lib/encrypted-state-wipe")
+
+        rc, out = client.execute("encrypted-state-wipe 2>&1", timeout=900)
+        client.log(out)
+        assert rc == 0, f"the wipe could not deal with an open container: {out}"
+        assert "closing it before wiping" in out, f"the wipe did not take down the open container: {out}"
+        assert "in use" not in out, f"the wipe still tripped over the existing mapping: {out}"
+
+        # And systemd's view has to match the world afterwards: the unlock unit is oneshot with RemainAfterExit,
+        # so closing the device behind its back would leave it reporting active over nothing.
+        state = client.succeed("systemctl is-active encrypted-state-unlock.service || true").strip()
+        assert state != "active", f"the unlock unit still claims to be active: {state}"
+
+        # Put it back to unfinished for the resume subtest below.
+        client.succeed(
+            "sed -i 's/^wipe_offset=.*/wipe_offset=134217728/' /var/lib/encrypted-state-wipe"
+        )
+
+    with subtest("the wipe resumes where it stopped, and --resume finishes the container"):
         # Resuming rather than restarting is the entire feature, so it is asserted on the log rather than inferred
         # from the container working afterwards - a wipe that silently started again from zero would also produce
         # a working container, just two days later.
-        out = client.succeed("encrypted-state-wipe", timeout=900)
+        # Driven through systemd rather than run from the test's shell, and that is not incidental.
+        # writeShellApplication PREPENDS its runtimeInputs to the inherited PATH, so a script run from a login
+        # shell quietly finds tools that were never declared - and the same script run from a unit, where PATH is
+        # minimal, does not. A missing `gawk` passed every check here and failed on the real machine.
+        client.succeed("systemd-run --unit=resume-wipe encrypted-state-wipe")
+        client.wait_until_fails("systemctl is-active --quiet resume-wipe", timeout=900)
+        result = client.succeed("systemctl show resume-wipe -p Result --value").strip()
+        client.wait_until_succeeds(
+            "journalctl -u resume-wipe --no-pager | grep -q 'is complete'", timeout=30
+        )
+        out = client.succeed("journalctl -u resume-wipe --no-pager")
         client.log(out)
+        assert result == "success", f"the wipe failed under systemd: {result}\n{out}"
+        assert "command not found" not in out, f"a runtime input is missing from the script: {out}"
         assert "Resuming" in out, f"the wipe restarted from the beginning instead of resuming: {out}"
         assert "at 0 " not in out, f"the wipe said it resumed but started from zero anyway: {out}"
+        # The percentage renders as a number, which is what proves awk actually ran rather than failing quietly
+        # into an empty string - the real symptom was a progress line reading "(% done)".
+        assert re.search(r"\(\d+\.\d+% done\)", out), f"the progress percentage did not render: {out}"
 
         record = client.succeed("cat /var/lib/encrypted-state-wipe")
         offset = int([l for l in record.splitlines() if l.startswith("wipe_offset=")][0].split("=")[1])

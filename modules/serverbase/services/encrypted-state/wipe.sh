@@ -78,6 +78,40 @@ if read_progress; then
   fi
 fi
 
+# The container may be OPEN under its real name, and then nothing below can work: cryptsetup refuses to map a
+# second device onto a loop device that already carries one, with "Cannot use device /dev/loopN which is in use".
+#
+# It happened on opi4pronas on 2026-08-23, and the sequence is worth keeping because it is not far-fetched. The
+# container was bound to the key server by hand to salvage it, and the retry timer's next tick - four minutes
+# later, doing exactly its job - opened it. The unlock's guard could not help: the wipe record that tells it the
+# container is unfinished was written afterwards, because writing it was a later step of the salvage.
+#
+# Taking it down rather than refusing, because this script holds the exclusive lock and an unfinished container
+# has no business being open. Through systemd rather than `cryptsetup close`, so that systemd's idea of the world
+# matches: the unlock unit is oneshot with RemainAfterExit, so closing the device behind its back leaves a unit
+# that reports active with nothing underneath it.
+if [ -e "/dev/mapper/$MAPPER" ]; then
+  # The one case where taking it down is not safe. An unfinished container cannot have a filesystem, so this
+  # should be impossible - which is exactly why it is worth checking before running `cryptsetup close` on it.
+  if grep -qF "/dev/mapper/$MAPPER " /proc/self/mounts || grep -qF " $MOUNT_POINT " /proc/self/mounts; then
+    echo "FATAL: $MOUNT_POINT is mounted from a container whose wipe is unfinished." >&2
+    echo "That should not be possible - an unfinished container has no filesystem. Refusing to touch it." >&2
+    echo "Investigate before doing anything else: mount | grep $MAPPER" >&2
+    exit 1
+  fi
+  echo "the container is open and its wipe is unfinished; closing it before wiping"
+  systemctl stop "$TARGET_UNIT" || true
+  systemctl stop encrypted-state-unlock.service || true
+  # Belt and braces: if it was opened by hand rather than by the unit, stopping the unit does not close it.
+  if [ -e "/dev/mapper/$MAPPER" ]; then
+    cryptsetup close "$MAPPER" || {
+      echo "FATAL: /dev/mapper/$MAPPER is open and will not close." >&2
+      echo "Something is using it. Find it with: lsof /dev/mapper/$MAPPER" >&2
+      exit 1
+    }
+  fi
+fi
+
 # A name of its own rather than $MAPPER. The mount unit and everything ordered after it key off /dev/mapper/$MAPPER,
 # and a half-wiped container appearing under that name is an invitation for something to mount it.
 wipe_mapper="${MAPPER}-wiping"
