@@ -96,6 +96,16 @@ let
     # directory a moved path becomes, and that `encrypted-state-resume` removes once the path is really bound. `zz-`
     # so it sorts after anything else a unit may have picked up.
     GUARD_DROPIN = "zz-encrypted-state-migration.conf";
+    # PERSISTENT, unlike everything else here that tracks an in-flight operation, and that is the whole point: an
+    # integrity wipe runs for days and the thing it has to survive is a reboot. /var/lib rather than /run, and
+    # deliberately outside `mountPoint` for the same reason `headerBackupPath` is - it describes a container that
+    # is not openable yet, so it cannot live inside one.
+    WIPE_PROGRESS = "/var/lib/encrypted-state-wipe";
+    # 64 MiB. The wipe records its position once per chunk, so this is the trade between how much work an
+    # interruption costs (one chunk, redone) and how often the progress file is rewritten. At 64 MiB a chunk is a
+    # few seconds even on the slowest array measured here, and the file is written about 65000 times over 4 TiB -
+    # both comfortably in the middle.
+    WIPE_CHUNK_BYTES = toString (64 * 1024 * 1024);
     # Held by anything that creates, resizes or moves the container; respected by the unlock and the retry. See
     # `lockPreamble` below for what happens without it. In /run so it cannot survive a reboot.
     LOCK_FILE = "/run/encrypted-state.lock";
@@ -121,13 +131,22 @@ let
   #
   # flock on a file descriptor rather than a flag file, because a process that is killed releases it and a flag
   # file would not. A stale flag needing a human to clear it, during a recovery, is the worst possible extra step.
+  #
+  # Re-entrant, because `encrypted-state-init` calls `encrypted-state-wipe` and both are exclusive. The obvious
+  # alternatives are both wrong: dropping the lock around the call opens exactly the window the lock exists to
+  # close, and inheriting fd 9 does not help because `exec 9>` in the child creates a new open file description and
+  # `flock` is per-description, so the child would block on a lock its own parent holds. An exported marker is the
+  # honest way to say "this process tree already has it".
   lockPreamble = ''
-    exec 9>"$LOCK_FILE"
-    if ! flock -n 9; then
-      echo "FATAL: another encrypted-state operation already holds $LOCK_FILE." >&2
-      echo "Wait for it to finish - encrypted-state-init on a large container runs for hours - or find it with" >&2
-      echo "    ps -eo pid,etime,args | grep encrypted-state" >&2
-      exit 1
+    if [ "''${ENCRYPTED_STATE_LOCK_HELD:-0}" != "1" ]; then
+      exec 9>"$LOCK_FILE"
+      if ! flock -n 9; then
+        echo "FATAL: another encrypted-state operation already holds $LOCK_FILE." >&2
+        echo "Wait for it to finish - encrypted-state-init on a large container runs for hours - or find it with" >&2
+        echo "    ps -eo pid,etime,args | grep encrypted-state" >&2
+        exit 1
+      fi
+      export ENCRYPTED_STATE_LOCK_HELD=1
     fi
   '';
 
@@ -169,7 +188,14 @@ let
 
   # The header backup belongs to creation, not to a checklist item the operator may or may not reach: the container
   # is bound and holding data from the moment init finishes, and that is already the moment its header matters.
-  initScript = mkExclusiveScript [ headerBackupScript ] "encrypted-state-init" ./init.sh;
+  # Separate from init.sh rather than inlined in it, and that separation is the entire feature. `init` refuses to
+  # run twice - correctly, since re-formatting destroys a container - so if the wipe lived inside it there would be
+  # no way to resume one that was interrupted, which is how 48 hours were lost on opi4pronas on 2026-08-22.
+  wipeScript = mkExclusiveScript [ ] "encrypted-state-wipe" ./wipe.sh;
+  initScript = mkExclusiveScript [
+    headerBackupScript
+    wipeScript
+  ] "encrypted-state-init" ./init.sh;
   unlockScript = mkScript "encrypted-state-unlock" ./unlock.sh;
   # NOT exclusive, and it is the only one of the four that is not. This is the ExecStop of the unlock unit, so it
   # runs on every stop and on every shutdown - including a shutdown that happens while `encrypted-state-init` is
@@ -578,6 +604,7 @@ in
 
     environment.systemPackages = [
       initScript
+      wipeScript
       growScript
       migrateScript
       closeScript

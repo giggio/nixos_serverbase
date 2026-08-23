@@ -32,6 +32,26 @@ if [ -e "/dev/mapper/$MAPPER" ]; then
   exit 0
 fi
 
+# A container whose integrity wipe has not finished must not be opened, and this is the enforcement of the warning
+# `init.sh` prints rather than a second opinion about it: past the wipe frontier the tag area is still the zeros
+# `fallocate` left, so every read there fails the integrity check. Mounting that gets an ext4 which works perfectly
+# until the day the allocator reaches the unwritten region, and then returns EIO from somewhere unrelated.
+#
+# Absence of the file means "no wipe was ever recorded", NOT "a wipe is outstanding" - containers created before
+# this existed have no record and must keep opening normally.
+if [ -e "$WIPE_PROGRESS" ]; then
+  # shellcheck disable=SC1090
+  . "$WIPE_PROGRESS"
+  if [ -n "${wipe_offset:-}" ] && [ -n "${wipe_size:-}" ] && [ "$wipe_offset" -lt "$wipe_size" ]; then
+    echo "FATAL: the integrity wipe of $IMAGE is not finished." >&2
+    echo "  $(numfmt --to=iec "$wipe_offset") of $(numfmt --to=iec "$wipe_size") initialised." >&2
+    echo "Reading past that point is an integrity failure by construction, so this will not open the container." >&2
+    echo "Resume it with:" >&2
+    echo "    encrypted-state-wipe" >&2
+    exit 1
+  fi
+fi
+
 # Reuse an existing loop device if one is already attached to this file. Attaching a second one would give two
 # independent views of the same bytes, and mounting through both is how a filesystem gets corrupted.
 loop=$(losetup --associated "$IMAGE" --noheadings --output NAME | head -n1)
@@ -85,7 +105,19 @@ if ! timeout "$UNLOCK_ATTEMPT_TIMEOUT" clevis luks unlock -d "$loop" -n "$MAPPER
   -o "--perf-no_read_workqueue --perf-no_write_workqueue"; then
   detach_loop
   echo "FATAL: could not unlock $IMAGE." >&2
-  echo "The key server is unreachable, or its keys no longer match what this container was bound to." >&2
+  # Two different failures, and they were reported as one until 2026-08-22, when a container whose format had been
+  # killed by a power cut - so `clevis luks bind` had never run - reported the key server as unreachable while the
+  # key server was up and answering. An hour went into the Pi before anyone read the header. `luksDump` is cheap
+  # and the answer is unambiguous, so ask it before naming a cause.
+  if ! cryptsetup luksDump "$IMAGE" 2>/dev/null | grep -q clevis; then
+    echo "This container has NO clevis token in its header - it was never bound to a key server." >&2
+    echo "The key server is not the problem. Either the binding never completed, or the header has been replaced." >&2
+    echo "Check with: cryptsetup luksDump $IMAGE" >&2
+    echo "If encrypted-state-init was interrupted before it finished, the container cannot be salvaged this way;" >&2
+    echo "see docs/encrypted-state.md." >&2
+  else
+    echo "The key server is unreachable, or its keys no longer match what this container was bound to." >&2
+  fi
   echo "Everything that keeps state in the container stays down until this succeeds." >&2
   echo "encrypted-state-retry.timer keeps trying; encrypted-state-status says where things stand." >&2
   echo "To open it by hand with the recovery passphrase:" >&2

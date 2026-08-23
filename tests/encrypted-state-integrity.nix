@@ -316,6 +316,115 @@ in
         )
         client.succeed("cryptsetup close plain")
 
+    with subtest("an interrupted init leaves a container that can be resumed, not one that must be redone"):
+        # THE REGRESSION THIS EXISTS FOR. cryptsetup's own `--integrity` wipe keeps no record of how far it got, so
+        # any interruption costs the whole thing - which on opi4pronas's 4 TiB container is two days, lost twice:
+        # to this module's retry timer on 2026-08-20 and to a power cut on 2026-08-22, the second time at 98.6%.
+        # The module now formats with --integrity-no-wipe and does the wiping itself, in chunks, recording the
+        # offset. Everything below is that record being trusted, and the guards that keep it trustworthy.
+        client.succeed("systemctl stop encrypted-state.target || true")
+        client.succeed("umount ${mountPoint} || true")
+        client.succeed("cryptsetup close encrypted-state || true")
+        client.succeed("losetup -D || true")
+        client.succeed("rm -f ${image} /var/lib/encrypted-state-wipe")
+
+        # systemd-run rather than a shell job, because that is how a run this long is actually started on a real
+        # machine - and because it gives something to send a signal to.
+        client.succeed(
+            "systemd-run --unit=init-under-test"
+            " --setenv=ENCRYPTED_STATE_PASSPHRASE_FILE=${passphraseFile}"
+            " encrypted-state-init"
+        )
+        # Kill it the moment the wipe has recorded any progress at all. A SIGKILL, not a SIGTERM: the point is to
+        # prove the design survives a process that got no chance to tidy up, which is what a power cut is.
+        client.wait_until_succeeds("test -e /var/lib/encrypted-state-wipe", timeout=300)
+        client.succeed("systemctl kill --signal=KILL init-under-test || true")
+        client.wait_until_fails("systemctl is-active --quiet init-under-test", timeout=60)
+
+        # What has to be true of the wreckage: the container exists, it is bound to the key server, and the
+        # binding happened BEFORE the long part rather than after it. That ordering is the whole reason a power
+        # cut is now survivable - the 2026-08-22 container had no clevis token at all, because `clevis luks bind`
+        # ran after a `luksFormat` that never returned.
+        client.succeed("test -e ${image}")
+        dump = client.succeed("cryptsetup luksDump ${image}")
+        assert "clevis" in dump, f"the binding is not made before the wipe, so an interruption is still fatal: {dump}"
+        client.log(client.succeed("cat /var/lib/encrypted-state-wipe"))
+
+    with subtest("a container whose wipe is unfinished refuses to open"):
+        # Reading past the wipe frontier is an integrity failure by construction, so an ext4 laid over one works
+        # perfectly until the allocator reaches the uninitialised region and then returns EIO from somewhere
+        # unrelated. The unlock has to refuse rather than let that happen, and refusing is only meaningful if it
+        # also fails the unit - a warning would be read past.
+        # Rewind the recorded offset to almost nothing. wipe_size is left exactly as the wipe wrote it - it is the
+        # size of the MAPPED device, which is not the size of the image file and cannot be asked of the file.
+        # 128 MiB, deliberately more than the 64 MiB chunk the wipe backs off by, so that the resume below starts
+        # from a NON-ZERO offset. Rewinding to almost-zero would let a wipe that quietly restarts from the
+        # beginning pass the assertion that it resumed.
+        client.succeed(
+            "sed -i 's/^wipe_offset=.*/wipe_offset=134217728/' /var/lib/encrypted-state-wipe"
+        )
+        # Driven as the UNIT rather than as a command, and not only because the script is not on $PATH - it is the
+        # unit that has to fail. A script that printed a warning and returned zero would let the mount unit, which
+        # Requires= this one, go ahead and mount the half-initialised container.
+        # Stopped first, and this is a trap worth naming: the unlock unit is oneshot with RemainAfterExit, so if it
+        # is already active - which it may well be, since the kill above can land after the wipe finished - then
+        # `systemctl start` is a silent no-op that succeeds and proves nothing.
+        client.succeed("systemctl stop encrypted-state.target || true")
+        client.succeed("systemctl stop encrypted-state-unlock.service || true")
+        client.succeed("systemctl reset-failed encrypted-state-unlock.service || true")
+        client.fail("systemctl start encrypted-state-unlock.service")
+        out = client.succeed("journalctl -u encrypted-state-unlock.service -n 40 --no-pager")
+        client.log(out)
+        assert "not finished" in out, f"the unlock opened a container with an unfinished wipe: {out}"
+        client.fail("test -e /dev/mapper/encrypted-state")
+
+    with subtest("a progress record from a different container is refused, not followed"):
+        # The one failure this design can produce that the all-or-nothing version could not. A stale record left by
+        # a container that was deleted and recreated would make the wipe skip however far the OLD one got, leaving
+        # a region of the NEW one with uninitialised tags that nothing will ever check again. Silent, permanent,
+        # and only discovered years later by a read that fails. It has to be a hard refusal.
+        client.succeed(
+            "sed -i 's/^wipe_uuid=.*/wipe_uuid=00000000-0000-0000-0000-000000000000/'"
+            " /var/lib/encrypted-state-wipe"
+        )
+        out = client.fail("encrypted-state-wipe 2>&1")
+        client.log(out)
+        assert "DIFFERENT container" in out, f"a stale progress record was followed: {out}"
+        out = client.fail("encrypted-state-init --resume 2>&1")
+        assert "stale record" in out.lower(), f"--resume followed a stale progress record: {out}"
+
+        # And --resume must refuse outright when there is no record, because the next thing it does is mkfs.
+        client.succeed("mv /var/lib/encrypted-state-wipe /root/wipe.saved")
+        out = client.fail("encrypted-state-init --resume 2>&1")
+        assert "no record" in out, f"--resume ran without a record of an unfinished init: {out}"
+        client.succeed("mv /root/wipe.saved /var/lib/encrypted-state-wipe")
+
+    with subtest("the wipe resumes where it stopped, and --resume finishes the container"):
+        real_uuid = client.succeed("cryptsetup luksUUID ${image}").strip()
+        client.succeed(
+            f"sed -i 's/^wipe_uuid=.*/wipe_uuid={real_uuid}/' /var/lib/encrypted-state-wipe"
+        )
+        # Resuming rather than restarting is the entire feature, so it is asserted on the log rather than inferred
+        # from the container working afterwards - a wipe that silently started again from zero would also produce
+        # a working container, just two days later.
+        out = client.succeed("encrypted-state-wipe", timeout=900)
+        client.log(out)
+        assert "Resuming" in out, f"the wipe restarted from the beginning instead of resuming: {out}"
+        assert "at 0 " not in out, f"the wipe said it resumed but started from zero anyway: {out}"
+
+        record = client.succeed("cat /var/lib/encrypted-state-wipe")
+        offset = int([l for l in record.splitlines() if l.startswith("wipe_offset=")][0].split("=")[1])
+        total = int([l for l in record.splitlines() if l.startswith("wipe_size=")][0].split("=")[1])
+        assert offset == total, f"the wipe reported success without reaching the end: {record}"
+
+        # And the container can now be finished without redoing any of it.
+        out = client.succeed("encrypted-state-init --resume", timeout=900)
+        client.log(out)
+        client.succeed("mountpoint -q ${mountPoint}")
+        # The marker is what --resume keys off, so leaving it behind would let a later --resume mkfs over a
+        # container in service. It has to be gone the moment the init is genuinely finished.
+        client.fail("test -e /var/lib/encrypted-state-wipe")
+
     with subtest("the boot journal has no ordering cycle"):
         # Same assertion as the other encrypted-state check, for the same reason: systemd answers a cycle by
         # deleting a job and booting anyway, and integrity adds another device layer under the mount.

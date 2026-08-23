@@ -595,6 +595,57 @@ RAM and nothing in it does.
 
 It refuses to touch an existing container. Re-running `luksFormat` on one that holds data destroys every byte in it.
 
+#### With `--integrity`, the wipe is a separate, resumable step
+
+Every sector of an authenticated container carries a tag, and all of them have to be written before anything reads
+one — an unwritten tag area is not "empty", it is a region where every read fails the integrity check. On a large
+container that is hours to days of writing.
+
+`cryptsetup` will do this itself as part of `luksFormat`, and **keeps no record of how far it got**. Any
+interruption in that window therefore costs the entire operation. On a 4 TiB container on spinning USB disks that
+window is roughly two days, and it was lost twice: once to this module's own retry timer, and once to a power cut
+at 98.6% complete.
+
+So the module formats with `--integrity-no-wipe` and does the wiping itself, in `encrypted-state-wipe`, which
+records its position after every 64 MiB chunk. `encrypted-state-init` calls it; nothing else needs to, unless it
+was interrupted:
+
+```bash
+sudo encrypted-state-wipe          # resumes from the recorded offset
+```
+
+Two consequences worth knowing, because both are load-bearing:
+
+- **The key-server binding is made before the wipe, not after.** An interruption now leaves a container that opens
+  normally and has some wiping left. Before, it left one with no `clevis` token at all — nothing could open it,
+  and `encrypted-state-unlock` reported the key server as unreachable while the key server was up and answering.
+- **A container whose wipe is unfinished will not open.** `encrypted-state-unlock` refuses it and fails the unit,
+  because an ext4 laid over a half-initialised container works perfectly until the allocator reaches the
+  uninitialised region and then returns EIO from somewhere unrelated. Finish the wipe first.
+
+The record lives at `/var/lib/encrypted-state-wipe`, is keyed to the container's LUKS UUID, and is deleted when
+`encrypted-state-init` finishes. Its presence means exactly *"an init began here and has not finished"*. A record
+whose UUID does not match the container is refused rather than followed — following it would skip a region of the
+new container whose tags are uninitialised, which nothing would ever check again.
+
+#### Finishing an interrupted creation
+
+`encrypted-state-init` refuses to touch an existing container, so it cannot be used to pick one up. `--resume`
+can:
+
+```bash
+sudo encrypted-state-init --resume
+```
+
+It skips allocation, format and binding, finishes the wipe if any is left, then makes the filesystem and the
+directories as usual. It refuses unless `/var/lib/encrypted-state-wipe` exists **and** matches the container's
+UUID **and** the container holds no filesystem yet — three independent guards, because the step after them is
+`mkfs`, and on a container holding data that is total loss.
+
+If the interruption happened before the binding was made — which is possible only for containers created by a
+version of this module that bound *after* the format — `--resume` says so and stops, because nothing on the
+machine can open the container unattended. Bind it by hand with the recovery passphrase first.
+
 ### 3. Migrate
 
 ```bash
