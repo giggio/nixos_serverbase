@@ -439,6 +439,20 @@ $(wait_machines): wait_%:
 	echo "--- end of console log ---"; \
 	exit 1
 
+bootstrap_machines := $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'bootstrap_%s ' "$$x"; done)
+bootstrap_%: vm_name=$*$(call vm_count,$*)
+## Bring the last existing VM to a state where its services can actually run.
+## A VM is created from nothing, so anything holding state in an encrypted container has nowhere to put it until
+## that container exists - and nothing creates one at boot, by design, because init generates a passphrase.
+## Idempotent: a VM that already has a container is left alone. Needs the VM up; run wait_<machine> first.
+$(bootstrap_machines): bootstrap_%:
+	@if [ "$*" == "$(vm_name)" ]; then echo "no VMs found" && exit 1; fi; \
+	if ! ssh $(vm_ssh_opts) 127.0.0.1 true 2>/dev/null; then \
+	  echo -e "\e[31m$(vm_name) is not answering ssh\e[0m - start it, then 'make wait_$*'"; exit 1; \
+	fi; \
+	echo -e "Bootstrapping \e[32m$(vm_name)\e[0m..."; \
+	ssh $(vm_ssh_opts) 127.0.0.1 bash -s < $(serverbase_dir)vm-bootstrap.sh
+
 console_machines := $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'console_%s ' "$$x"; done)
 console_%: vm_name=$*$(call vm_count,$*)
 console_%: vm_dir=$(VMS_DIR)/$(vm_name)
