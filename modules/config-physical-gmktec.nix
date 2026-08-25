@@ -6,6 +6,25 @@
   ...
 }:
 
+let
+  # WHETHER THIS MACHINE'S ROOT IS ALREADY A LUKS CONTAINER. It is not, and flipping this is NOT what encrypts it.
+  #
+  # This describes an END STATE, the way `bindState` does for the application-state container: disko only
+  # partitions when its own format script is run, so on a machine that already exists all this attribute decides is
+  # what `fileSystems."/"` and `boot.initrd.luks.devices` are generated as. Set true on a machine whose root is
+  # still plain ext4 and the next boot looks for `/dev/mapper/cryptroot`, does not find it, and stops in the
+  # initrd. So the order is: convert the disk first, flip this second, and the reboot between them is the test.
+  #
+  # The conversion is `cryptsetup reencrypt --encrypt --reduce-device-size 32M` from a live USB, in place, on
+  # /dev/disk/by-partlabel/disk-main-nixos. It is the one step in the whole encryption plan with no rollback except
+  # a restore. See PLAN_ENCRYPTION.md step 8a.
+  #
+  # Only the MAPPER NAME below has to agree with anything, and it agrees with itself: the initrd names the mapping
+  # when it unlocks, so `cryptroot` here produces /dev/mapper/cryptroot there whatever the on-disk container is
+  # called. There is deliberately no `--label`, because nothing reads one and a value that must match but is never
+  # checked is a trap rather than a safeguard.
+  rootEncrypted = false;
+in
 {
   imports = [
     inputs.nixos-hardware.nixosModules.gmktec-nucbox-g3-plus
@@ -79,11 +98,30 @@
         };
         nixos = {
           size = "100%";
-          content = {
-            type = "filesystem";
-            format = "ext4";
-            mountpoint = "/";
-          };
+          content =
+            let
+              root = {
+                type = "filesystem";
+                format = "ext4";
+                mountpoint = "/";
+              };
+            in
+            if rootEncrypted then
+              {
+                type = "luks";
+                name = "cryptroot";
+                # Read only by disko's own format script, so it matters when a VM is installed from the ISO and
+                # never on the real machine, which gets here by in-place conversion instead. Write it at the
+                # installer shell before running the install - `printf %s test > /tmp/luks_key` - or the format
+                # step fails asking for a passphrase nobody is there to type.
+                passwordFile = "/tmp/luks_key";
+                settings = {
+                  allowDiscards = true;
+                };
+                content = root;
+              }
+            else
+              root;
         };
       };
     };
