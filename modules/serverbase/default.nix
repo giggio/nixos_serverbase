@@ -296,6 +296,17 @@
       enable = true;
       settings = {
         StreamLocalBindUnlink = "yes";
+
+        # Key-only. Every account that can reach these machines has a key, so a password prompt on a public-facing
+        # sshd is a guessing target and nothing else - and until the per-machine split lands, one guessed password
+        # is all three servers rather than one.
+        #
+        # BOTH of these, and the second is the one that gets forgotten: with PasswordAuthentication off but
+        # keyboard-interactive left on, PAM still offers a password over the `keyboard-interactive` method and the
+        # door is exactly as open as before. `sshd -T` is the only honest way to check which is why the test reads
+        # it rather than the Nix option.
+        PasswordAuthentication = false;
+        KbdInteractiveAuthentication = false;
       };
     };
     logind.settings.Login.KillUserProcesses = true;

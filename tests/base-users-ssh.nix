@@ -68,6 +68,27 @@ in
         assert "streamlocalbindunlink yes" in settings.lower(), \
             "sshd does not have StreamLocalBindUnlink enabled, so forwarded sockets would not be reusable"
 
+    with subtest("a key is the only way in, and keyboard-interactive is closed too"):
+        # Read back from sshd rather than from the Nix option, because they answer different questions: the option
+        # is what was asked for, `sshd -T` is what the daemon will actually do.
+        #
+        # Both settings, and the second is the one that gets forgotten. With PasswordAuthentication off and
+        # keyboard-interactive left on, PAM still offers a password through that method and the door is exactly as
+        # open as before - while every configuration file and option in sight says passwords are disabled.
+        for setting in ["passwordauthentication no", "kbdinteractiveauthentication no"]:
+            assert setting in settings.lower(), f"sshd -T does not say '{setting}': {settings}"
+
+        # and behaviourally. What the client prints in the parentheses is the server's own list of the methods it
+        # will accept, so this asserts on sshd's answer rather than on our reading of its configuration.
+        (status, out) = machine.execute(
+            "ssh -o PreferredAuthentications=password,keyboard-interactive -o PubkeyAuthentication=no"
+            " -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+            " -o BatchMode=yes -o ConnectTimeout=10 ${user}@localhost true 2>&1"
+        )
+        machine.log(f"password login attempt: {out}")
+        assert status != 0, "a password login was accepted"
+        assert "(publickey)" in out, f"sshd offers more than publickey: {out}"
+
     with subtest("a session opened with an authorized key gets a private gnupg runtime directory"):
         machine.succeed("install -m 0600 ${snakeOilEd25519PrivateKey} /root/snakeoil-key")
         # BatchMode so that a rejected key fails outright instead of stalling on a password prompt
