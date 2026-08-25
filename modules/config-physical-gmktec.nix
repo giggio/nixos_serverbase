@@ -58,6 +58,67 @@ in
     KERNEL=="ttyACM0", TAG+="systemd", ENV{SYSTEMD_WANTS}="serial-getty@ttyACM0.service"
   '';
 
+  # SSH INTO THE INITRD, so the passphrase prompt is reachable from anywhere rather than only from a monitor
+  # plugged into the box. Gated on the same flag as the layout, because the two are one feature: without an
+  # encrypted root the initrd never pauses, so there is nothing to connect to and an sshd listening for the few
+  # seconds it takes to reach stage 2 is attack surface bought for nothing.
+  #
+  # This is not a convenience. This machine sets no `console=` kernel parameter, so the prompt goes to tty0 - the
+  # HDMI console - and the CH340 bridge above is a getty started by a udev rule once userspace is up, far too late
+  # to type a passphrase into. Without this, every boot between the conversion and the TPM enrolment needs someone
+  # standing at the machine with a monitor.
+  boot.initrd = lib.mkIf rootEncrypted {
+    # The whole of what the initrd needs the network for. `igc` is the Intel I226-V on this board - verified on the
+    # machine 2026-08-25, `eth0` -> `igc` - and nothing else in the initrd touches the network.
+    availableKernelModules = [ "igc" ];
+
+    systemd.network = {
+      enable = true;
+      # `eth0` rather than a MAC or a predictable name: serverbase sets `net.ifnames=0` for every machine, so this
+      # is the name the kernel gives the only physical NIC. A MAC would be more precise and would also put this
+      # machine's hardware address in a public repository.
+      networks."10-eth0" = {
+        matchConfig.Name = "eth0";
+        networkConfig.DHCP = "ipv4";
+        linkConfig.RequiredForOnline = "routable";
+      };
+    };
+
+    network.ssh = {
+      enable = true;
+
+      # NOT 22, and this is the difference between a recovery path that works and one that trains you to ignore a
+      # warning. Same host, same port, different key is exactly what ssh reports as REMOTE HOST IDENTIFICATION HAS
+      # CHANGED - every single boot, because the initrd and the running system are different hosts as far as
+      # `known_hosts` is concerned. A separate port gives each its own entry and neither ever complains.
+      port = 2222;
+
+      # A DEDICATED key, never the machine's real host key, and it lives outside the store. `hostKeys` given a
+      # string rather than a path routes it through `boot.initrd.secrets`, which the bootloader installer appends
+      # at `nixos-rebuild boot` time - so the private key is never world-readable in /nix/store and never in git.
+      # It does end up in the initrd, and therefore unencrypted on the ESP: whoever can read that partition can
+      # impersonate this initrd, which is how a passphrase gets harvested. That is why it must not be the real
+      # host key, and why it is worth knowing rather than glossing.
+      #
+      # Create it once, on the machine, before the first `nixos-rebuild boot` that carries this:
+      #
+      #     sudo mkdir -p /etc/secrets/initrd
+      #     sudo ssh-keygen -t ed25519 -N "" -f /etc/secrets/initrd/ssh_host_ed25519_key
+      #
+      # Missing, the bootloader install fails - on the machine, loudly, rather than at evaluation.
+      #
+      # Rotating it has a trap worth knowing: `boot.initrd.secrets` copies the file without making the initrd
+      # depend on its CONTENT, so replacing the key alone leaves the toplevel unchanged and the installed
+      # generation is not rebuilt. The old key stays on the ESP. Change something in the configuration too, or
+      # rotate into a new generation.
+      hostKeys = [ "/etc/secrets/initrd/ssh_host_ed25519_key" ];
+
+      # One source of truth with the running system's, from serverbase's own user definition. The initrd logs in
+      # as root, so these become root's authorized keys there.
+      authorizedKeys = config.users.users.${config.setup.username}.openssh.authorizedKeys.keys;
+    };
+  };
+
   disko.devices.disk.main = {
     device = "/dev/nvme0n1";
     type = "disk";
