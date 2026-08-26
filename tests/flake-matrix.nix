@@ -41,8 +41,12 @@ let
       ++ (map (vmArch: "${machine.name}${vmArch}vm") vmArches)
       ++ (lib.optionals machine.supportsIso (map (vmArch: "${machine.name}${vmArch}vmboot") vmArches))
       # the short aliases mkNixosConfigurations adds on top of the combinations, so that `nixos-rebuild --flake .#pi4`
-      # works without spelling out the architecture
-      ++ [ machine.name ]
+      # works without spelling out the architecture. `<machine>vm` is the one a VM rebuilds *itself* with, which is
+      # why it exists for every machine rather than only for the ones with an ISO.
+      ++ [
+        machine.name
+        "${machine.name}vm"
+      ]
       ++ (lib.optionals machine.supportsIso [ "${machine.name}vmboot" ])
     );
 
