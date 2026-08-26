@@ -133,17 +133,24 @@
           modules,
           values ? { },
         }:
+        let
+          probed =
+            (inputs.nixpkgs.lib.nixosSystem {
+              # qemu-vm.nix comes along because the test driver brings it too: a node is free to use
+              # `virtualisation.fileSystems`, and a probe without that option would fail to evaluate the very
+              # modules it exists to inspect
+              modules = modules ++ [ "${inputs.nixpkgs}/nixos/modules/virtualisation/qemu-vm.nix" ];
+            }).config.sops.secrets;
+        in
         modules
         ++ [
           (serverbaseModules.lib.mkFakeSecrets {
-            names =
-              builtins.attrNames
-                (inputs.nixpkgs.lib.nixosSystem {
-                  # qemu-vm.nix comes along because the test driver brings it too: a node is free to use
-                  # `virtualisation.fileSystems`, and a probe without that option would fail to evaluate the very
-                  # modules it exists to inspect
-                  modules = modules ++ [ "${inputs.nixpkgs}/nixos/modules/virtualisation/qemu-vm.nix" ];
-                }).config.sops.secrets;
+            names = builtins.attrNames probed;
+            # Asked here rather than inside mkFakeSecrets, for the same reason the names are: a module cannot read
+            # `sops.secrets` while defining it. What it decides is whether the fixture has to order its key
+            # installation before `setupSecretsForUsers` as well - a script that only exists when something asks
+            # for it, and that runs before the users are created rather than with the rest of the secrets.
+            hasUserSecrets = builtins.any (secret: secret.neededForUsers) (builtins.attrValues probed);
             inherit values;
           })
         ];

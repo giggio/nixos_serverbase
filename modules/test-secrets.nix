@@ -35,6 +35,7 @@ in
       names,
       values ? { },
       binaryNames ? defaultBinaryNames,
+      hasUserSecrets ? false,
     }:
     { pkgs, ... }:
     let
@@ -117,6 +118,17 @@ in
       system.activationScripts = {
         testAgeKey = "install -D -m 0400 ${pkgs.writeText "test-age-key" privateKey} ${keyPath}";
         setupSecrets.deps = [ "testAgeKey" ];
+      }
+      // lib.optionalAttrs hasUserSecrets {
+        # `neededForUsers` secrets are decrypted by a SECOND activation script, which runs before the accounts are
+        # created and therefore before `setupSecrets` - so ordering the key against that one is not enough. Without
+        # this the fixture fails with `cannot read keyfile '/run/test-age-key'`, and the visible symptom is one
+        # step further away again: the account whose password came from that secret is locked, because
+        # update-users-groups.pl writes `!` for a hashedPasswordFile it could not read.
+        #
+        # Conditional because sops-nix only defines the script when something actually asks for it, and giving
+        # `deps` to a script that does not exist is an activation with no text.
+        setupSecretsForUsers.deps = [ "testAgeKey" ];
       };
     };
 }
