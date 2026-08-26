@@ -31,7 +31,24 @@ in
     inputs.disko.nixosModules.disko
   ];
 
-  boot.loader.systemd-boot.enable = true; # using UEFI and not GRUB
+  boot.loader.systemd-boot = {
+    enable = true; # using UEFI and not GRUB
+
+    # Set BEFORE the root is encrypted and the boot chain is signed, not after. The default is `null`, meaning
+    # unlimited, and this ESP is a 512 M partition. Today it holds a kernel and an initrd per generation; under
+    # lanzaboote each generation instead becomes one UKI carrying both, and the initrd closure alone is 35.9 MiB,
+    # so call it 50 M a generation. Unlimited then fills the partition, and a full ESP makes the bootloader install
+    # fail - on a machine whose root is encrypted and whose boot chain is signed, which is the worst place to meet
+    # a disk-space problem. The partition cannot be grown without repartitioning, so the limit is the fix.
+    #
+    # Three rather than five: five is roughly where the ESP *fills*, and a limit set at the fill point leaves no
+    # headroom for a UKI that grows. Three is ~150 M of 512 M and still leaves two generations to roll back to,
+    # which is what actually matters on a machine that can fail to boot for signing reasons.
+    #
+    # It costs rollback depth: generations past the limit are dropped from the ESP on the next switch. They remain
+    # in the store and in `nix profile history`, they are simply no longer offered by the boot menu.
+    configurationLimit = 3;
+  };
 
   systemd.services."serial-getty@ttyACM0" = {
     enable = true;
