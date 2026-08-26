@@ -187,10 +187,12 @@ let
   ) (lib.filter (lib.hasSuffix ".service") declaredUnits);
 
   mkScript = mkScriptGeneric { };
-  mkExclusiveScript = extra: mkScriptGeneric {
-    inherit extra;
-    exclusive = true;
-  };
+  mkExclusiveScript =
+    extra:
+    mkScriptGeneric {
+      inherit extra;
+      exclusive = true;
+    };
 
   # The header backup belongs to creation, not to a checklist item the operator may or may not reach: the container
   # is bound and holding data from the moment init finishes, and that is already the moment its header matters.
@@ -213,7 +215,9 @@ let
   migrateScript = mkExclusiveScript [ ] "encrypted-state-migrate" ./migrate.sh;
   statusScript = mkScript "encrypted-state-status" ./status.sh;
   headerBackupScript = mkScript "encrypted-state-header-backup" ./header-backup.sh;
-  headerCheckScript = mkScriptWith [ headerBackupScript ] "encrypted-state-header-check" ./header-check.sh;
+  headerCheckScript = mkScriptWith [
+    headerBackupScript
+  ] "encrypted-state-header-check" ./header-check.sh;
   retryScript = mkScript "encrypted-state-retry" ./retry.sh;
   resumeScript = mkScript "encrypted-state-resume" ./resume.sh;
 in

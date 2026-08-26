@@ -263,7 +263,9 @@ in
             "printf %s '${passphrase}' | cryptsetup open --key-file - /root/intg.img intg"
         )
         size = int(client.succeed("blockdev --getsize64 /dev/mapper/intg").strip())
-        client.log(f"integrity probe device: {size} bytes usable of ${toString (probeMiB * 1024 * 1024)}")
+        client.log(f"integrity probe device: {size} bytes usable of ${
+          toString (probeMiB * 1024 * 1024)
+        }")
         client.succeed(f"dd if=/dev/zero of=/dev/mapper/intg bs=1M count={size // (1024 * 1024)} status=none")
         client.succeed("sync && cryptsetup close intg")
 

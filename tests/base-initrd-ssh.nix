@@ -30,7 +30,8 @@ let
   # `unsafeDiscardStringContext` because Nix refuses to append a context-carrying string to a path at all. The
   # context is not lost, only re-derived: coercing the resulting path back into the store gives it its own, so the
   # test still depends on the files it reads.
-  keyDir = /. + (builtins.unsafeDiscardStringContext "${inputs.nixpkgs}/nixos/tests/initrd-network-ssh");
+  keyDir =
+    /. + (builtins.unsafeDiscardStringContext "${inputs.nixpkgs}/nixos/tests/initrd-network-ssh");
   clientPubKey = lib.fileContents (keyDir + "/id_ed25519.pub");
   hostPubKey = lib.fileContents (keyDir + "/ssh_host_ed25519_key.pub");
   user = "giggio";
