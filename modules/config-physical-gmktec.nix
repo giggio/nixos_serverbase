@@ -48,6 +48,22 @@ in
     # It costs rollback depth: generations past the limit are dropped from the ESP on the next switch. They remain
     # in the store and in `nix profile history`, they are simply no longer offered by the boot menu.
     configurationLimit = 3;
+
+    # No command-line editing at the boot menu. Off because of what step 8c does, not as general tidying: once the
+    # TPM unlocks the root automatically, a thief who boots the machine has a decrypted filesystem underneath a
+    # login prompt, and an editable command line turns that prompt into `init=/bin/sh` and a root shell. That
+    # single line would hand back everything the encryption was for.
+    #
+    # It costs less than it looks, because it does not disable the menu - only the `e` key. Selecting an older
+    # generation still works, and generations are self-contained: a bad new one cannot break the ones already
+    # installed, since each carries its own kernel, initrd and command line. So the ordinary recovery - boot the
+    # previous configuration - is untouched. Note that `configurationLimit` above is what bounds how far back that
+    # goes, which is the real reason the two belong together.
+    #
+    # What it does cost is the rescue trick of appending a parameter by hand - `systemd.unit=rescue.target`,
+    # `boot.shell_on_fail`. The replacement for that is the live USB, which step 8a needs anyway and which reaches
+    # the same place through `nixos-enter`. Worth knowing before it is wanted rather than at the time.
+    editor = false;
   };
 
   systemd.services."serial-getty@ttyACM0" = {
