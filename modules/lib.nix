@@ -454,6 +454,19 @@
       # want a passphrase - and it costs nothing to check both variants, since a VM installs cfgVMBoot and
       # hardware installs cfg.
       needsLuksKey = cfg.boot.initrd.luks.devices != { } || cfgVMBoot.boot.initrd.luks.devices != { };
+
+      # The initrd sshd's host key, which `boot.initrd.secrets` copies into the initrd when the BOOTLOADER is
+      # installed - so it has to exist in the target before `nixos-install` runs, not after. Given as a string the
+      # option means a path on the machine, which is the point of it (the private key stays out of /nix/store and
+      # out of git); given as a store path it is already there and is filtered out here.
+      initrdHostKeysOf =
+        machineConfig:
+        lib.optionals machineConfig.boot.initrd.network.ssh.enable (
+          lib.filter (k: !lib.hasPrefix builtins.storeDir k) (
+            map toString machineConfig.boot.initrd.network.ssh.hostKeys
+          )
+        );
+      initrdHostKeys = lib.unique (initrdHostKeysOf cfg ++ initrdHostKeysOf cfgVMBoot);
       provisionLuksKey = pkgs.writeShellApplication {
         name = "provision_luks_key";
         runtimeInputs = with pkgs; [
@@ -527,6 +540,7 @@
                   pkgs.util-linux
                   pkgs.systemd
                   pkgs.kexec-tools
+                  pkgs.openssh
                 ];
                 script =
                   let
@@ -554,6 +568,27 @@
                     else
                       ${cfg.system.build.destroyFormatMount}/bin/disko-destroy-format-mount --yes-wipe-all-disks
                     fi
+                    ${lib.optionalString (initrdHostKeys != [ ]) ''
+                      # A FRESH key per install, deliberately, and never one carried in on the media the way the age
+                      # key and the root passphrase are. It is dedicated to the initrd, it lands unencrypted on an
+                      # unencrypted boot partition either way, and a machine that has just been reinstalled is
+                      # entitled to a new identity - the cost is one `known_hosts` entry on port 2222.
+                      #
+                      # Without it the install gets all the way through nixos-install and dies on the last step,
+                      # `failed to create initrd secrets!`, which on a real machine is after the point of no return.
+                      # The conversion runbook (PLAN_ENCRYPTION.md step 8a) creates it by hand for exactly this
+                      # reason; an unattended install has nobody to do that.
+                      for key in ${lib.escapeShellArgs initrdHostKeys}; do
+                        target="/mnt$key"
+                        if [ -f "$target" ]; then
+                          echo "====== initrd ssh host key already at $target"
+                          continue
+                        fi
+                        echo "====== Generating the initrd ssh host key at $target"
+                        mkdir -p "$(dirname "$target")"
+                        ssh-keygen -t ed25519 -N "" -C 'initrd@${cfg.setup.derivedHostName}' -f "$target"
+                      done
+                    ''}
                     echo '====== Installing NixOS...'
                     if systemd-detect-virt &>/dev/null; then
                       nixos-install --system ${cfgVMBoot.system.build.toplevel} --no-root-passwd --substituters ""
