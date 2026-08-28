@@ -23,7 +23,7 @@ let
   # when it unlocks, so `cryptroot` here produces /dev/mapper/cryptroot there whatever the on-disk container is
   # called. There is deliberately no `--label`, because nothing reads one and a value that must match but is never
   # checked is a trap rather than a safeguard.
-  rootEncrypted = false;
+  rootEncrypted = true;
 in
 {
   imports = [
@@ -160,11 +160,15 @@ in
               {
                 type = "luks";
                 name = "cryptroot";
-                # Read only by disko's own format script, so it matters when a VM is installed from the ISO and
-                # never on the real machine, which gets here by in-place conversion instead. Write it at the
-                # installer shell before running the install - `printf %s test > /tmp/luks_key` - or the format
-                # step fails asking for a passphrase nobody is there to type.
-                passwordFile = "/tmp/luks_key";
+                # Read only by disko's own format script, so it matters when a machine is installed from the
+                # ISO and never on the real gmktec1, which gets here by in-place conversion instead.
+                #
+                # There is no shell to write this file from: the ISO's unattended-install service conflicts
+                # with both gettys, so the install runs on a console with nobody on it. The ISO puts the file
+                # here itself before calling disko - from removable media, from a well-known value on a dev
+                # image, or by asking - see scripts/provision-luks-key.sh. Both ends read the path off the
+                # option so they cannot drift apart.
+                passwordFile = config.setup.luksKeyFile;
                 settings = {
                   allowDiscards = true;
                 };

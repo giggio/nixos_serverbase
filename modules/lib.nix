@@ -448,6 +448,20 @@
     let
       cfg = installedSystem.config;
       cfgVMBoot = installedSystemVMBoot.config;
+
+      # Only when the system being installed actually has an encrypted root. `boot.initrd.luks.devices` is what
+      # disko generates from a `type = "luks"` partition, so it is true exactly when the format step is going to
+      # want a passphrase - and it costs nothing to check both variants, since a VM installs cfgVMBoot and
+      # hardware installs cfg.
+      needsLuksKey = cfg.boot.initrd.luks.devices != { } || cfgVMBoot.boot.initrd.luks.devices != { };
+      provisionLuksKey = pkgs.writeShellApplication {
+        name = "provision_luks_key";
+        runtimeInputs = with pkgs; [
+          coreutils
+          util-linux
+        ];
+        text = builtins.readFile ./serverbase/scripts/provision-luks-key.sh;
+      };
       nixos-system = lib.nixosSystem {
         modules = [
           (
@@ -526,6 +540,13 @@
                     vmBootKernelArgs = "init=${vmBootInitScript} ${lib.concatStringsSep " " cfgVMBoot.boot.kernelParams}";
                   in
                   /* bash */ ''
+                    ${lib.optionalString needsLuksKey ''
+                      LUKS_KEY_FILE='${cfg.setup.luksKeyFile}' \
+                      LUKS_KEY_HOSTNAME='${cfg.setup.hostName}' \
+                      LUKS_KEY_ALLOW_WELLKNOWN='${if isDev then "1" else "0"}' \
+                      LUKS_KEY_TARGET_DESCRIPTION='${cfg.setup.derivedHostName}' \
+                        ${provisionLuksKey}/bin/provision_luks_key
+                    ''}
                     echo ====== Partioning disk...
                     if systemd-detect-virt &>/dev/null; then
                       echo "====== In a VM"

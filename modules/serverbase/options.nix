@@ -48,6 +48,26 @@ with lib;
       type = types.str;
       readOnly = true;
     };
+
+    # WHERE THE INSTALLER LEAVES THE ROOT PASSPHRASE, and where disko's format step goes looking for it.
+    #
+    # An option rather than the same string written twice, because the two ends are in modules that cannot see
+    # each other: a machine's `disko.devices...content.passwordFile` (config-physical-gmktec.nix) and the ISO's
+    # unattended-install service (lib.nix). Written as literals they agree by coincidence, and when they stop
+    # agreeing the symptom is `cryptsetup luksFormat` sitting at a passphrase prompt on a machine with no
+    # keyboard attached and no getty running - which is exactly how this option came to exist.
+    #
+    # /tmp because it must NOT survive the install: it lives in the installer's tmpfs, is read once by
+    # luksFormat, and is gone when the machine reboots into the system it just installed. Nothing copies it to
+    # the target root, and nothing should.
+    luksKeyFile = mkOption {
+      type = types.str;
+      default = "/tmp/luks_key";
+      description = ''
+        Path, inside the installer, of the file holding the root LUKS passphrase. Only ever read when disko
+        formats - so it matters for a machine installed from the ISO, and not at all for one converted in place.
+      '';
+    };
     vm = {
       enable = mkEnableOption "VM enabled";
       boot.enable = mkEnableOption "VM boot enabled";

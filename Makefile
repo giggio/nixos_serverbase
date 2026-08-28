@@ -94,6 +94,13 @@ sops_key_dir := $(HOME)/.config/nixos-secrets
 sops_agekey := $(sops_key_dir)/server.agekey
 sops_base_machines := $(sort $(patsubst %dev,%,$(machines)))
 sops_key_for = $(if $(wildcard $(sops_key_dir)/$(1).agekey),$(sops_key_dir)/$(1).agekey,$(sops_agekey))
+
+# Root LUKS passphrases, for a machine that is INSTALLED from the ISO with an encrypted root. Optional and normally
+# absent: nothing here creates one, the real gmktec1 gets its container by in-place conversion rather than by
+# installing, and a dev VM falls back to the public well-known passphrase in provision-luks-key.sh. Drop
+# `<machine>.lukskey` (or the shared `luks.key`) next to the age keys and the installer picks it up off the same
+# disk, which is also how a real machine is reinstalled: same file, on the USB stick.
+sops_lukskey := $(sops_key_dir)/luks.key
 $(out_img_dir)/.%.img.zst.stamp: $(nix_deps)
 	nix build .#$*_img --print-build-logs --keep-going --out-link "$(result_img_dir)/"
 	mkdir -p "$(out_img_dir)"
@@ -199,6 +206,12 @@ $(secrets_qcow2):
 	    uploaded=$$((uploaded + 1)); \
 	  done; \
 	  test "$$uploaded" -gt 0 || { echo "ERROR: no age keys found in $(sops_key_dir)" >&2; exit 1; }; \
+	  for key in $(foreach m,$(sops_base_machines),$(sops_key_dir)/$(m).lukskey) $(sops_lukskey); do \
+	    [ -f "$$key" ] || continue; \
+	    name="$$(basename "$$key")"; \
+	    cmds="$$cmds\nupload $$key /nixos-secrets/$$name\nchmod 0400 /nixos-secrets/$$name"; \
+	    echo "Uploading root passphrase $$name to $@"; \
+	  done; \
 	  echo "Uploading $$uploaded age key(s) to $@"; \
 	  printf '%b\n' "$$cmds\nsync\nexit" | guestfish -a $@
 

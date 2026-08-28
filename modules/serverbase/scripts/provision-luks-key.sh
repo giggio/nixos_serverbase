@@ -41,7 +41,7 @@ if [ -n "$host_name" ]; then
 fi
 key_candidates+=("luks.key")
 
-tmpmnt=/tmp/luksmnt
+tmpmnt="${TMPDIR:-/tmp}/luksmnt"
 found=0
 
 copy_if_has_key() {
