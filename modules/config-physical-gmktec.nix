@@ -23,7 +23,7 @@ let
   # when it unlocks, so `cryptroot` here produces /dev/mapper/cryptroot there whatever the on-disk container is
   # called. There is deliberately no `--label`, because nothing reads one and a value that must match but is never
   # checked is a trap rather than a safeguard.
-  rootEncrypted = true;
+  rootEncrypted = false;
 in
 {
   imports = [
