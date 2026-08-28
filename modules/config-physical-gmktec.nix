@@ -108,6 +108,26 @@ in
     kernelModules = [ "igc" ];
   };
 
+  # SWAP, as a file on the root rather than a partition of its own.
+  #
+  # It was a partition with `randomEncryption` - a fresh key every boot, never stored. That was the right shape
+  # while the root was plain ext4, because swap is otherwise a hole straight through every other protection: the
+  # kernel pages out decrypted database rows, session tokens and key material a service had open, and that lands
+  # on the disk in the clear. What changed is that the root is now a LUKS container, so a file living on it is
+  # already inside the same encryption, unlocked by the same key, with one less dm-crypt layer to configure and
+  # nothing extra to go wrong at boot.
+  #
+  # Same 4 G as the partition it replaces, and it is really used - 2 G of it on a 7.5 G machine. It rules out
+  # hibernation exactly as `randomEncryption` did, which costs these servers nothing.
+  #
+  # NixOS creates the file itself when it is missing, so there is nothing to do by hand after a reinstall.
+  swapDevices = [
+    {
+      device = "/swapfile";
+      size = 4096;
+    }
+  ];
+
   disko.devices.disk.main = {
     device = "/dev/nvme0n1";
     type = "disk";
@@ -117,33 +137,23 @@ in
     content = {
       type = "gpt";
       partitions = {
+        # 4.5 G rather than the 512 M this started as, and the extra 4 G is the swap partition that used to sit
+        # between this and the data. Under lanzaboote a generation stops being a kernel plus an initrd and becomes
+        # one UKI carrying both, so the ESP is what bounds how far back the boot menu reaches - at roughly 50 M a
+        # generation, 512 M was about ten and most of it was already spoken for at 46% full.
+        #
+        # It could only grow this way. The ESP is the first partition and the data partition is the last, so
+        # anything taken from the end would have meant moving 472 G; anything taken from swap-as-a-partition would
+        # have meant cutting swap on a box with 7.5 G of RAM that had 2 G of swap in use. Removing the partition
+        # and moving swap into a file on the encrypted root costs neither - see swapDevices below.
         ESP = {
           type = "EF00";
-          size = "512M";
+          size = "4608M";
           content = {
             type = "filesystem";
             format = "vfat";
             mountpoint = "/boot";
             mountOptions = [ "umask=0077" ];
-          };
-        };
-        swap = {
-          size = "4G";
-          type = "8200";
-          content = {
-            type = "swap";
-            # Encrypted with a key generated fresh at every boot, and never stored anywhere.
-            #
-            # Swap is a hole straight through any other encryption on this machine. The kernel pages whatever is in
-            # RAM out to it - decrypted database rows, session tokens, key material that a service had open - and
-            # 4 G of that sits on the same disk in the clear. Encrypting application state while leaving swap
-            # readable protects the copy on disk and leaves the copy next to it.
-            #
-            # A random per-boot key is the right shape here because it costs nothing: no keyslot, no passphrase, no
-            # dependency on the key server, and nothing to lose or recover. The only thing it rules out is
-            # hibernation, which needs the swap contents to survive a power cycle - and these are servers that never
-            # hibernate.
-            randomEncryption = true;
           };
         };
         nixos = {
