@@ -3,6 +3,7 @@
   base-packages = ./base-packages.nix;
   base-users-ssh = ./base-users-ssh.nix;
   base-initrd-ssh = ./base-initrd-ssh.nix;
+  secureboot = ./secureboot.nix;
   base-networking = ./base-networking.nix;
   base-nix-env = ./base-nix-env.nix;
   clone-config = ./clone-config.nix;

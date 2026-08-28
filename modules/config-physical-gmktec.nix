@@ -29,6 +29,21 @@ in
   imports = [
     inputs.nixos-hardware.nixosModules.gmktec-nucbox-g3-plus
     inputs.disko.nixosModules.disko
+    # The only machine here with Secure Boot firmware at all - the ARM boards have none - so both of these are
+    # imported here rather than from modules/serverbase/services, and that placement is load bearing twice over.
+    #
+    # lanzaboote's module cannot be imported from the service module, because `imports` cannot depend on `config`
+    # and a test node receives `inputs` through `_module.args`: doing it there is an infinite recursion.
+    #
+    # And the service module cannot be in the shared set either, because `lib.mkIf false` still requires the
+    # option it defines to EXIST. With `setup.secureBoot.enable = false` the definition of `boot.lanzaboote` is
+    # deferred but still placed, so pi4 and opi4pronas - which have no reason to carry lanzaboote - failed to
+    # evaluate with `The option boot.lanzaboote does not exist`. The two therefore travel together.
+    #
+    # Neither does anything until `setup.secureBoot.enable` is set. Measured, not assumed: with the flag off the
+    # systemd units, /etc entries, sops secrets, systemPackages and boot loader settings are identical either way.
+    inputs.lanzaboote.nixosModules.lanzaboote
+    ./serverbase/services/secureboot.nix
   ];
 
   boot.loader.systemd-boot = {

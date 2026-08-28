@@ -24,6 +24,15 @@
       url = "github:nix-community/disko/latest";
       inputs.nixpkgs.follows = "nixpkgs";
     };
+    # Secure Boot: signed UKIs instead of systemd-boot's kernel+initrd pair, so the firmware verifies what it
+    # loads. Only gmktec1 has Secure Boot at all - the ARM machines have no firmware support - so this input is
+    # dead weight for every other machine and is pinned to a REV rather than a branch to keep it that way: a
+    # `nix flake update` that moved it would rebuild a boot chain nothing asked to change. Same revision the
+    # desktop runs, which is where this module was ported from.
+    lanzaboote = {
+      url = "github:nix-community/lanzaboote/001e560fffc8f0235e9db20ebeb4ccde0ade1caf";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
