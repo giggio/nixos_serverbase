@@ -121,7 +121,11 @@ in
   # hibernation exactly as `randomEncryption` did, which costs these servers nothing.
   #
   # NixOS creates the file itself when it is missing, so there is nothing to do by hand after a reinstall.
-  swapDevices = [
+  # Gated on the same flag as the layout, because it is the same migration: while the root is still plain ext4 the
+  # swap PARTITION below is what exists and what disko generates an entry for, and a file on that root would be
+  # swap in the clear - strictly worse than the randomEncryption it replaced. The two states cannot overlap, so
+  # this cannot be deployed early by accident.
+  swapDevices = lib.optionals rootEncrypted [
     {
       device = "/swapfile";
       size = 4096;
@@ -148,7 +152,8 @@ in
         # and moving swap into a file on the encrypted root costs neither - see swapDevices below.
         ESP = {
           type = "EF00";
-          size = "4608M";
+          # 512 M while the swap partition is still between this and the data, 4.5 G once it is gone.
+          size = if rootEncrypted then "4608M" else "512M";
           content = {
             type = "filesystem";
             format = "vfat";
@@ -156,6 +161,28 @@ in
             mountOptions = [ "umask=0077" ];
           };
         };
+      }
+      // lib.optionalAttrs (!rootEncrypted) {
+        # THE HISTORICAL LAYOUT, kept only so that this configuration still describes the machine as it is until
+        # the repartition in PLAN_ENCRYPTION.md step 8a runs. Deleting this partition is what pays for the ESP
+        # above, and swap moves into the container - see swapDevices.
+        #
+        # Encrypted with a key generated fresh at every boot, and never stored anywhere. Swap is a hole straight
+        # through any other encryption on this machine: the kernel pages whatever is in RAM out to it - decrypted
+        # database rows, session tokens, key material a service had open - and 4 G of that sits on the same disk
+        # in the clear. A random per-boot key costs nothing here, since there is no keyslot to lose; all it rules
+        # out is hibernation, which these servers never do. The swapfile inherits both properties from the
+        # container it will live in.
+        swap = {
+          size = "4G";
+          type = "8200";
+          content = {
+            type = "swap";
+            randomEncryption = true;
+          };
+        };
+      }
+      // {
         nixos = {
           size = "100%";
           content =
