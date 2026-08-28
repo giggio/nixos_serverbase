@@ -467,6 +467,7 @@
           )
         );
       initrdHostKeys = lib.unique (initrdHostKeysOf cfg ++ initrdHostKeysOf cfgVMBoot);
+      needsInitrdSecrets = cfg.boot.initrd.secrets != { } || cfgVMBoot.boot.initrd.secrets != { };
       provisionLuksKey = pkgs.writeShellApplication {
         name = "provision_luks_key";
         runtimeInputs = with pkgs; [
@@ -587,6 +588,11 @@
                         echo "====== Generating the initrd ssh host key at $target"
                         mkdir -p "$(dirname "$target")"
                         ssh-keygen -t ed25519 -N "" -C 'initrd@${cfg.setup.derivedHostName}' -f "$target"
+                        # The same key at the INSTALLER's own path as well, because append-initrd-secrets reads
+                        # its sources from wherever it is run, and it is run here rather than in the target. That
+                        # is what lets the kexec below boot with the same initrd identity the disk will have.
+                        mkdir -p "$(dirname "$key")"
+                        cp "$target" "$key"
                       done
                     ''}
                     echo '====== Installing NixOS...'
@@ -605,12 +611,39 @@
                       kernelArgs+=' console=tty0 console=ttyS0,115200n8'
                     fi
                     if systemd-detect-virt &>/dev/null; then
-                      echo "====== Kexec-ing new install (kexec -l --initrd='${vmBootInitRamdisk}' --command-line=\"$kernelArgs\" ${vmBootKernelImage})..."
-                      kexec -l --initrd='${vmBootInitRamdisk}' --command-line="$kernelArgs" ${vmBootKernelImage}
+                      initrdFile='${vmBootInitRamdisk}'
+                      kernelImageFile='${vmBootKernelImage}'
                     else
-                      echo "====== Kexec-ing new install (kexec -l --initrd='${initRamdisk}' --command-line=\"$kernelArgs\" ${kernelImage})..."
-                      kexec -l --initrd='${initRamdisk}' --command-line="$kernelArgs" ${kernelImage}
+                      initrdFile='${initRamdisk}'
+                      kernelImageFile='${kernelImage}'
                     fi
+                    ${lib.optionalString needsInitrdSecrets ''
+                      # The store initrd has NO secrets in it. They are appended by the bootloader installer, to
+                      # the copy it puts on the ESP - so every boot from disk has them and this one, which skips
+                      # the bootloader entirely, would not. The symptom is a red `Failed to start Copy secrets
+                      # into place` on the first boot of every install, and an initrd sshd that cannot start
+                      # because its host key never arrived: the unit does `cd /.initrd-secrets`, the directory is
+                      # not there, and `find` then walks / instead and copies nothing successfully.
+                      #
+                      # Doing it here makes the kexec boot a faithful preview of the disk boot rather than a
+                      # special case to remember. Non-fatal on purpose: this is a convenience boot, and losing it
+                      # is not worth failing an install that has already written the disk correctly.
+                      echo '====== Appending the initrd secrets for the kexec boot...'
+                      initrdWithSecrets=/tmp/initrd-with-secrets
+                      cat "$initrdFile" > "$initrdWithSecrets"
+                      if systemd-detect-virt &>/dev/null; then
+                        appendSecrets=${cfgVMBoot.system.build.initialRamdiskSecretAppender}/bin/append-initrd-secrets
+                      else
+                        appendSecrets=${cfg.system.build.initialRamdiskSecretAppender}/bin/append-initrd-secrets
+                      fi
+                      if "$appendSecrets" "$initrdWithSecrets"; then
+                        initrdFile=$initrdWithSecrets
+                      else
+                        echo '====== Could not append them; this one boot starts without its initrd secrets'
+                      fi
+                    ''}
+                    echo "====== Kexec-ing new install (kexec -l --initrd=\"$initrdFile\" --command-line=\"$kernelArgs\" $kernelImageFile)..."
+                    kexec -l --initrd="$initrdFile" --command-line="$kernelArgs" "$kernelImageFile"
                     kexec -e
                   '';
               };

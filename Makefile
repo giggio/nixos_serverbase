@@ -372,9 +372,14 @@ start_machines := $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do pr
 start_%: vm_name=$*$(call vm_count,$*)
 start_%: vm_dir=$(VMS_DIR)/$(vm_name)
 ## Start and connects the last existing VM (holds the terminal on the serial console, needs zellij)
+# `zellij run` starts the command from the zellij SERVER's environment, not from the shell that ran make - which
+# is why PATH has always been threaded through by hand here. QEMU_OPTS and QEMU_NET_OPTS need exactly the same
+# treatment: the generated run script reads both, so without this `QEMU_NET_OPTS=... make start_x` sets a
+# variable the qemu process never sees, and an extra port forward silently does nothing. start_detached_% below
+# does not need it - setsid inherits the caller's environment.
 $(start_machines): start_%:
 	$(vm_start_preamble)
-	zellij run --name $(vm_name) --close-on-exit --floating -y0 -x80% --height=20% -- env PATH="$$PATH" "$(vm_dir)/run-$*-vm"
+	zellij run --name $(vm_name) --close-on-exit --floating -y0 -x80% --height=20% -- env PATH="$$PATH" QEMU_OPTS="$$QEMU_OPTS" QEMU_NET_OPTS="$$QEMU_NET_OPTS" "$(vm_dir)/run-$*-vm"
 	zellij action toggle-floating-panes
 	$(MAKE) connect_$*
 
