@@ -153,6 +153,14 @@ in
     };
   };
 
+  # A `tpmUnlock` with no `passphraseFile` is a legitimate state - it is what step 8c's first enrolment runs in -
+  # but the only sign of it is a unit that is not there, which reads as a packaging bug rather than as a choice.
+  config.warnings = lib.optional (cfg.tpmUnlock.enable && cfg.tpmUnlock.passphraseFile == null) ''
+    setup.secureBoot.tpmUnlock is on with no passphraseFile, so tpm-cryptenroll.service is NOT installed: the TPM
+    keyslot has to be created by hand with systemd-cryptenroll, and re-created by hand after every firmware or
+    Secure Boot change. Set passphraseFile to have the machine do it for itself.
+  '';
+
   config.assertions = [
     {
       assertion = cfg.tpmUnlock.enable -> cfg.enable;
