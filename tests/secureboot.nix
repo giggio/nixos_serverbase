@@ -18,7 +18,8 @@
 # bootloader at all, so nothing here signs a UKI, installs lanzaboote or enrols a PK - and PCR 7 in a software TPM
 # reads whatever swtpm says it does rather than what real firmware would measure. The signing half is proven by
 # the VM rehearsal in PLAN_ENCRYPTION.md step 8b, on OVMF with a real variable store. What IS proven here is the
-# enrolment logic, its idempotency, and the unlock.
+# enrolment logic, its idempotency, the unlock, and that the seal actually binds - a PCR 7 that has moved is
+# refused rather than shrugged off, which is the only thing that makes any of the rest worth doing.
 let
   container = "/var/lib/test-luks.img";
   mapper = "testcrypt";
@@ -37,7 +38,7 @@ in
         # module, so the test supplies them. Here `inputs` is a plain argument of the test file rather than
         # something the module system has to resolve, so there is no recursion.
         inputs.lanzaboote.nixosModules.lanzaboote
-        ../modules/serverbase/services/secureboot.nix
+        ../modules/serverbase/services/secureboot/secureboot.nix
         {
           setup = {
             hostName = "machine";
@@ -115,7 +116,10 @@ in
         machine.succeed("cryptsetup luksOpen --test-passphrase --key-file ${passphraseFile} ${container}")
 
     with subtest("and the container opens with no passphrase at all"):
-        machine.succeed("systemd-cryptsetup attach ${mapper} ${container} - tpm2-device=auto")
+        # headless=true on both calls, not just the failing one: without it systemd-cryptsetup falls back to
+        # asking, and "asking" in a test driver means waiting forever rather than failing. Found the hard way -
+        # the negative subtest below hung the whole check for 47 minutes.
+        machine.succeed("systemd-cryptsetup attach ${mapper} ${container} - tpm2-device=auto,headless=true")
         machine.succeed("test -b /dev/mapper/${mapper}")
         machine.succeed("systemd-cryptsetup detach ${mapper}")
 
@@ -127,5 +131,19 @@ in
         machine.succeed(
             "journalctl -u tpm-cryptenroll.service | grep -q 'already has a token'"
         )
+
+    with subtest("and the seal BINDS - a changed PCR 7 is refused rather than shrugged off"):
+        # The whole security claim of 8c is that the key is only released in the measured state. Extending PCR 7
+        # is what a firmware update, a Secure Boot toggle or an enrolled-key change looks like to the TPM, so
+        # this is that event, made to happen on purpose. Deliberately LAST: the extension cannot be undone
+        # without resetting the TPM, so everything that needs the original PCR value has already run.
+        machine.succeed("tpm2_pcrextend 7:sha256=" + "0" * 64)
+        machine.fail(
+            "timeout 60 systemd-cryptsetup attach ${mapper} ${container} - tpm2-device=auto,headless=true"
+        )
+        machine.fail("test -b /dev/mapper/${mapper}")
+
+    with subtest("...and the passphrase still opens it, which is the whole point of keeping that slot"):
+        machine.succeed("cryptsetup luksOpen --test-passphrase --key-file ${passphraseFile} ${container}")
   '';
 }

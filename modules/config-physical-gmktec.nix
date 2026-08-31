@@ -29,21 +29,25 @@ in
   imports = [
     inputs.nixos-hardware.nixosModules.gmktec-nucbox-g3-plus
     inputs.disko.nixosModules.disko
-    # The only machine here with Secure Boot firmware at all - the ARM boards have none - so both of these are
-    # imported here rather than from modules/serverbase/services, and that placement is load bearing twice over.
+    # Lanzaboote, for the only machine here with Secure Boot firmware at all - the ARM boards have none. It cannot
+    # go in the shared service set: `lib.mkIf false` still requires the option it defines to EXIST, so with
+    # `setup.secureBoot.enable = false` the definition of `boot.lanzaboote` is deferred but still placed, and pi4
+    # and opi4pronas failed to evaluate with `The option boot.lanzaboote does not exist`.
     #
-    # lanzaboote's module cannot be imported from the service module, because `imports` cannot depend on `config`
-    # and a test node receives `inputs` through `_module.args`: doing it there is an infinite recursion.
+    # And it cannot be imported from the service module either, because `imports` cannot depend on `config` and a
+    # test node receives `inputs` through `_module.args` rather than specialArgs: doing it there is an infinite
+    # recursion.
     #
-    # And the service module cannot be in the shared set either, because `lib.mkIf false` still requires the
-    # option it defines to EXIST. With `setup.secureBoot.enable = false` the definition of `boot.lanzaboote` is
-    # deferred but still placed, so pi4 and opi4pronas - which have no reason to carry lanzaboote - failed to
-    # evaluate with `The option boot.lanzaboote does not exist`. The two therefore travel together.
+    # So the two travel together, here, and the OPTIONS they configure travel separately - in
+    # ./config-gmktec.nix, which every variant of this machine imports including `test`. A machine's service
+    # modules set `setup.secureBoot`, and they must not depend on which hardware variant they are evaluated
+    # under. See serverbase/services/secureboot/options.nix.
     #
-    # Neither does anything until `setup.secureBoot.enable` is set. Measured, not assumed: with the flag off the
-    # systemd units, /etc entries, sops secrets, systemPackages and boot loader settings are identical either way.
+    # None of it does anything until `setup.secureBoot.enable` is set. Measured, not assumed: with the flag off
+    # the systemd units, /etc entries, sops secrets, systemPackages and boot loader settings are identical either
+    # way.
     inputs.lanzaboote.nixosModules.lanzaboote
-    ./serverbase/services/secureboot.nix
+    ./serverbase/services/secureboot/secureboot.nix
   ];
 
   boot.loader.systemd-boot = {
