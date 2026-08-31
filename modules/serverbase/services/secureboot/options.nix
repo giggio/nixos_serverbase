@@ -36,11 +36,57 @@ in
         Where the signing keys live ON THE MACHINE, in sbctl's layout - `GUID`, and `keys/{PK,KEK,db}/*.{key,pem}`.
 
         A path rather than anything derived from the store, because the private halves must not be world readable
-        and `/nix/store` is. Whatever puts them there has to run before the bootloader install: sops-nix placing
-        secrets with `path` does, since secrets are activated before `switch-to-configuration` reaches the
-        bootloader.
+        and `/nix/store` is. Use `pki` below to put them there.
+
+        Whatever puts them there has to have done so BEFORE the rebuild that turns Secure Boot on, and activation
+        is too late: `switch-to-configuration` installs the boot loader FIRST and only then activates, so on the
+        very first switch lanzaboote signs with keys that nothing has placed yet -
+        *"Failed to read public key from /var/lib/sbctl/keys/db/db.pem"*. Hence `nixos-rebuild test` and then
+        `nixos-rebuild switch`; PLAN_ENCRYPTION.md step 8b says it as a procedure.
 
         Without the private half no new generation can be signed, which means no new generation can boot.
+      '';
+    };
+
+    pki = mkOption {
+      type = types.attrsOf (
+        types.submodule {
+          options = {
+            source = mkOption {
+              type = types.str;
+              description = "The file to copy, as a path ON THE MACHINE - typically a sops secret's `path`.";
+            };
+            mode = mkOption {
+              type = types.str;
+              default = "0400";
+              description = "Mode of the copy. The private halves stay at the default; the certificates are `0444`.";
+            };
+          };
+        }
+      );
+      default = { };
+      example = literalExpression ''
+        {
+          "GUID".source = config.sops.secrets.secureboot_guid.path;
+          "keys/db/db.key".source = config.sops.secrets.secureboot_db_key.path;
+          "keys/db/db.pem" = {
+            source = config.sops.secrets.secureboot_db_pem.path;
+            mode = "0444";
+          };
+        }
+      '';
+      description = ''
+        Key material to place into `pkiBundle`, keyed by its path relative to it, in sbctl's layout - `GUID` and
+        `keys/{PK,KEK,db}/*.{key,pem}`. Empty means the bundle is managed by hand, the way `sbctl create-keys`
+        leaves it.
+
+        COPIES, not symlinks, and that is the whole reason this option exists rather than pointing sops-nix's
+        `path` straight at the bundle. sbctl confines itself with landlock and its ruleset covers the bundle
+        directory, so a key that is a symlink into `/run/secrets` resolves to a path outside the sandbox and sbctl
+        - running as root - is refused by the kernel: *"sbctl requires root to run: couldn't sync keys: open
+        /var/lib/sbctl/keys/db/db.key: permission denied"*. Seen on sbctl 0.18, 2026-08-31.
+
+        The copies land on the root filesystem, which is the same disk the passphrase already protects.
       '';
     };
 

@@ -72,6 +72,31 @@ in
         };
       };
 
+      # THE KEY MATERIAL, copied into the bundle from wherever it was decrypted to. Copied rather than symlinked
+      # there by sops-nix: sbctl sandboxes itself with landlock and its ruleset covers the bundle directory, so a
+      # key that is a symlink into /run/secrets resolves outside the sandbox and the kernel refuses it even for
+      # root - "sbctl requires root to run: couldn't sync keys: open /var/lib/sbctl/keys/db/db.key: permission
+      # denied", which is what `prepare-sb-auto-enroll.service` died of on 2026-08-31.
+      #
+      # An activation script rather than a unit, so the bundle is in place before systemd starts anything that
+      # reads it, on a boot as well as on a switch. `rm -f` before `install` because the destination may be a
+      # symlink left by an older arrangement, and `install` would write THROUGH it.
+      system.activationScripts.secureBootPki = lib.mkIf (cfg.pki != { }) {
+        deps = [ "setupSecrets" ];
+        text = lib.concatStringsSep "\n" (
+          lib.mapAttrsToList (
+            relative: key:
+            let
+              destination = lib.escapeShellArg "${cfg.pkiBundle}/${relative}";
+            in
+            ''
+              rm -f ${destination}
+              install -D -m ${key.mode} -o root -g root ${lib.escapeShellArg key.source} ${destination}
+            ''
+          ) cfg.pki
+        );
+      };
+
       security.tpm2 = {
         enable = true;
         tctiEnvironment.enable = true;

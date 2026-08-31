@@ -76,6 +76,15 @@ in
         };
       };
       boot.lanzaboote.enable = lib.mkForce false;
+
+      # A stand-in for one of the seven files sops decrypts on the real machine. `environment.etc` makes
+      # /etc/fake-db.pem a symlink into the store, which is the point: the SOURCE may be a symlink, the copy in
+      # the bundle must not be.
+      environment.etc."fake-db.pem".text = "-----BEGIN CERTIFICATE-----\n";
+      setup.secureBoot.pki."keys/db/db.pem" = {
+        source = "/etc/fake-db.pem";
+        mode = "0444";
+      };
       boot.loader.grub.enable = lib.mkForce false;
 
       # ...but not at boot, because the container does not exist until the test makes it. The test starts it by
@@ -85,6 +94,17 @@ in
 
   testScript = ''
     machine.wait_for_unit("multi-user.target")
+
+    with subtest("the PKI is REAL FILES in the bundle, not symlinks pointing out of it"):
+        # sbctl confines itself with landlock and its ruleset covers /var/lib/sbctl, so a key that is a symlink
+        # into /run/secrets resolves outside the sandbox and the kernel refuses it even for root: "sbctl requires
+        # root to run: couldn't sync keys: open /var/lib/sbctl/keys/db/db.key: permission denied". That is what
+        # prepare-sb-auto-enroll.service died of in the 8b rehearsal on 2026-08-31, with the keys in place and
+        # readable by every other tool. Hence the copy, and hence this.
+        machine.fail("test -L /var/lib/sbctl/keys/db/db.pem")
+        machine.succeed("test -f /var/lib/sbctl/keys/db/db.pem")
+        mode = machine.succeed("stat -c %a /var/lib/sbctl/keys/db/db.pem").strip()
+        assert mode == "444", f"the copy is {mode}, not the 444 the option asked for"
 
     with subtest("a TPM is actually present, or everything below would pass vacuously"):
         machine.succeed("test -c /dev/tpmrm0")
