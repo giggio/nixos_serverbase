@@ -95,6 +95,8 @@ in
         networks."10-${cfg.interface}" = {
           matchConfig.Name = cfg.interface;
           networkConfig.DHCP = "ipv4";
+          # see the note below, on the running system's half of this
+          dhcpV4Config.ClientIdentifier = "mac";
           linkConfig.RequiredForOnline = "routable";
         };
       };
@@ -108,5 +110,24 @@ in
         authorizedKeys = config.users.users.${config.setup.username}.openssh.authorizedKeys.keys;
       };
     };
+
+    # The initrd and the running system have to present the SAME identity to the DHCP server, and by default they
+    # do not. networkd's default is `ClientIdentifier=duid`: an RFC 4361 client id built from the machine's DUID,
+    # which systemd derives from `/etc/machine-id` - and an initrd has no `/etc/machine-id`, so systemd invents a
+    # transient one there. One MAC, two client ids, and a server that keys leases by client id (Kea, which is what
+    # OPNsense runs now) treats them as two machines: the initrd takes the reserved address, the running system
+    # then matches the same MAC reservation, finds that address leased to somebody else, and is handed one out of
+    # the dynamic pool instead. `mac` sends the hardware address as option 61 in both, which is what a MAC-keyed
+    # reservation expects, and it makes the stage 2 request a RENEWAL of the lease the initrd already took.
+    #
+    # Found on gmktec1 on 2026-09-01, on the first boot after its root was encrypted - which is the first boot
+    # where an initrd asked for an address at all. It came up on a pool address with its reservation apparently
+    # ignored, same MAC as always.
+    #
+    # This lands on the network the `useDHCP` default generates, which is what every serverbase machine's wired
+    # NIC is matched by; guarded so that turning DHCP off does not leave a stray unit here matching everything.
+    systemd.network.networks."99-ethernet-default-dhcp".dhcpV4Config.ClientIdentifier = lib.mkIf (
+      config.networking.useDHCP && config.networking.useNetworkd
+    ) "mac";
   };
 }

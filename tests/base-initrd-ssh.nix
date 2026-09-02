@@ -78,6 +78,12 @@ in
           networkConfig.DHCP = lib.mkForce "no";
           address = [ "${config.networking.primaryIPAddress}/24" ];
         };
+
+        # nixosTest turns this off, and the module's running-system half is guarded on it - so without this the
+        # half that has to AGREE with the initrd would not be generated at all and the subtest below would be
+        # testing nothing. Harmless here: networkd applies the first matching .network only, and the test
+        # framework's own `01-eth1` sorts ahead of the `99-` unit this generates, so nothing actually runs DHCP.
+        networking.useDHCP = lib.mkForce true;
       };
 
     client =
@@ -149,9 +155,22 @@ in
               f" -o BatchMode=yes -o ConnectTimeout=10 root@{server_ip} true"
           )
 
+      with subtest("the initrd asks for its lease as the same client the running system will"):
+          # One MAC has to mean one DHCP client id. networkd's default builds that id from the DUID, which systemd
+          # derives from /etc/machine-id - and an initrd has none, so it invents a transient one and the two stages
+          # look like two different machines to the server. A server that keys leases by client id then lets the
+          # initrd take the machine's reserved address and hands the running system a pool address instead, with
+          # the reservation apparently ignored. gmktec1, 2026-09-01, its first boot with an encrypted root.
+          initrd_unit = server.succeed("cat /etc/systemd/network/10-eth1.network")
+          assert "ClientIdentifier=mac" in initrd_unit, f"the initrd sends a DUID client id: {initrd_unit}"
+
       with subtest("the boot carries on afterwards, and takes the initrd sshd with it"):
           server.switch_root()
           server.wait_for_unit("multi-user.target")
+
+          # the other half of the identity above, on the unit the running system gets its lease through
+          running_unit = server.succeed("cat /etc/systemd/network/99-ethernet-default-dhcp.network")
+          assert "ClientIdentifier=mac" in running_unit, f"the two stages disagree: {running_unit}"
           # the running system's sshd, on 22, with its own host key - a different host entirely
           client.wait_until_succeeds(f"nc -z {server_ip} 22", timeout=60)
           client.fail(f"nc -z -w 2 {server_ip} ${toString port}")
