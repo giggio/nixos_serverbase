@@ -7,7 +7,8 @@
 }:
 
 let
-  # WHETHER THIS MACHINE'S ROOT IS ALREADY A LUKS CONTAINER. It is not, and flipping this is NOT what encrypts it.
+  # WHETHER THIS MACHINE'S ROOT IS ALREADY A LUKS CONTAINER. It is, since 2026-09-01, and flipping this is NOT
+  # what encrypted it.
   #
   # This describes an END STATE, the way `bindState` does for the application-state container: disko only
   # partitions when its own format script is run, so on a machine that already exists all this attribute decides is
@@ -23,7 +24,7 @@ let
   # when it unlocks, so `cryptroot` here produces /dev/mapper/cryptroot there whatever the on-disk container is
   # called. There is deliberately no `--label`, because nothing reads one and a value that must match but is never
   # checked is a trap rather than a safeguard.
-  rootEncrypted = false;
+  rootEncrypted = true;
 in
 {
   imports = [
