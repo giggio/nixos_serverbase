@@ -283,7 +283,7 @@ $(create_and_start_from_iso_machines): create_and_start_from_iso_%: $(out_iso_di
 # path, EFI/BOOT/BOOTX64.EFI, which is where the boot loader installs itself anyway.
 	cp --no-preserve=mode "$$(realpath $$(dirname $$(realpath $$(which qemu-system-x86_64)))/../share/qemu)/edk2-i386-vars.fd" "$(vm_dir)/ovmf_vars_$(vm_name).fd"
 	cp --no-preserve=mode "$$(realpath $$(dirname $$(realpath $$(which qemu-system-x86_64)))/../share/qemu)/edk2-x86_64-secure-code.fd" $(vm_dir)/edk2-x86_64-code.fd
-	cp ./start-tpm.sh "$(vm_dir)"
+	cp $(serverbase_dir)start-tpm.sh "$(vm_dir)"
 	@echo -e "Stop the VM when the installation is done and then run with \e[32mmake start_$*\e[0m."
 	@echo -e "Writing start file at \e[32m$(vm_dir)/run-$*-vm\e[0m."
 	@echo "#!/usr/bin/env bash\n\
@@ -319,7 +319,7 @@ $(create_and_start_from_iso_machines): create_and_start_from_iso_%: $(out_iso_di
 	chmod +x "$(vm_dir)/run-$*-vm"
 	if ps | grep [q]emu &>/dev/null; then echo "There is already a VM running" && exit 1; fi
 	rm -f /tmp/$(vm_name).sock
-	./start-tpm.sh "$(vm_dir)"
+	$(serverbase_dir)start-tpm.sh "$(vm_dir)"
 	zellij run --name $(vm_name) --close-on-exit --floating -y0 -x80% --height=20% -- env PATH="$$PATH" \
 	  qemu-system-x86_64 -machine type=q35,smm=on -machine accel=kvm -cpu max \
 	    -global driver=cfi.pflash01,property=secure,value=on \
