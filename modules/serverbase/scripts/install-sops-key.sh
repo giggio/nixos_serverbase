@@ -87,7 +87,11 @@ if [ -n "${SOPS_KEY_HOSTNAME:-}" ]; then
   key_candidates+=("$SOPS_KEY_HOSTNAME.agekey")
 fi
 key_candidates+=("$key_file_name")
-install_dir="/sysroot/etc/sops/age" # target root (stage-1 exposes /mnt-root)
+# WHERE THE TARGET ROOT IS, which is not the same in the two places this runs. In the initrd it is
+# /sysroot; in the ISO's unattended install it is /mnt, and the key has to be there BEFORE nixos-install,
+# because sops-nix's activation runs chrooted into the target and a machine with Secure Boot cannot install
+# its boot loader without the signing keys that activation places.
+install_dir="${SOPS_KEY_ROOT:-/sysroot}/etc/sops/age"
 key_file_destination="$install_dir/$key_file_name"
 echo "Starting search for sops key (${key_candidates[*]}) or to install it at $key_file_destination"
 if [ -f "$key_file_destination" ]; then

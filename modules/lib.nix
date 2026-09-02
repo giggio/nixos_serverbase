@@ -476,6 +476,45 @@
         ];
         text = builtins.readFile ./serverbase/scripts/provision-luks-key.sh;
       };
+
+      # The SAME script the initrd runs, pointed at /mnt instead of /sysroot. Not a copy of it: the two places
+      # differ only in where the target root is mounted, and a second implementation would be a second thing to
+      # keep in step with the disk layout the Makefile writes.
+      installSopsKey = pkgs.writeShellApplication {
+        name = "install_sops_key";
+        runtimeInputs = with pkgs; [
+          coreutils
+          util-linux
+          systemd
+        ];
+        text = builtins.readFile ./serverbase/scripts/install-sops-key.sh;
+      };
+
+      # WHETHER THE INSTALL ITSELF NEEDS TO DECRYPT SECRETS. It is Secure Boot that makes this fatal rather than
+      # merely untidy: lanzaboote signs the generation it installs, its keys arrive through sops, and sops needs
+      # the age key present in the target before `nixos-install` runs activation there.
+      #
+      # `or false` because the option only exists on machines that import the Secure Boot module - the ARM boards
+      # have no such firmware and no such option.
+      secureBootOnTarget =
+        (cfg.setup.secureBoot.enable or false) || (cfgVMBoot.setup.secureBoot.enable or false);
+
+      # Fatal or not, depending on the above. Everywhere else a missing key means secrets arrive one boot late,
+      # which is what has always happened and is fine; with Secure Boot it means an unbootable disk, and the
+      # place to say so is here rather than three screens later in lanzaboote's words.
+      #
+      # Joined with `;` rather than written as a multi-line block: Nix indents only the FIRST line of an
+      # interpolated string, so a block here would come out ragged in the middle of the recipe.
+      noAgeKeyFound =
+        if secureBootOnTarget then
+          lib.concatStringsSep "; " [
+            "echo 'ERROR: no age key found, and this machine signs its boot loader with keys that' >&2"
+            "echo '       come from sops - installing now would leave the disk unbootable.' >&2"
+            "echo '       Check that the media holding ${cfg.setup.hostName}.agekey is attached.' >&2"
+            "exit 1"
+          ]
+        else
+          "echo 'WARNING: no age key found; secrets arrive at first boot instead' >&2";
       nixos-system = lib.nixosSystem {
         modules = [
           (
@@ -595,6 +634,25 @@
                         cp "$target" "$key"
                       done
                     ''}
+                    # THE AGE KEY, INTO THE TARGET, BEFORE nixos-install. sops-nix's activation runs chrooted
+                    # into /mnt, so `/etc/sops/age/server.agekey` means `/mnt/etc/...` at that moment - and until
+                    # 2026-09-02 nothing put it there. That was invisible while it only meant secrets arriving
+                    # late: the initrd's install_sops_key fetches them at first boot, and activation's complaints
+                    # during the install are noise. It stopped being invisible when gmktec1 got Secure Boot,
+                    # because the boot loader is signed with keys that same activation places:
+                    #
+                    #   Activation script snippet 'secureBootPki' failed (1)
+                    #   Failed to install generation 1: Failed to read public key from .../db/db.pem
+                    #   Failed to install bootloader
+                    #
+                    # An install that ends there has written the disk and left it unbootable.
+                    echo '====== Installing the sops age key into the target...'
+                    if SOPS_KEY_ROOT=/mnt SOPS_KEY_HOSTNAME='${cfg.setup.hostName}' \
+                         ${installSopsKey}/bin/install_sops_key; then
+                      echo '====== The target can decrypt its own secrets during activation'
+                    else
+                      ${noAgeKeyFound}
+                    fi
                     echo '====== Installing NixOS...'
                     if systemd-detect-virt &>/dev/null; then
                       nixos-install --system ${cfgVMBoot.system.build.toplevel} --no-root-passwd --substituters ""

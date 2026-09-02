@@ -74,7 +74,7 @@ deps:
 # and making other targets depend on the run-...-vm file would always rebuild everything.
 # With the stamp file we have a file that has the correct date.
 $(out_vm_dir)/.run-%-vm.stamp: $(nix_deps)
-	nix build .#$*$(subst _,,$(architecture))vm --print-build-logs --keep-going --out-link "$(result_vm_dir)/"
+	nix build $(nix_flags) .#$*$(subst _,,$(architecture))vm --print-build-logs --keep-going --out-link "$(result_vm_dir)/"
 	mkdir -p "$(out_vm_dir)"
 	ln -sf "$$(realpath "$(result_vm_dir)/"run*)" "$(out_vm_dir)/run-$*-vm"
 	touch --date=@$$(stat -c '%Y' "$(out_vm_dir)/run-$*-vm") "$@"
@@ -102,7 +102,7 @@ sops_key_for = $(if $(wildcard $(sops_key_dir)/$(1).agekey),$(sops_key_dir)/$(1)
 # disk, which is also how a real machine is reinstalled: same file, on the USB stick.
 sops_lukskey := $(sops_key_dir)/luks.key
 $(out_img_dir)/.%.img.zst.stamp: $(nix_deps)
-	nix build .#$*_img --print-build-logs --keep-going --out-link "$(result_img_dir)/"
+	nix build $(nix_flags) .#$*_img --print-build-logs --keep-going --out-link "$(result_img_dir)/"
 	mkdir -p "$(out_img_dir)"
 	# opi4pro images are UNATTENDED INSTALLERS that decrypt the private cache address with sops (see
 	# modules/setup-opi4pro.nix). Two things are injected here, straight into the image's ext4 root (partition 2), AFTER the
@@ -164,7 +164,7 @@ $(img_files): $(out_img_dir)/%.img.zst: $(out_img_dir)/.%.img.zst.stamp;
 
 # See the comment above about the .stamp file
 $(out_iso_dir)/.%.iso.stamp: $(nix_deps)
-	nix build .#$*_iso --print-build-logs --keep-going --out-link "$(result_iso_dir)/"
+	nix build $(nix_flags) .#$*_iso --print-build-logs --keep-going --out-link "$(result_iso_dir)/"
 	mkdir -p "$(out_iso_dir)"
 	ln -sf "$$(realpath "$(result_iso_dir)/$*.iso")" "$(out_iso_dir)/$*.iso"
 	touch --date=@$$(stat -c '%Y' "$(out_iso_dir)/$*.iso") "$@"
@@ -175,7 +175,7 @@ $(iso_files): $(out_iso_dir)/%.iso: $(out_iso_dir)/.%.iso.stamp;
 
 # See the comment above about the .stamp file
 $(out_system_dir)/.%.stamp: $(nix_deps)
-	nix build .#nixosConfigurations.$*.config.system.build.toplevel --print-build-logs --keep-going --out-link "$(result_system_dir)/$*"
+	nix build $(nix_flags) .#nixosConfigurations.$*.config.system.build.toplevel --print-build-logs --keep-going --out-link "$(result_system_dir)/$*"
 	mkdir -p "$(out_system_dir)"
 	rm -f "$(out_system_dir)/$*"
 	ln -sf "$$(realpath "$(result_system_dir)/$*")" "$(out_system_dir)/$*"
@@ -310,7 +310,8 @@ $(create_and_start_from_iso_machines): create_and_start_from_iso_%: $(out_iso_di
 	  -device nvme,id=nvme0,serial=1234 \\\n\
 	  -device nvme-ns,drive=hd0,nsid=1,bus=nvme0 \\\n\
 	  -device nvme-ns,drive=hd_secrets,nsid=2,bus=nvme0 \\\n\
-	  -serial unix:/tmp/$(vm_name).sock,server,nowait \\\n\
+	  -chardev socket,id=serialsock,path=/tmp/$(vm_name).sock,server=on,wait=off,logfile=$(vm_dir)/console.log,logappend=on \\\n\
+	  -serial chardev:serialsock \\\n\
 	  -chardev socket,id=chrtpm,path="$(vm_dir)/swtpm/socket.ctrl" \\\n\
 	  -tpmdev emulator,id=tpm_dev_0,chardev=chrtpm \\\n\
 	  -device tpm-tis,tpmdev=tpm_dev_0 \\\n\
@@ -345,7 +346,8 @@ $(create_and_start_from_iso_machines): create_and_start_from_iso_%: $(out_iso_di
 	    -blockdev driver=qcow2,file=secretsfile,node-name=hd_secrets \
 	    -device nvme,id=nvme1,serial=4567 \
 	    -device nvme-ns,drive=hd_secrets,nsid=1,bus=nvme1 \
-	    -serial unix:/tmp/$(vm_name).sock,server,nowait \
+	    -chardev socket,id=serialsock,path=/tmp/$(vm_name).sock,server=on,wait=off,logfile=$(vm_dir)/console.log,logappend=on \
+	    -serial chardev:serialsock \
 	    -chardev socket,id=chrtpm,path="$(vm_dir)/swtpm/socket.ctrl" \
 	    -tpmdev emulator,id=tpm_dev_0,chardev=chrtpm \
 	    -device tpm-tis,tpmdev=tpm_dev_0 \
@@ -361,11 +363,11 @@ $(create_machines): create_%: $(out_vm_dir)/run-%-vm $(out_vm_dir)/.run-%-vm.sta
 	@echo -e "VM is \e[32m$(vm_name)\e[0m (at \e[32m$(vm_dir)\e[0m)"
 	mkdir -p "$(vm_dir)"
 	cp $(secrets_qcow2) "$(vm_dir)/secret-disk.qcow2"
-	nix run --offline .#machine_$* | jq -r '(.extraDisks // [])[]' | nl -s'|' -w1 | while read -r disk; do qemu-img create -f qcow2 $(vm_dir)/disk"$$(echo "$$disk" | cut -d'|' -f1)".qcow2 "$$(echo "$$disk" | cut -d'|' -f2)G"; done
+	nix run $(nix_flags) --offline .#machine_$* | jq -r '(.extraDisks // [])[]' | nl -s'|' -w1 | while read -r disk; do qemu-img create -f qcow2 $(vm_dir)/disk"$$(echo "$$disk" | cut -d'|' -f1)".qcow2 "$$(echo "$$disk" | cut -d'|' -f2)G"; done
 	cp $(out_vm_dir)/run-$*-vm "$(vm_dir)/run-$*-vm"
-	command="$$(nix eval .#nixosConfigurations.$*$(subst _,,$(architecture))vm.config.setup.vm.extraCreateCommands --raw)" && cd "$(vm_dir)" && echo "Running: $$command" && source <(echo "$$command")
+	command="$$(nix eval $(nix_flags) .#nixosConfigurations.$*$(subst _,,$(architecture))vm.config.setup.vm.extraCreateCommands --raw)" && cd "$(vm_dir)" && echo "Running: $$command" && source <(echo "$$command")
 	sed -i  \
-	  -e '3r '<(nix eval .#nixosConfigurations.$*$(subst _,,$(architecture))vm.config.setup.vm.extraStartCommands --raw) \
+	  -e '3r '<(nix eval $(nix_flags) .#nixosConfigurations.$*$(subst _,,$(architecture))vm.config.setup.vm.extraStartCommands --raw) \
 	  -e '3i export VM_NAME="$(vm_name)"' \
 	  -e '3i export VM_DIR="$(vm_dir)"' \
 	  -e '3i export NIX_DISK_IMAGE="$(vm_dir)/$(vm_name).qcow2"' \
@@ -564,7 +566,7 @@ cache_machines := $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do pr
 ## Push to cache
 $(cache_machines): cache_%:
 	@echo -e "Pushing cache for machine \e[32m$*\e[0m"
-	nix build .#nixosConfigurations.$*.config.system.build.toplevel --no-link --print-out-paths | attic push servers --stdin
+	nix build $(nix_flags) .#nixosConfigurations.$*.config.system.build.toplevel --no-link --print-out-paths | attic push servers --stdin
 
 ## Pushes every machine's system closure to the cache - the counterpart of `cache_checks`, and what CI runs after
 ## building, so the expensive derivations (the opi4pro vendor kernel and U-Boot above all) are pushed even if a later

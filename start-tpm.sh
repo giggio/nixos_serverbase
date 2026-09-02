@@ -11,6 +11,14 @@
 # against it stops unlocking. It therefore lives beside the VM's disks and dies with them.
 set -euo pipefail
 
+# swtpm joined the devshell on 2026-09-02, so a shell entered before that does not have it and `set -e` would
+# otherwise abort with nothing but "command not found".
+if ! command -v swtpm >/dev/null; then
+  echo "start-tpm.sh: swtpm is not on PATH. Re-enter the devshell (nix develop / direnv reload) - it was" >&2
+  echo "              added to it on 2026-09-02 - or run this under: nix shell nixpkgs#swtpm -c ..." >&2
+  exit 1
+fi
+
 dir="${1:?usage: start-tpm.sh <vm dir>}/swtpm"
 mkdir -p "$dir"
 
