@@ -781,6 +781,11 @@
               # these libs are used to build VMs, not necessary in the RPi or inside VMs
               zellij
               qemu
+              # The software TPM the from-ISO VMs are launched with - see start-tpm.sh, which the Makefile copies
+              # into each VM directory. gmktec1's root is sealed to a TPM, so a VM of it without one cannot
+              # rehearse its own boot.
+              swtpm
+              tpm2-tools
               libguestfs-with-appliance
               guestfs-tools
               picocom # for serial communication

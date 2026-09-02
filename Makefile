@@ -273,14 +273,24 @@ $(create_and_start_from_iso_machines): create_and_start_from_iso_%: $(out_iso_di
 	cp $(secrets_qcow2) "$(vm_dir)/secret-disk.qcow2"
 	cp $(empty_qcow2) $(disk_path)
 	mkdir -p "$(TMPDIR)/xchg"
-	cp "$$(nix-build -E 'with import <nixpkgs> {}; OVMFFull.fd' --no-out-link)/FV/OVMF_VARS.fd" "$(vm_dir)/ovmf_vars_$(vm_name).fd"
-	chmod u+w "$(vm_dir)/ovmf_vars_$(vm_name).fd"
-	cp "$$(realpath $$(dirname $$(realpath $$(which qemu-system-x86_64)))/../share/qemu)/edk2-x86_64-code.fd" $(vm_dir)/edk2-x86_64-code.fd
+# THE SECURE BUILD OF THE FIRMWARE, and its matching variable store. qemu ships two builds of edk2 side by side
+# and only this one can enrol Secure Boot keys; the other was the right default until gmktec1 started needing
+# lanzaboote rehearsed. The vars have to come from the SAME build as the code, which is why they are no longer
+# taken from OVMFFull - a mismatched pair is a firmware that will not boot.
+#
+# A blank variable store is a firmware in SETUP MODE, which is what lets a VM enrol our PK/KEK/db with nobody
+# pressing anything. It also throws away the firmware's boot entries, so OVMF falls back to the removable-media
+# path, EFI/BOOT/BOOTX64.EFI, which is where the boot loader installs itself anyway.
+	cp --no-preserve=mode "$$(realpath $$(dirname $$(realpath $$(which qemu-system-x86_64)))/../share/qemu)/edk2-i386-vars.fd" "$(vm_dir)/ovmf_vars_$(vm_name).fd"
+	cp --no-preserve=mode "$$(realpath $$(dirname $$(realpath $$(which qemu-system-x86_64)))/../share/qemu)/edk2-x86_64-secure-code.fd" $(vm_dir)/edk2-x86_64-code.fd
+	cp ./start-tpm.sh "$(vm_dir)"
 	@echo -e "Stop the VM when the installation is done and then run with \e[32mmake start_$*\e[0m."
 	@echo -e "Writing start file at \e[32m$(vm_dir)/run-$*-vm\e[0m."
 	@echo "#!/usr/bin/env bash\n\
 	mkdir -p "$(TMPDIR)/xchg" \n\
-	qemu-system-x86_64 -machine type=q35 -machine accel=kvm -cpu max \\\n\
+	"$(vm_dir)"/start-tpm.sh "$(vm_dir)" \n\
+	qemu-system-x86_64 -machine type=q35,smm=on -machine accel=kvm -cpu max \\\n\
+	  -global driver=cfi.pflash01,property=secure,value=on \\\n\
 	  -name $* \\\n\
 	  -m 8192 \\\n\
 	  -smp 4 \\\n\
@@ -301,13 +311,18 @@ $(create_and_start_from_iso_machines): create_and_start_from_iso_%: $(out_iso_di
 	  -device nvme-ns,drive=hd0,nsid=1,bus=nvme0 \\\n\
 	  -device nvme-ns,drive=hd_secrets,nsid=2,bus=nvme0 \\\n\
 	  -serial unix:/tmp/$(vm_name).sock,server,nowait \\\n\
+	  -chardev socket,id=chrtpm,path="$(vm_dir)/swtpm/socket.ctrl" \\\n\
+	  -tpmdev emulator,id=tpm_dev_0,chardev=chrtpm \\\n\
+	  -device tpm-tis,tpmdev=tpm_dev_0 \\\n\
 	  \$$QEMU_OPTS" > "$(vm_dir)/run-$*-vm"
 	sed -i 's/\\n/\n/g' "$(vm_dir)/run-$*-vm"
 	chmod +x "$(vm_dir)/run-$*-vm"
 	if ps | grep [q]emu &>/dev/null; then echo "There is already a VM running" && exit 1; fi
 	rm -f /tmp/$(vm_name).sock
+	./start-tpm.sh "$(vm_dir)"
 	zellij run --name $(vm_name) --close-on-exit --floating -y0 -x80% --height=20% -- env PATH="$$PATH" \
-	  qemu-system-x86_64 -machine type=q35 -machine accel=kvm -cpu max \
+	  qemu-system-x86_64 -machine type=q35,smm=on -machine accel=kvm -cpu max \
+	    -global driver=cfi.pflash01,property=secure,value=on \
 	    -name $* \
 	    -m 8192 \
 	    -enable-kvm \
@@ -331,6 +346,9 @@ $(create_and_start_from_iso_machines): create_and_start_from_iso_%: $(out_iso_di
 	    -device nvme,id=nvme1,serial=4567 \
 	    -device nvme-ns,drive=hd_secrets,nsid=1,bus=nvme1 \
 	    -serial unix:/tmp/$(vm_name).sock,server,nowait \
+	    -chardev socket,id=chrtpm,path="$(vm_dir)/swtpm/socket.ctrl" \
+	    -tpmdev emulator,id=tpm_dev_0,chardev=chrtpm \
+	    -device tpm-tis,tpmdev=tpm_dev_0 \
 	    $$QEMU_OPTS
 	zellij action toggle-floating-panes
 	$(MAKE) connect_$*
@@ -352,6 +370,7 @@ $(create_machines): create_%: $(out_vm_dir)/run-%-vm $(out_vm_dir)/.run-%-vm.sta
 	  -e '3i export VM_DIR="$(vm_dir)"' \
 	  -e '3i export NIX_DISK_IMAGE="$(vm_dir)/$(vm_name).qcow2"' \
 	  -e '3i export NIX_EFI_VARS="$(vm_dir)/$(vm_name)-efi-vars.fd"' \
+	  -e '3i export NIX_SWTPM_DIR="$(vm_dir)/swtpm"' \
 	  "$(vm_dir)/run-$*-vm"
 
 create_and_start_machines := $(shell for x in $$(echo "$(machines)" | sed 's/ /\n/'); do printf 'create_and_start_%s ' "$$x"; done)

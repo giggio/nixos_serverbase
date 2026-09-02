@@ -6,26 +6,21 @@
   ...
 }:
 
-let
-  # WHETHER THIS MACHINE'S ROOT IS ALREADY A LUKS CONTAINER. It is, since 2026-09-01, and flipping this is NOT
-  # what encrypted it.
-  #
-  # This describes an END STATE, the way `bindState` does for the application-state container: disko only
-  # partitions when its own format script is run, so on a machine that already exists all this attribute decides is
-  # what `fileSystems."/"` and `boot.initrd.luks.devices` are generated as. Set true on a machine whose root is
-  # still plain ext4 and the next boot looks for `/dev/mapper/cryptroot`, does not find it, and stops in the
-  # initrd. So the order is: convert the disk first, flip this second, and the reboot between them is the test.
-  #
-  # The conversion is `cryptsetup reencrypt --encrypt --reduce-device-size 32M` from a live USB, in place, on
-  # /dev/disk/by-partlabel/disk-main-nixos. It is the one step in the whole encryption plan with no rollback except
-  # a restore. See PLAN_ENCRYPTION.md step 8a.
-  #
-  # Only the MAPPER NAME below has to agree with anything, and it agrees with itself: the initrd names the mapping
-  # when it unlocks, so `cryptroot` here produces /dev/mapper/cryptroot there whatever the on-disk container is
-  # called. There is deliberately no `--label`, because nothing reads one and a value that must match but is never
-  # checked is a trap rather than a safeguard.
-  rootEncrypted = true;
-in
+# THIS MACHINE'S ROOT IS A LUKS CONTAINER, since 2026-09-01. Everything below describes that; nothing below
+# creates it. Until 2026-09-02 a `rootEncrypted` binding here selected between this layout and the plain-ext4 one
+# the machine had before, which was how the migration was carried; the migration is over and the alternative went
+# with it. See PLAN_ENCRYPTION.md step 8d for why, and step 8a - or git history for this file - for the layout it
+# replaced.
+#
+# What disko does here is generate `fileSystems."/"` and `boot.initrd.luks.devices`; it only PARTITIONS when its
+# own format script is run, which on gmktec1 has never happened. The disk got here by
+# `cryptsetup reencrypt --encrypt --reduce-device-size 32M` from a live USB, in place, on
+# /dev/disk/by-partlabel/disk-main-nixos - the one step in the encryption plan with no rollback except a restore.
+#
+# Only the MAPPER NAME below has to agree with anything, and it agrees with itself: the initrd names the mapping
+# when it unlocks, so `cryptroot` here produces /dev/mapper/cryptroot there whatever the on-disk container is
+# called. There is deliberately no `--label`, because nothing reads one and a value that must match but is never
+# checked is a trap rather than a safeguard.
 {
   imports = [
     inputs.nixos-hardware.nixosModules.gmktec-nucbox-g3-plus
@@ -115,15 +110,12 @@ in
   # plugged into the box. The mechanism, the port choice and what the host key costs are all in
   # serverbase/services/initrd-ssh.nix; what belongs here is why THIS machine needs it and which driver it takes.
   #
-  # Gated on the same flag as the layout, because the two are one feature: without an encrypted root the initrd
-  # never pauses, so there is nothing to connect to.
-  #
   # It is not a convenience. This machine sets no `console=` kernel parameter, so the initrd passphrase prompt goes
   # to tty0 - the HDMI console - and the CH340 bridge above is a getty started by a udev rule once userspace is up,
   # far too late to type a passphrase into. Without this, every boot between the conversion and the TPM enrolment
   # needs someone standing at the machine with a monitor.
   setup.initrdSsh = {
-    enable = rootEncrypted;
+    enable = true;
     # The Intel I226-V on this board - read off the machine 2026-08-25, `eth0` -> `igc`, rather than guessed.
     kernelModules = [ "igc" ];
   };
@@ -141,11 +133,7 @@ in
   # hibernation exactly as `randomEncryption` did, which costs these servers nothing.
   #
   # NixOS creates the file itself when it is missing, so there is nothing to do by hand after a reinstall.
-  # Gated on the same flag as the layout, because it is the same migration: while the root is still plain ext4 the
-  # swap PARTITION below is what exists and what disko generates an entry for, and a file on that root would be
-  # swap in the clear - strictly worse than the randomEncryption it replaced. The two states cannot overlap, so
-  # this cannot be deployed early by accident.
-  swapDevices = lib.optionals rootEncrypted [
+  swapDevices = [
     {
       device = "/swapfile";
       size = 4096;
@@ -172,8 +160,7 @@ in
         # and moving swap into a file on the encrypted root costs neither - see swapDevices below.
         ESP = {
           type = "EF00";
-          # 512 M while the swap partition is still between this and the data, 4.5 G once it is gone.
-          size = if rootEncrypted then "4608M" else "512M";
+          size = "4608M";
           content = {
             type = "filesystem";
             format = "vfat";
@@ -181,58 +168,29 @@ in
             mountOptions = [ "umask=0077" ];
           };
         };
-      }
-      // lib.optionalAttrs (!rootEncrypted) {
-        # THE HISTORICAL LAYOUT, kept only so that this configuration still describes the machine as it is until
-        # the repartition in PLAN_ENCRYPTION.md step 8a runs. Deleting this partition is what pays for the ESP
-        # above, and swap moves into the container - see swapDevices.
-        #
-        # Encrypted with a key generated fresh at every boot, and never stored anywhere. Swap is a hole straight
-        # through any other encryption on this machine: the kernel pages whatever is in RAM out to it - decrypted
-        # database rows, session tokens, key material a service had open - and 4 G of that sits on the same disk
-        # in the clear. A random per-boot key costs nothing here, since there is no keyslot to lose; all it rules
-        # out is hibernation, which these servers never do. The swapfile inherits both properties from the
-        # container it will live in.
-        swap = {
-          size = "4G";
-          type = "8200";
-          content = {
-            type = "swap";
-            randomEncryption = true;
-          };
-        };
-      }
-      // {
+
         nixos = {
           size = "100%";
-          content =
-            let
-              root = {
-                type = "filesystem";
-                format = "ext4";
-                mountpoint = "/";
-              };
-            in
-            if rootEncrypted then
-              {
-                type = "luks";
-                name = "cryptroot";
-                # Read only by disko's own format script, so it matters when a machine is installed from the
-                # ISO and never on the real gmktec1, which gets here by in-place conversion instead.
-                #
-                # There is no shell to write this file from: the ISO's unattended-install service conflicts
-                # with both gettys, so the install runs on a console with nobody on it. The ISO puts the file
-                # here itself before calling disko - from removable media, from a well-known value on a dev
-                # image, or by asking - see scripts/provision-luks-key.sh. Both ends read the path off the
-                # option so they cannot drift apart.
-                passwordFile = config.setup.luksKeyFile;
-                settings = {
-                  allowDiscards = true;
-                };
-                content = root;
-              }
-            else
-              root;
+          content = {
+            type = "luks";
+            name = "cryptroot";
+            # Read only by disko's own format script, so it matters when a machine is installed from the ISO and
+            # never on the real gmktec1, which got here by in-place conversion instead.
+            #
+            # There is no shell to write this file from: the ISO's unattended-install service conflicts with both
+            # gettys, so the install runs on a console with nobody on it. The ISO puts the file here itself before
+            # calling disko - from removable media, from a well-known value on a dev image, or by asking - see
+            # scripts/provision-luks-key.sh. Both ends read the path off the option so they cannot drift apart.
+            passwordFile = config.setup.luksKeyFile;
+            settings = {
+              allowDiscards = true;
+            };
+            content = {
+              type = "filesystem";
+              format = "ext4";
+              mountpoint = "/";
+            };
+          };
         };
       };
     };
