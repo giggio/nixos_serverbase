@@ -207,6 +207,16 @@ list_checks:
 #
 # `nix flake check --no-build` is the obvious thing and does not work here: it also evaluates `nixosModules` as
 # standalone modules, and those need `_module.args.inputs`, which only a machine gives them.
+#
+# $(eval_no_ifd) is what makes "building nothing" true rather than merely intended. An import from derivation -
+# `builtins.readFile "${someDrv}/file"`, of which `cargoLock.lockFile = "${src}/Cargo.lock"` is the usual sighting -
+# suspends evaluation, realises that derivation and resumes. That realisation is a build nobody asked for: it is not
+# in $(eval_costs_file), so the packing above has not budgeted a byte for it, and it lands inside the evaluator that
+# tripped it, at whatever moment that evaluator is already at its peak. On a workstation it is invisible; on CI's 4G
+# guest, tripped from inside a ~3G ISO evaluation, it takes the guest with it. Refusing it here fails the offending
+# attribute by name, in the second it takes to reach, instead of hours later somewhere with no memory to spare.
+eval_no_ifd = --option allow-import-from-derivation false
+
 ## Evaluates every machine, every check and every package, building and booting nothing
 eval:
 	@machines=$$($(machine_names_cmd)) || exit 1; \
@@ -230,7 +240,7 @@ eval:
 	failed=$$(mktemp); \
 	eval_one() { \
 	  local drv; \
-	  if drv=$$(nix eval $(nix_flags) --raw ".#$$1.drvPath"); then \
+	  if drv=$$(nix eval $(nix_flags) $(eval_no_ifd) --raw ".#$$1.drvPath"); then \
 	    printf '%s %s\n' "$$1" "$$drv"; \
 	  else \
 	    echo "FAILED to evaluate $$1" >&2; \
