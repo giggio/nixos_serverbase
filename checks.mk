@@ -130,11 +130,29 @@ check_names_cmd = nix eval $(nix_flags) --raw --apply 'cs: builtins.concatString
 # means one for every node of every check, ahead of every `make checks` run.
 check_memory_cmd = nix eval $(nix_flags) --raw --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrValues (builtins.mapAttrs (name: check: name + " " + builtins.toString (if check ? nodes then builtins.foldl'\'' (total: node: total + node.virtualisation.memorySize) 0 (builtins.attrValues check.nodes) else 0)) cs))' .\#checks.$(architecture)-linux
 
-machine_names_cmd = nix eval $(nix_flags) --raw --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrNames cs)' .\#nixosConfigurations
+# Drops the architecture-free aliases from a set of attribute names, leaving one name per derivation.
+#
+# `mkNixosConfigurations` publishes every machine twice: once as `<name><arch><variant>`, and once as
+# `<name><variant>` assigned to the SAME value, so a person - and `nixos-rebuild` inside the machine, which derives
+# the attribute from the hostname - can type a name with no architecture in it. `mkInstallerPackages` does the same
+# for `<name>_iso`. They are aliases in the Nix sense, the identical thunk under two names, so evaluating both means
+# starting a second process to compute a derivation the first one already produced. In this superproject that was 19
+# of 93 attributes, two of them the install ISOs, which are the most expensive attributes there are.
+#
+# An alias is recognised by construction rather than by comparing values, which is the thing that cannot be done
+# without evaluating: a name is an alias when some OTHER name in the same set becomes it once the architecture is
+# taken out. That direction matters. If the naming convention ever moves, no name maps onto another, nothing is
+# recognised as an alias and everything is evaluated - the same way a stale $(eval_costs_file) schedules too little
+# in parallel. This can waste time; it cannot silently drop an attribute nobody then checks.
+#
+# Only the spellings `mkNixosModuleName` can produce, which is `$${system}` minus "-linux" minus "_".
+canonical_names = ns: let names = builtins.attrNames ns; archs = [ "x8664" "aarch64" ]; strip = n: builtins.replaceStrings archs (map (_: "") archs) n; aliased = builtins.filter (n: n != null) (map (n: let bare = strip n; in if bare != n && builtins.elem bare names then bare else null) names); in builtins.concatStringsSep "\n" (builtins.filter (n: !(builtins.elem n aliased)) names)
+
+machine_names_cmd = nix eval $(nix_flags) --raw --apply '$(canonical_names)' .\#nixosConfigurations
 
 # The VM images, the install media and the helper packages - everything `nix build .#<x>` reaches that is not a check.
 # Only `eval` uses this; see the comment there for why the install images especially need to be in it.
-package_names_cmd = nix eval $(nix_flags) --raw --apply 'ps: builtins.concatStringsSep "\n" (builtins.attrNames ps)' .\#packages.$(architecture)-linux
+package_names_cmd = nix eval $(nix_flags) --raw --apply '$(canonical_names)' .\#packages.$(architecture)-linux
 
 .PHONY: checks full_checks checks_report list_checks dirty_checks cache_checks test eval eval_costs lint_md lint_md_all
 
@@ -176,12 +194,19 @@ list_checks:
 # `opi4pronas_img`) could not evaluate AT ALL for an unknown length of time, and nothing noticed. Nothing else covers
 # them. `nixosConfigurations` is a different attribute - an image wraps a machine in an sd-image/ISO builder with its
 # own nested `lib.nixosSystem`, and it was that nested system, not any machine, that was broken. `make checks` boots
-# machines and never builds an image; build.yaml's `make out/nix/system` builds the systems and not the media. So an
-# image is exercised only when someone reinstalls a server, which is exactly when a broken one is most expensive.
+# machines and never builds an image, and build.yaml's `make out/nix/system` builds the systems and not the media. So
+# an image is exercised only when someone reinstalls a server, which is exactly when a broken one is most expensive.
+# That argument is why the `_img` packages are in here and staying: nothing else reaches them at all.
 #
-# It is deliberately the whole `packages` attribute set rather than a filtered subset. The `machine_*` packages
-# duplicate work `nixosConfigurations` already did, which is a few seconds; a filter is a thing that silently stops
-# matching, which is the failure mode this whole target exists to catch.
+# The `_iso` packages are the one exception, and only where a host says so through $(eval_skip) - build.yaml now runs
+# `make out/nix/iso`, so on a host too small to evaluate one they are covered by something strictly better than this
+# target, a real build. Everywhere else the default stands and they are evaluated here like everything else.
+#
+# Otherwise it is deliberately the whole `packages` attribute set rather than a filtered subset. The `machine_*`
+# packages duplicate work `nixosConfigurations` already did, which is a few seconds; a filter is a thing that
+# silently stops matching, which is the failure mode this whole target exists to catch. $(eval_skip) is not that
+# filter: it is off unless a caller sets it, and the run prints the pattern it was given, so a pattern that has
+# stopped matching anything is on screen rather than implied by a number nobody counted.
 #
 # ONE PROCESS PER ATTRIBUTE, deliberately, even though a single `nix eval` over the whole attribute set would share
 # all the work between them and finish sooner. Sharing the work also means holding every evaluated configuration live
@@ -217,6 +242,21 @@ list_checks:
 # attribute by name, in the second it takes to reach, instead of hours later somewhere with no memory to spare.
 eval_no_ifd = --option allow-import-from-derivation false
 
+# Attributes this target leaves out, as an extended regular expression matched against the whole attribute path
+# (`packages.x86_64-linux.gmktec1_iso`, `nixosConfigurations.gmktec1x8664.config.system.build.toplevel`). Empty by
+# default, so a plain `make eval` still covers everything.
+#
+# It exists for one case: a host too small for an attribute that is not too big to be wrong, only too big to fit.
+# The bound here is the WORST attribute, not the average, because $(check_memory) is what decides whether a run
+# starts and an attribute over budget is started anyway rather than never - there is no lower gear than alone. So one
+# attribute that does not fit does not slow the run down, it stops it: CI's 4G guest spent 87 minutes inside a single
+# 2.9G `gmktec1_iso` and finished none of the other 92.
+#
+# Skipping is a real loss of coverage and belongs where that trade is visible, which is the workflow that knows how
+# big its guest is - not a default here. Write `$$` for a literal `$` if the pattern needs an end anchor, since make
+# expands this like any other variable.
+eval_skip ?=
+
 ## Evaluates every machine, every check and every package, building and booting nothing
 eval:
 	@machines=$$($(machine_names_cmd)) || exit 1; \
@@ -225,7 +265,8 @@ eval:
 	schedule=$$({ printf 'nixosConfigurations.%s.config.system.build.toplevel\n' $$machines; \
 	  printf 'checks.$(architecture)-linux.%s\n' $$checks; \
 	  printf 'packages.$(architecture)-linux.%s\n' $$packages; \
-	} | awk -v costs="$(eval_costs_file)" -v fallback=$(eval_overhead) -v margin=$(eval_cost_margin) ' \
+	} | { if [ -n '$(eval_skip)' ]; then grep -Ev '$(eval_skip)'; else cat; fi; } \
+	  | awk -v costs="$(eval_costs_file)" -v fallback=$(eval_overhead) -v margin=$(eval_cost_margin) ' \
 	  BEGIN { while ((getline line < costs) > 0) { split(line, f, " "); if (f[1] != "") cost[f[1]] = f[2] } } \
 	  { if ($$0 in cost) print $$0, int(cost[$$0] * (100 + margin) / 100), "measured"; \
 	    else print $$0, fallback, "assumed" }'); \
@@ -234,6 +275,7 @@ eval:
 	measured=$$(printf '%s\n' "$$schedule" | grep -c ' measured$$' || true); \
 	echo "evaluating $$(echo $$machines | wc -w) machines, $$(echo $$checks | wc -w) checks and $$(echo $$packages | wc -w) packages,"; \
 	echo "  up to $(eval_jobs) at a time within $$budget MiB; $$measured of $$total costed from $(eval_costs_file), the rest charged $(eval_overhead)"; \
+	if [ -n '$(eval_skip)' ]; then echo "  leaving out everything matching '$(eval_skip)'"; fi; \
 	if [ "$$measured" -eq 0 ]; then \
 	  echo "  no measurements, so this run is as serial as the budget makes it - regenerate with 'make eval_costs'"; \
 	fi; \
