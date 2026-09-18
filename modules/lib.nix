@@ -782,11 +782,26 @@
           machine:
           (
             let
+              # Only the machine's scalar metadata is published, because that is all a script can use: the one
+              # consumer is `make create_<machine>`, which reads `.extraDisks`. The three dropped attributes are
+              # NixOS modules, and `builtins.toJSON` cannot represent a module that is written as a function -
+              # which is the ordinary way to write one. It worked only as long as every entry in `modules`
+              # happened to be a path or a plain attribute set; the first `<input>.nixosModules.<name>` added to
+              # a machine failed the whole evaluation with "cannot convert a function to JSON", pointing at the
+              # input's flake.nix rather than at anything here.
+              #
+              # Serializing them would be no better if it worked: a module that names a package would drag that
+              # package's string context in, and printing a machine's metadata would build the service.
+              details = removeAttrs machine [
+                "modules"
+                "hardwareModule"
+                "specialArgs"
+              ];
               command = pkgs.runCommand "machine_${machine.name}" { } ''
                 mkdir -p "$out/bin"
                 cat << EOF > "$out/bin/machine_${machine.name}"
                 #!/usr/bin/env bash
-                echo '${builtins.toJSON machine}'
+                echo '${builtins.toJSON details}'
                 EOF
                 chmod +x "$out/bin/machine_${machine.name}";
               '';
