@@ -127,9 +127,9 @@
               # decrypt it at runtime with sops-nix, exactly like the servers do (modules/serverbase). The secrets used:
               #   - nixExtraSecretOptions: an `extra-substituters = https://.../servers` line, pulled into nix.conf via the
               #     `!include` below (see nix.extraOptions). This is the same secret and mechanism the servers use.
-              #   - attic_server + attic_token: assembled into a netrc so nix can AUTHENTICATE to the private cache. Without it,
-              #     the cache answers 401 Unauthorized and nixos-install cannot substitute the closure.
-              #   - attic_server (again): the bare cache hostname, read by the install script to poll for network readiness.
+              #   - attic_server: the bare cache hostname, read by the install script to poll for network readiness. It is
+              #     NOT a credential, and there is no longer a netrc: the cache substitutes anonymously, so nix needs
+              #     nothing to fetch the closure (2026-09-19; see modules/serverbase/secrets.nix for the measurement).
               # The age key that decrypts them lands at /etc/sops/age/server.agekey. It CANNOT go through nix (it would end up
               # world-readable in the store), so it is written straight into the SD image's ext4 root AFTER the build - see the
               # Makefile's out/nix/img/opi4pro.img.zst rule, which picks the machine's own key (`<machine>.agekey`) and only
@@ -149,17 +149,14 @@
                   keyFile = "/etc/sops/age/server.agekey";
                   generateKey = false;
                 };
+                # Still needed, and NOT as a credential: the install script reads it as a bare hostname to poll
+                # for network readiness. The netrc that used to be built from it plus `attic_token` is gone - the
+                # cache substitutes anonymously (see modules/serverbase/secrets.nix).
                 secrets.attic_server = { };
-                secrets.attic_token = { };
                 secrets.nixExtraSecretOptions = {
                   sopsFile = finalSystem.config.sops.secrets.nixExtraSecretOptions.sopsFile;
                   format = "binary";
                 };
-                # Same netrc the servers build (modules/serverbase/secrets.nix): credentials for the private cache.
-                templates.attic_netrc.content = ''
-                  machine ${config.sops.placeholder.attic_server}
-                  password ${config.sops.placeholder.attic_token}
-                '';
               };
 
               # ---------------------------------------------------------------------------------------------------------------
@@ -190,9 +187,6 @@
                   "servers:YRSK1sol6jQw7v0DRZhlGpzbJwvHENRRk6RTeuwE+Hs="
                   "giggio:gA25EMS+ouiC1xzWOKP68b7ikEfjmXohUT1PZ6aNP5c="
                 ];
-                # Credentials for the private cache (it requires auth - anonymous pulls get 401). Points at the runtime path of
-                # the sops-decrypted netrc template above, mirroring modules/serverbase/default.nix.
-                netrc-file = config.sops.templates.attic_netrc.path;
               };
 
               # Pull the private `extra-substituters` line into nix.conf at read time. `!include` is resolved by nix when it

@@ -202,8 +202,8 @@ in
     };
     sops.templates."git-askpass" = {
       content = ''
-        username=${config.sops.placeholder."codeberg_repo_clone/user"}
-        password=${config.sops.placeholder."codeberg_repo_clone/pat"}
+        username=${config.sops.placeholder."config_repo_clone/user"}
+        password=${config.sops.placeholder."config_repo_clone/pat"}
       '';
     };
   };

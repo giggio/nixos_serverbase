@@ -10,10 +10,8 @@
 # testNodes.fakeSecrets (modules/test-secrets.nix): encrypted at build time, with the plaintext stated right here.
 let
   secretValues = {
-    "codeberg_repo_clone/user" = "test-codeberg-user";
-    "codeberg_repo_clone/pat" = "test-codeberg-pat";
-    attic_server = "attic.test";
-    attic_token = "test-attic-token";
+    "config_repo_clone/user" = "test-config-repo-user";
+    "config_repo_clone/pat" = "test-config-repo-pat";
     # an ordinary nix setting whose default is not 7, so that reading it back proves the include was honoured
     nixExtraSecretOptions = "connect-timeout = 7\n";
   };
@@ -49,31 +47,23 @@ in
 
       with subtest("every declared secret is decrypted and readable only by root"):
           for path, expected in [
-              ("codeberg_repo_clone/user", "${secretValues."codeberg_repo_clone/user"}"),
-              ("codeberg_repo_clone/pat", "${secretValues."codeberg_repo_clone/pat"}"),
-              ("attic_server", "${secretValues.attic_server}"),
-              ("attic_token", "${secretValues.attic_token}"),
+              ("config_repo_clone/user", "${secretValues."config_repo_clone/user"}"),
+              ("config_repo_clone/pat", "${secretValues."config_repo_clone/pat"}"),
           ]:
               value = secret(path)
               assert value == expected, f"secret {path} decrypted to '{value}', expected '{expected}'"
               mode = ownership(path)
               assert mode == "400 root root", f"secret {path} is '{mode}', expected '400 root root'"
 
-      with subtest("the attic netrc is rendered with the credentials substituted in"):
-          netrc = secret("rendered/attic_netrc")
-          assert netrc.splitlines() == [
-              "machine ${secretValues.attic_server}",
-              "password ${secretValues.attic_token}",
-          ], f"the netrc template did not render as expected: {netrc}"
-          # 0440 root:users, because nix runs the substituter as the calling user, not as root
-          mode = ownership("rendered/attic_netrc")
-          assert mode == "440 root users", f"the netrc is '{mode}', expected '440 root users'"
-
-      with subtest("nix is pointed at that netrc"):
+      with subtest("no attic credential reaches the machine, and nix is not looking for one"):
+          # The cache substitutes anonymously, so there is no netrc to build. Both halves are asserted because
+          # removing the template while leaving `netrc-file` behind would point nix at a path nothing creates,
+          # and nix does not complain about that - it just stops authenticating, which looks like a flaky cache.
+          machine.fail("test -e /run/secrets/rendered/attic_netrc")
+          machine.fail("test -e /run/secrets/attic_token")
           netrc_setting = machine.succeed("nix config show netrc-file").strip()
-          assert netrc_setting == "/run/secrets/rendered/attic_netrc", \
-              f"nix reads its credentials from '{netrc_setting}'"
-          machine.succeed(f"test -f {netrc_setting}")
+          assert not netrc_setting.startswith("/run/secrets"), \
+              f"nix is still pointed at a sops-rendered netrc: '{netrc_setting}'"
 
       with subtest("the secret nix options are included into the daemon's configuration"):
           mode = ownership("nixExtraSecretOptions")
@@ -83,11 +73,11 @@ in
           assert timeout == "7", \
               f"connect-timeout is '{timeout}', so the secret options file was not included"
 
-      with subtest("the git askpass template carries the codeberg credentials"):
+      with subtest("the git askpass template carries the config repo credentials"):
           askpass = secret("rendered/git-askpass")
-          assert "username=${secretValues."codeberg_repo_clone/user"}" in askpass, \
+          assert "username=${secretValues."config_repo_clone/user"}" in askpass, \
               f"no username in the askpass file: {askpass}"
-          assert "password=${secretValues."codeberg_repo_clone/pat"}" in askpass, \
+          assert "password=${secretValues."config_repo_clone/pat"}" in askpass, \
               f"no password in the askpass file: {askpass}"
 
       (_, failed) = machine.systemctl("--failed --quiet")
