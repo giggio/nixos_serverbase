@@ -34,7 +34,42 @@ check_jobs ?= 4
 # server what is free depends on what the server is doing at the time. MemAvailable rather than MemTotal for the same
 # reason: the question is what can be taken without evicting the services. The fraction is headroom for a guest that
 # overshoots and for everything qemu allocates outside the guest.
-check_memory ?= $(shell awk '/^MemAvailable:/ { available = $$2 } END { printf "%d", (available ? available * 0.7 / 1024 : 8192) }' /proc/meminfo)
+#
+# Bounded by $(check_reserve) as well as by the fraction, because a fraction alone does not bound what it leaves
+# behind - see below.
+check_memory ?= $(shell awk -v reserve=$(check_reserve) '/^MemAvailable:/ { available = $$2 } \
+  END { \
+    if (!available) { print 8192; exit } \
+    mib = available / 1024; fraction = mib * 0.7; floor = mib - reserve; \
+    budget = (fraction < floor ? fraction : floor); \
+    printf "%d", (budget < 1 ? 1 : budget) \
+  }' /proc/meminfo)
+
+# Memory, in MiB, that $(check_memory) leaves unclaimed no matter how little the host has - an ABSOLUTE floor under
+# the 0.7 fraction above, which is a relative one. Whichever of the two is tighter wins.
+#
+# A fraction bounds what the suite takes and therefore says nothing about what is left. At this workstation's size 30%
+# of MemAvailable is many gigabytes of slack; in the smoke job's 4G kata guest, where MemAvailable reads ~3.63G, the
+# same 30% is ~1.09G, and that has to cover the job container, the guest kernel, and the page cache of every store
+# path `nix eval` substitutes and every flake input it unpacks. None of that is in the per-attribute costs, which are
+# measured on a warm store where the fetching has already happened.
+#
+# Smoke run #148 (2026-09-18) is what this is for. `gmktec1-containers` and `gmktec1-forgejo` were charged
+# 1131 * 1.15 = 1300 each from a stale $(eval_costs_file), so the pair came to 2600 against a 2602 budget and the
+# scheduler started both - by two MiB. They had since grown to 1252, so the pair really took 2507, leaving 1589 MiB
+# for everything above, and the guest OOM killer took the kata agent. It stops mid-log with no error of its own,
+# because the agent is what carries the output; see the comment on $(eval_overhead).
+#
+# Regenerating the costs fixed that instance - the honest 1252 charges 1439, two no longer fit, the pair goes serial.
+# It does not fix the class: the pair fit by two MiB, so the next ~10% of drift under a 15% margin puts some other
+# pair in the same place. 1536 is bounded below by the only hard number the incident produced, that the untracked
+# overhead exceeded 1589 MiB, and it binds where it is needed and nowhere else: the crossover is at
+# $(check_reserve) / 0.3, so below ~5G of MemAvailable the reserve decides and above it the fraction still does. The
+# workstation's budget is unchanged.
+#
+# A budget too small for even one attribute is not a failure mode - the schedulers skip the memory bound when nothing
+# else is running, so the floor is serial, which is the most a host that small can do anyway.
+check_reserve ?= 1536
 
 # What one check costs on top of its guests, in MiB. Each one runs its own `nix build`, which evaluates this flake -
 # the machine configurations included - before it starts a VM, and then stays resident for as long as the VM runs.
