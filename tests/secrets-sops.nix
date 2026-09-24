@@ -80,6 +80,15 @@ in
           assert "password=${secretValues."config_repo_clone/pat"}" in askpass, \
               f"no password in the askpass file: {askpass}"
 
+      with subtest("the SSH host keys are not imported as sops identities"):
+          # On a first boot sshd creates the host keys after activation has already run, so activate again once
+          # they exist: that is every later boot and every deploy on a real machine.
+          machine.wait_for_unit("sshd.service")
+          machine.succeed("test -e /etc/ssh/ssh_host_ed25519_key -a -e /etc/ssh/ssh_host_rsa_key")
+          activation = machine.succeed("/run/current-system/activate 2>&1")
+          assert "/etc/ssh/" not in activation, \
+              f"sops-install-secrets still reads an SSH host key as an identity:\n{activation}"
+
       (_, failed) = machine.systemctl("--failed --quiet")
       machine.log(f"systemctl --failed output: {failed}")
       assert "" == failed, "Expected no failed units and got: " + failed

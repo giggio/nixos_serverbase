@@ -11,7 +11,12 @@
     age = {
       keyFile = "/etc/sops/age/server.agekey";
       generateKey = false;
+      # sops-nix's defaults also turn the SSH host keys into identities: ed25519 into age, RSA into GPG. None was
+      # ever a recipient, but they sit on unencrypted roots, and making one a recipient later would let a stolen
+      # card open whatever it was added to. The machine's identity is the key file above, and nothing else.
+      sshKeyPaths = [ ];
     };
+    gnupg.sshKeyPaths = [ ];
     secrets = {
       # Forge-agnostic by name, deliberately: it was `codeberg_repo_clone` until 2026-09-19, which described the
       # forge that happened to host the repository rather than what the credential is for, and the configuration

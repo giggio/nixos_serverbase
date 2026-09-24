@@ -148,7 +148,10 @@
                 age = {
                   keyFile = "/etc/sops/age/server.agekey";
                   generateKey = false;
+                  # Only the key file, as on the installed machine (modules/serverbase/secrets.nix).
+                  sshKeyPaths = [ ];
                 };
+                gnupg.sshKeyPaths = [ ];
                 # Still needed, and NOT as a credential: the install script reads it as a bare hostname to poll
                 # for network readiness. The netrc that used to be built from it plus `attic_token` is gone - the
                 # cache substitutes anonymously (see modules/serverbase/secrets.nix).
