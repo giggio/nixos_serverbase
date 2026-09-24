@@ -10,12 +10,12 @@
 
 rustPlatform.buildRustPackage {
   pname = "systemd_traefik_configuration_provider";
-  version = "0.1.1";
+  version = "0.2.0";
 
   src = fetchgit {
     url = "https://codeberg.org/giggio/systemd_traefik_configuration_provider.git";
-    rev = "a41445127280dc4983cd2ae3edf65394f1b914c2";
-    hash = "sha256-9N4Z7HnVEUW0d/YIf0FXIqJd6dx79JrCiMZb+fOb6ps=";
+    rev = "321571cd0c38489a6a1a31c5e691ca4f15b027ef";
+    hash = "sha256-2jTBT/9N2P40R6qXRuc/DWnb4Q3ApT/kZXhl0uPgssg=";
   };
 
   # A vendor hash, and NOT `cargoLock.lockFile = "${src}/Cargo.lock"`. That form reads a file out of a DERIVATION, so merely
@@ -26,7 +26,7 @@ rustPlatform.buildRustPackage {
   #
   # It covers the crate set `src`'s Cargo.lock names, so it moves when that lock does - which is to say when `rev` above
   # moves, and never on its own. `nix build` prints the new value on a mismatch.
-  cargoHash = "sha256-WJ30fyZcYVsMfyMPHgH3uhcCG5Zhbgku5XpKRrO/Fzw=";
+  cargoHash = "sha256-p+eqsx3KWi+nvFYXMr+NEonletw1lsyDnyRBCg7qAK4=";
 
   meta = with lib; {
     description = "Traefik Configuration Provider from systemd";
