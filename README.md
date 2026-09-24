@@ -346,7 +346,11 @@ nix run nixpkgs#sops modules/serverbase/secrets/shared.yaml # if not using the f
 You will need to use one of the keys listed in the [.sops.yaml](.sops.yaml) file.
 If you don't have it, remove the file and create a new one.
 
-You can find the file layout by looking at [./modules/serverbase/secrets.nix](./modules/serverbase/secrets.nix).
+It holds `attic_server`, read by the opi4pro installer
+([./modules/setup-opi4pro.nix](./modules/setup-opi4pro.nix)). A machine that clones its configuration repository
+with credentials (`setup.nixosConfig.useCredentials`) also needs `config_repo_clone/user` and
+`config_repo_clone/pat` in it, declared in
+[./modules/serverbase/clone-config.nix](./modules/serverbase/clone-config.nix).
 
 ## Contributing
 

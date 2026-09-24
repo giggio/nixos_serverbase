@@ -83,7 +83,7 @@ in
       usePrivateRepo = mkEnableOption "Set if private repo should be used" // {
         default = true;
       };
-      useCredentials = mkEnableOption "Set if credentials should be used";
+      useCredentials = mkEnableOption "cloning with credentials, from `config_repo_clone/user` and `config_repo_clone/pat` in the sops file";
     };
   };
   config = {
