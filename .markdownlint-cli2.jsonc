@@ -7,7 +7,10 @@
       // satisfy the limit, which decides content by column width, or the rule is off for tables. It is off.
       "tables": false
     },
-    "MD034": false
+    "MD034": false,
+    "MD046": {
+      "style": "fenced"
+    }
   },
   "globs": [
     "**/*.md"

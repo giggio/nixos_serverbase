@@ -354,7 +354,7 @@ with credentials (`setup.nixosConfig.useCredentials`) also needs `config_repo_cl
 
 ## Contributing
 
-Questions, comments, bug reports, and pull requests are all welcome.  Submit
+Questions, comments, bug reports, and pull requests are all welcome. Submit
 them at [the project on Codeberg](https://codeberg.org/giggio/nixos_serverbase/).
 
 Bug reports that include steps-to-reproduce (including code) are the best. Even
