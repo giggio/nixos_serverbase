@@ -342,13 +342,18 @@ setup.encryptedState.paths."/var/lib/mything" = [
 separate files without either knowing about the other. There is no central list to keep in step, and deleting a
 service takes its entry with it.
 
-Then create the directory inside the container and let the service populate it, or migrate an existing one:
+Then migrate the existing directory into the container:
 
 ```bash
 sudo encrypted-state-migrate /var/lib/mything
 ```
 
-If the path does not exist yet, `migrate` just creates it empty inside the container.
+A path that holds nothing yet needs no migration at all. On a machine where `bindState` is already on, the switch
+that declares it is enough: systemd creates the missing source directory of a bind mount before mounting it, so the
+path comes up bound to a new, empty directory inside the container and the service populates it there. Running
+`migrate` afterwards is harmless - it reports `already a mount point; nothing to migrate.` for that path - but the
+closing banner it prints on every run, about originals parked at `*.premigrated` and services being down, does not
+apply to it. Before `bindState` is on, `migrate` creates the directory empty inside the container instead.
 
 ## What must not go in the container
 
