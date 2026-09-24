@@ -200,8 +200,19 @@ in
           };
       };
     };
-    sops.templates."git-askpass" = {
-      content = ''
+    # Only a machine that clones with credentials declares them. The mechanism is kept because it works and is the
+    # only thing standing between a private configuration repository and a machine that cannot install itself, but
+    # declared unconditionally it made every machine's sops file carry a credential nothing read - and a missing
+    # key fails sops-nix at activation, so the value could not even be deleted.
+    #
+    # Forge-agnostic by name, deliberately: it was `codeberg_repo_clone` until 2026-09-19, which described the forge
+    # that happened to host the repository rather than what the credential is for.
+    sops = lib.mkIf config.setup.nixosConfig.useCredentials {
+      secrets = {
+        "config_repo_clone/user" = { };
+        "config_repo_clone/pat" = { };
+      };
+      templates."git-askpass".content = ''
         username=${config.sops.placeholder."config_repo_clone/user"}
         password=${config.sops.placeholder."config_repo_clone/pat"}
       '';

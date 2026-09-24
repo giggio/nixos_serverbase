@@ -94,7 +94,7 @@
             vimFiles.enable = lib.mkDefault false;
             nixosConfig = {
               enable = lib.mkDefault false;
-              useCredentials = false;
+              useCredentials = lib.mkDefault false;
             };
           };
         };

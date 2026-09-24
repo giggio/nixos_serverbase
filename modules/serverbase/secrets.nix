@@ -17,19 +17,6 @@
       sshKeyPaths = [ ];
     };
     gnupg.sshKeyPaths = [ ];
-    secrets = {
-      # Forge-agnostic by name, deliberately: it was `codeberg_repo_clone` until 2026-09-19, which described the
-      # forge that happened to host the repository rather than what the credential is for, and the configuration
-      # repositories have since moved to a self-hosted Forgejo.
-      #
-      # NOTHING READS THIS TODAY and it is kept anyway. `setup.nixosConfig.useCredentials` defaults to false, and
-      # the clone unit only runs when the clone directory is missing, so on an existing machine the template is
-      # built and never opened. It stays because the mechanism works and is the only thing standing between a
-      # private configuration repository and a machine that cannot install itself - deleting it would be free
-      # today and expensive on the day the repository stops being readable anonymously.
-      "config_repo_clone/user" = { };
-      "config_repo_clone/pat" = { };
-    };
   };
 }
 
