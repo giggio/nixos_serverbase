@@ -46,10 +46,9 @@
           assert "giggio:gA25EMS+ouiC1xzWOKP68b7ikEfjmXohUT1PZ6aNP5c=" in keys, \
               f"the personal cache's key is not trusted, only: {keys}"
 
-      with subtest("the daemon reads its credentials from the paths sops renders"):
-          netrc = nix_setting("netrc-file")
-          assert netrc.startswith("/run/secrets/"), \
-              f"netrc-file is '{netrc}', expected a path sops renders under /run/secrets"
+      with subtest("the daemon optionally includes the secret options sops renders"):
+          # There is no sops-rendered netrc any more: the cache substitutes anonymously since 2026-09-19, and
+          # secrets-sops asserts that netrc-file no longer points at /run/secrets.
           # `!include` (as opposed to `include`) is what keeps a machine bootable when the secret is not there yet
           config_file = machine.succeed("cat /etc/nix/nix.conf")
           assert "!include /run/secrets/" in config_file, \
