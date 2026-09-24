@@ -84,6 +84,16 @@
         assert default_runtime == "kata", \
             f"docker-kata default runtime is '{default_runtime}', expected 'kata'"
 
+    with subtest("kata guests' memory is backed outside /dev/shm, on a tmpfs that fits every guest"):
+        backend = machine.succeed(
+            "sed -n 's/^file_mem_backend = //p' /etc/docker-kata-kata/configuration.toml"
+        ).strip()
+        assert backend == '"/run/kata-memory"', f"kata's file_mem_backend is {backend}, expected \"/run/kata-memory\""
+        fstype, size = machine.succeed("findmnt -rn -o FSTYPE,SIZE /run/kata-memory").split()
+        assert fstype == "tmpfs", f"/run/kata-memory is {fstype}, expected its own tmpfs"
+        memory = machine.succeed("sed -n 's/^default_memory = //p' /etc/docker-kata-kata/configuration.toml").strip()
+        assert size == f"{int(memory) // 1024}G", f"/run/kata-memory is {size}, expected one {memory}M guest"
+
     (_, failed) = machine.systemctl("--failed --quiet")
     machine.log(f"systemctl --failed output: {failed}")
     assert "" == failed, "Expected no failed units and got: " + failed
