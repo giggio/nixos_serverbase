@@ -20,6 +20,7 @@ with pkgs;
   tree-sitter # An incremental parsing system for programming tools https://github.com/tree-sitter/tree-sitter
   marksman # Write Markdown with code assist and intelligence in the comfort of your favourite editor https://github.com/artempyanykh/marksman/
   markdownlint-cli2 # Fast, flexible, configuration-based command-line interface for linting Markdown/CommonMark files with the markdownlint library https://github.com/DavidAnson/markdownlint-cli2
+  rumdl # Markdown linter and formatter https://github.com/rvben/rumdl
   nixd # Nix language server https://github.com/nix-community/nixd/tree/main
   ripgrep # Line-oriented search tool that recursively searches your current directory for a regex pattern https://github.com/BurntSushi/ripgrep
   fd # Simple, fast and user-friendly alternative to find https://github.com/sharkdp/fd

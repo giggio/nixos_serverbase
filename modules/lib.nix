@@ -837,7 +837,7 @@
             sops
             iproute2
             attic-client
-            markdownlint-cli2 # `make lint_md`
+            rumdl # `make lint_md`
           ]
           ++ extraModules;
         shellHook = /* bash */ ''

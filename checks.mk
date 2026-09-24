@@ -209,11 +209,11 @@ lint_md:
 	            git ls-files --others --exclude-standard -- '*.md'; } | sort -u); \
 	if [ -z "$$files" ]; then echo "no markdown changed in this working tree"; exit 0; fi; \
 	echo "$$files" | sed 's/^/  linting /'; \
-	markdownlint-cli2 --no-globs $$files
+	rumdl check $$files
 
 ## Lints every markdown file in the repository. For the sweep commit, not for everyday work - see lint_md.
 lint_md_all:
-	@markdownlint-cli2
+	@rumdl check
 
 ## Lists the checks this flake defines
 list_checks:

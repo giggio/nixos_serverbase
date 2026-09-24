@@ -8,3 +8,4 @@ result
 out
 .direnv
 *.qcow2
+.rumdl_cache
