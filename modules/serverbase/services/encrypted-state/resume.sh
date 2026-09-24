@@ -43,11 +43,10 @@ for unit in $released; do
 done
 echo "started what was not already running"
 
-# Anything that derives its configuration from what is currently running has just been left with a stale answer.
-# See resumeRestartUnits, and the Traefik provider on gmktec1 that gave one service no route after exactly this.
+# Anything that failed its way through the migration window and cannot come back by itself. See resumeRestartUnits.
 for unit in $RESUME_RESTART_UNITS; do
   [ "$(systemctl show -p LoadState --value "$unit")" = "loaded" ] || continue
-  echo "restarting $unit so it sees what just came up"
+  echo "restarting $unit now that what it needs is back"
   systemctl reset-failed "$unit" 2>/dev/null || true
   systemctl restart --no-block "$unit" || echo "could not restart $unit" >&2
 done

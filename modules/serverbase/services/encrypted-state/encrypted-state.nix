@@ -431,19 +431,12 @@ in
     resumeRestartUnits = mkOption {
       type = types.listOf types.str;
       default = [ ];
-      example = [ "systemd_traefik_configuration_provider.service" ];
+      example = [ "gitea-runner-home_instance.service" ];
       description = ''
         Units to restart after this module has started the guarded services itself — at the end of a heal, or when
         the second deploy releases the migration guards.
 
-        Two shapes of unit belong here.
-
-        First, things that derive their configuration from what is *currently* running rather than from what
-        exists. A reverse proxy built that way has no route for a service that came up outside the ordering it
-        watches, and the symptom is one service missing from the proxy while everything else works — which reads
-        as a fault in that service.
-
-        Second, things that failed their way through the outage and cannot come back by themselves. A unit that
+        These are things that failed their way through the outage and cannot come back by themselves. A unit that
         depends on a service inside the container will fail every time systemd retries it, and a unit whose
         `StartLimitBurst` is a budget for the whole boot — `StartLimitIntervalSec = "infinity"` — runs out of
         attempts long before the container returns, then refuses to start at all. This module resets that limit

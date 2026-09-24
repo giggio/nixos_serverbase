@@ -48,15 +48,14 @@ EOF
   fi
 }
 
-# Things that read what is RUNNING rather than what exists, and so are wrong until they look again. On gmktec1 that
-# is the Traefik configuration provider: services started outside the ordering it watches get no route, and the
-# symptom is one application missing from the proxy while everything else works - which reads as a fault in that
-# application rather than in the proxy. Only after something was actually started, so an ordinary tick is silent.
+# Things that failed their way through the outage and cannot come back by themselves, like gmktec1's forgejo runners
+# once their start budget is spent. See resumeRestartUnits. Only after something was actually started, so an
+# ordinary tick is silent.
 restart_dependent_units() {
   local unit
   for unit in $RESUME_RESTART_UNITS; do
     [ "$(systemctl show -p LoadState --value "$unit")" = "loaded" ] || continue
-    echo "restarting $unit so it sees what just came up"
+    echo "restarting $unit now that what it needs is back"
     # Same start-limit problem as above, and worse here: `restart` on a start-limit-hit unit does not restart it,
     # it fails - so without this the list would look serviced and change nothing.
     systemctl reset-failed "$unit" 2>/dev/null || true
