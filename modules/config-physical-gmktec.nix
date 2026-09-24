@@ -129,7 +129,7 @@
   # already inside the same encryption, unlocked by the same key, with one less dm-crypt layer to configure and
   # nothing extra to go wrong at boot.
   #
-  # Same 4 G as the partition it replaces, and it is really used - 2 G of it on a 7.5 G machine. It rules out
+  # Same 4 G as the partition it replaces, which had 2 G in use when the machine had 7.5 G of RAM. It rules out
   # hibernation exactly as `randomEncryption` did, which costs these servers nothing.
   #
   # NixOS creates the file itself when it is missing, so there is nothing to do by hand after a reinstall.
@@ -156,7 +156,7 @@
         #
         # It could only grow this way. The ESP is the first partition and the data partition is the last, so
         # anything taken from the end would have meant moving 472 G; anything taken from swap-as-a-partition would
-        # have meant cutting swap on a box with 7.5 G of RAM that had 2 G of swap in use. Removing the partition
+        # have meant cutting swap on a box that then had 7.5 G of RAM and 2 G of swap in use. Removing the partition
         # and moving swap into a file on the encrypted root costs neither - see swapDevices below.
         ESP = {
           type = "EF00";

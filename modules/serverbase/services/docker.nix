@@ -103,8 +103,8 @@
       daemons = lib.attrsets.attrValues config.setup.docker.extra-daemons;
       kataDaemons = builtins.filter (daemon: daemon.kata-runtime.enable) daemons;
       # With virtio-fs, kata backs the whole guest RAM with a deleted file in `file_mem_backend`, /dev/shm when unset.
-      # A 4G guest in gmktec1's 3.8G /dev/shm filled it as the guest touched its memory, and every Postgres query
-      # that needed dynamic shared memory failed until the job ended. This tmpfs keeps guests out of /dev/shm, and is
+      # A 4G guest in gmktec1's /dev/shm, 3.8G when that box had 8G of RAM, filled it as the guest touched its memory,
+      # and every Postgres query that needed dynamic shared memory failed until the job ended. This tmpfs keeps guests out of /dev/shm, and is
       # sized so every kata guest fits whole at once: it only caps, the memory is spent as the guests touch it.
       kataMemoryDir = "/run/kata-memory";
       kataMemorySize = lib.lists.foldl' (sum: daemon: sum + daemon.kata-runtime.memory) 0 kataDaemons;

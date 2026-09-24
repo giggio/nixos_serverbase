@@ -60,7 +60,7 @@
           modules = [ ./configuration.nix ];
           supportsIso = true;
           supportsImg = false;
-          vmMemorySize = 8;
+          vmMemorySize = 16;
           vmDiskSize = 48;
           useEFIBoot = true;
         }

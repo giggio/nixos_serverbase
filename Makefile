@@ -264,6 +264,7 @@ create_and_start_from_iso_%: vm_name=$*$(shell expr $(call vm_count,$*) + 1)
 create_and_start_from_iso_%: vm_dir=$(VMS_DIR)/$(vm_name)
 create_and_start_from_iso_%: TMPDIR:=$(shell mktemp -d nix-vm.XXXXXXXXXX --tmpdir)
 create_and_start_from_iso_%: disk_path=$(vm_dir)/$(vm_name).qcow2
+create_and_start_from_iso_%: vm_memory_mib=$(shell echo $$(( $$(nix run $(nix_flags) --offline .#machine_$* | jq -r '.vmMemorySize // 4') * 1024 )))
 create_and_start_from_iso_%:
 ### VM Management
 ## Create and starts a new VM that does not yet have an installation and will be installed via ISO (slower)
@@ -292,7 +293,7 @@ $(create_and_start_from_iso_machines): create_and_start_from_iso_%: $(out_iso_di
 	qemu-system-x86_64 -machine type=q35,smm=on -machine accel=kvm -cpu max \\\n\
 	  -global driver=cfi.pflash01,property=secure,value=on \\\n\
 	  -name $* \\\n\
-	  -m 8192 \\\n\
+	  -m $(vm_memory_mib) \\\n\
 	  -smp 4 \\\n\
 	  -nographic \\\n\
 	  -enable-kvm \\\n\
@@ -325,7 +326,7 @@ $(create_and_start_from_iso_machines): create_and_start_from_iso_%: $(out_iso_di
 	  qemu-system-x86_64 -machine type=q35,smm=on -machine accel=kvm -cpu max \
 	    -global driver=cfi.pflash01,property=secure,value=on \
 	    -name $* \
-	    -m 8192 \
+	    -m $(vm_memory_mib) \
 	    -enable-kvm \
 	    -cdrom $$(realpath "$(out_iso_dir)/$*.iso") \
 	    -boot order=c,once=d \

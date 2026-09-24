@@ -22,8 +22,8 @@ check_jobs ?= 4
 # $(check_overhead). The second bound, and the one a count alone cannot express, since nothing says the checks are
 # the same size.
 #
-# The absence of this bound killed the weekly update run of 2026-08-04 on gmktec1, whose runner shares its 8G with
-# everything that machine serves. The checks then declared 4G each (gmktec1's boot check 6G, pi4-servarr-live 8G), so
+# The absence of this bound killed the weekly update run of 2026-08-04 on gmktec1, whose runner shared its then 8G
+# with everything that machine serves. The checks then declared 4G each (gmktec1's boot check 6G, pi4-servarr-live 8G), so
 # the four alphabetically first ones - exactly what a flat `-P 4` starts with - came to 18G of guest memory before a
 # single service inside them had started. The kernel OOM killer took 13 checks one at a time, and since it sends
 # SIGKILL, each log just stopped mid-boot with nothing in it: 14 failures, not one log naming a failure. Those
@@ -246,7 +246,8 @@ list_checks:
 # ONE PROCESS PER ATTRIBUTE, deliberately, even though a single `nix eval` over the whole attribute set would share
 # all the work between them and finish sooner. Sharing the work also means holding every evaluated configuration live
 # at once: measured, that peaks at 18G over 26 machines, which is comfortable on a workstation and was killed
-# outright on the 8G box that runs CI - `make eval` died with `Error 137` there while passing here.
+# outright on the box that runs CI, which had 8G then and has 16G now - still short of it. `make eval` died with
+# `Error 137` there while passing here.
 #
 # Scheduled by the same bin-packing loop as `checks`, and for the same reason: the bound that binds is a weight, not
 # a count, so a slot has to be given back with the size of what was in it. It used to be a flat `xargs -P N` with N
@@ -483,8 +484,9 @@ full_checks: checks
 #
 # How many is a memory question, not a vCPU one, which is why this is not simply `nproc`. There is no qemu here, so
 # $(check_memory) is spent entirely on evaluators at $(check_overhead) each - about 1.2G apiece, measured. On a
-# workstation that resolves to more than there are cores and `nproc` wins; on the 8G box that runs CI it resolves to
-# two, and the difference is whether this target OOMs. `nproc` alone was the original value and would be four there.
+# workstation that resolves to more than there are cores and `nproc` wins; on the box that runs CI, when it had 8G, it
+# resolved to two, and the difference was whether this target OOMed. `nproc` alone was the original value and would
+# have been four there.
 dirty_jobs ?= $(call jobs_that_fit,$(check_overhead))
 dirty_checks:
 	@names=$$($(check_names_cmd)) || exit 1; \
