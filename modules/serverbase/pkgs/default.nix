@@ -17,4 +17,10 @@ with pkgs;
   systemd_traefik_configuration_provider =
     callPackage ./systemd_traefik_configuration_provider.nix
       { };
+  # Upstream verifies a security key's signature but never looks at its user-presence bit, so the touch that sudo
+  # relies on (sudo.nix) is enforced only on the client, where the flags in a key handle file can be edited. The patch
+  # rejects a signature made without a touch, as sshd does, and adds the unit tests that run in the build.
+  pam_rssh = pam_rssh.overrideAttrs (old: {
+    patches = (old.patches or [ ]) ++ [ ./pam_rssh-require-user-presence.patch ];
+  });
 }

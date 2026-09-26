@@ -1,0 +1,102 @@
+diff --git a/src/error.rs b/src/error.rs
+index 28ed9f4..28c4658 100644
+--- a/src/error.rs
++++ b/src/error.rs
+@@ -22,6 +22,7 @@ pub enum RsshErr {
+     OptValEmptyErr(String),
+     OptVarErr(String),
+     SendPromptErr,
++    SkNoUserPresenceErr,
+ }
+ 
+ impl RsshErr {
+@@ -57,6 +58,7 @@ impl Display for RsshErr {
+             RsshErr::OptValEmptyErr(name) => format!("Value of option `{}` is empty", name),
+             RsshErr::OptVarErr(name) => format!("Failed to evaluate variables in option `{}`", name),
+             RsshErr::SendPromptErr => S!("Failed to send prompt message"),
++            RsshErr::SkNoUserPresenceErr => S!("Security key signed without user presence (no touch)"),
+         };
+         f.write_str(&msg)
+     }
+diff --git a/src/sign_verify.rs b/src/sign_verify.rs
+index 1fbd3bb..7a8c4de 100644
+--- a/src/sign_verify.rs
++++ b/src/sign_verify.rs
+@@ -11,6 +11,8 @@ use super::error::RsshErr;
+ 
+ type ErrType = Box<dyn std::error::Error>;
+ 
++const SK_USER_PRESENT: u8 = 0x01;
++
+ trait ToOpensslKey {
+     type OpensslKeyResult;
+     fn to_pkey(&self) -> Self::OpensslKeyResult;
+@@ -144,6 +146,13 @@ fn preprocess_content_and_sig(
+         // regenerate the message as per U2F spec
+         PublicKey::SkEcDsa(_) | PublicKey::SkEd25519(_) => {
+             let sig: proto::SkSignature = from_bytes(ssh_sig)?;
++            // The authenticator sets this bit only when the user touched it. sshd refuses a signature without it
++            // unless the key is marked no-touch-required; checking it here keeps the touch from being enforced only
++            // on the client, where the flags in a key handle file can be edited to skip it.
++            if sig.flags & SK_USER_PRESENT == 0 {
++                warn!("security key signature without user presence, rejecting it");
++                return Err(RsshErr::SkNoUserPresenceErr.into_ptr());
++            }
+             let app = match pubkey {
+                 PublicKey::SkEcDsa(k) => &k.application,
+                 PublicKey::SkEd25519(k) => &k.application,
+@@ -220,3 +229,54 @@ fn test_dsa_sign_verify() {
+     verifier.update(data2).unwrap();
+     assert!(verifier.verify(&signature).unwrap());
+ }
++
++#[cfg(test)]
++fn sk_ed25519_signature(flags: u8, challenge: &[u8]) -> (PublicKey, Vec<u8>) {
++    use byteorder::{BigEndian, WriteBytesExt};
++    use openssl::sha::sha256;
++    use openssl::sign::Signer;
++    use ssh_agent::proto::public_key::SkEd25519PublicKey;
++
++    let application = String::from("ssh:");
++    let key = PKey::generate_ed25519().unwrap();
++    let counter = 7u32;
++    // what a FIDO authenticator signs: sha256(application) || flags || counter || sha256(data)
++    let mut signed = Vec::new();
++    signed.extend_from_slice(&sha256(application.as_bytes()));
++    signed.push(flags);
++    signed.write_u32::<BigEndian>(counter).unwrap();
++    signed.extend_from_slice(&sha256(challenge));
++    let blob = Signer::new_without_digest(&key)
++        .unwrap()
++        .sign_oneshot_to_vec(&signed)
++        .unwrap();
++    let pubkey = PublicKey::SkEd25519(SkEd25519PublicKey {
++        enc_a: key.raw_public_key().unwrap(),
++        application,
++    });
++    let sig = proto::SkSignature {
++        algorithm: String::from("sk-ssh-ed25519@openssh.com"),
++        blob,
++        flags,
++        counter,
++    };
++    (pubkey, proto::to_bytes(&sig).unwrap())
++}
++
++#[test]
++fn test_sk_signature_with_user_presence_is_accepted() {
++    let challenge = gen_challenge().unwrap();
++    let (pubkey, sig) = sk_ed25519_signature(SK_USER_PRESENT, &challenge);
++    assert!(verify_signature(&challenge, &pubkey, &sig).unwrap());
++    // and it is really verified, not waved through
++    let other = gen_challenge().unwrap();
++    assert!(!verify_signature(&other, &pubkey, &sig).unwrap());
++}
++
++#[test]
++fn test_sk_signature_without_user_presence_is_rejected() {
++    let challenge = gen_challenge().unwrap();
++    // a valid signature, only the touch is missing
++    let (pubkey, sig) = sk_ed25519_signature(0, &challenge);
++    assert!(verify_signature(&challenge, &pubkey, &sig).is_err());
++}

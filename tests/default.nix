@@ -2,6 +2,7 @@
   boot-test = ./boot.nix;
   base-packages = ./base-packages.nix;
   base-users-ssh = ./base-users-ssh.nix;
+  base-sudo = ./base-sudo.nix;
   base-initrd-ssh = ./base-initrd-ssh.nix;
   secureboot = ./secureboot.nix;
   base-networking = ./base-networking.nix;
