@@ -60,16 +60,21 @@ let
   unmountedCheck = mkMountCheck "unmounted-check" [ "/definitely-not-a-mount" ];
 
   traefikDropin =
-    isDev:
-    helpers.systemd.mkSystemdPackageForTraefik {
-      inherit pkgs isDev;
-      host = "myapp";
-      port = 8080;
-      serviceName = "myapp-server";
-      domain = "example.test";
-    };
-  traefikProd = traefikDropin false;
-  traefikDev = traefikDropin true;
+    args:
+    helpers.systemd.mkSystemdPackageForTraefik (
+      {
+        inherit pkgs;
+        isDev = false;
+        host = "myapp";
+        port = 8080;
+        serviceName = "myapp-server";
+        domain = "example.test";
+      }
+      // args
+    );
+  traefikProd = traefikDropin { };
+  traefikDev = traefikDropin { isDev = true; };
+  traefikNoResolver = traefikDropin { certResolver = null; };
   dropinDir = "lib/systemd/system/myapp-server.service.d";
 in
 pkgs.runCommand "helpers"
@@ -99,6 +104,16 @@ pkgs.runCommand "helpers"
     grep -qF 'Label=traefik.http.routers.myapp.tls.certresolver=le' "$metadata"
     grep -qF 'Label=traefik.http.routers.myapp.tls.domains[0].main=*.example.test' "$metadata"
     grep -qF 'Label=traefik.http.services.myapp.loadbalancer.servers[0].url=http://127.0.0.1:8080' "$metadata"
+
+    echo "a machine with no certificate resolver gets a router that names none, and still serves over TLS"
+    receiver="${traefikNoResolver}/${dropinDir}/traefik_metadata.conf"
+    grep -qF 'Label=traefik.http.routers.myapp.tls=true' "$receiver"
+    grep -qF 'Label=traefik.http.routers.myapp.rule=Host(`myapp.example.test`)' "$receiver"
+    grep -qF 'Label=traefik.http.services.myapp.loadbalancer.servers[0].url=http://127.0.0.1:8080' "$receiver"
+    if grep -q 'certresolver\|tls.domains' "$receiver"; then
+      echo "the drop-in names a resolver it was told not to" >&2
+      exit 1
+    fi
 
     echo "only a dev drop-in also serves the host over plain http"
     test ! -e "${traefikProd}/${dropinDir}/traefik_metadata_insecure.conf"

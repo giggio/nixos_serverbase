@@ -43,22 +43,36 @@
         serviceName,
         domain,
         isDev ? false,
+        # The certificate resolver the router names, or null on a machine that has none. Traefik does not stop on a
+        # router naming a resolver it does not have: it logs `Router uses a nonexistent certificate resolver` as an
+        # error for that router on every configuration reload, and serves it with the default certificate anyway. So a
+        # machine that receives its certificate as a file (see `setup.traefik.issuesCertificates` in the sibling
+        # repository) should pass null, which keeps that error out of its log: the router then carries only `tls=true`.
+        # Null also leaves out the wildcard domain, which is only ever a request to the resolver.
+        certResolver ? "le",
       }:
       let
         traefikServiceRouterBase = "traefik.http.routers.${host}";
+        labels = [
+          "Label=${traefikServiceRouterBase}.service=${host}"
+          "Label=${traefikServiceRouterBase}.entrypoints=websecure"
+          "Label=${traefikServiceRouterBase}.rule=Host(`${host}.${domain}`)"
+          "Label=${traefikServiceRouterBase}.tls=true"
+        ]
+        ++ lib.optionals (certResolver != null) [
+          "Label=${traefikServiceRouterBase}.tls.certresolver=${certResolver}"
+          "Label=${traefikServiceRouterBase}.tls.domains[0].main=*.${domain}"
+        ]
+        ++ [
+          "Label=traefik.http.services.${host}.loadbalancer.servers[0].url=http://127.0.0.1:${toString port}"
+        ];
       in
       pkgs.runCommand "${host}_traefik_dropin" { } (
         (/* bash */ ''
           mkdir -p $out/lib/systemd/system/${serviceName}.service.d
           cat > $out/lib/systemd/system/${serviceName}.service.d/traefik_metadata.conf <<'EOF'
           [X-Traefik]
-          Label=${traefikServiceRouterBase}.service=${host}
-          Label=${traefikServiceRouterBase}.entrypoints=websecure
-          Label=${traefikServiceRouterBase}.rule=Host(`${host}.${domain}`)
-          Label=${traefikServiceRouterBase}.tls=true
-          Label=${traefikServiceRouterBase}.tls.certresolver=le
-          Label=${traefikServiceRouterBase}.tls.domains[0].main=*.${domain}
-          Label=traefik.http.services.${host}.loadbalancer.servers[0].url=http://127.0.0.1:${toString port}
+          ${lib.concatStringsSep "\n" labels}
           EOF
         '')
         + (lib.strings.optionalString isDev /* bash */ ''
