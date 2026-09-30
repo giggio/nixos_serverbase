@@ -122,6 +122,13 @@ in
               definition = interactive_shell(f"type {alias}")
               assert expected in definition, f"'{alias}' does not resolve to {expected}: {definition}"
 
+          # The aliases have to run, not only exist. The system's eza is from the stable channel, and 0.23.4 refused
+          # the `--hyperlink=always` they pass, so the user's must come first in PATH.
+          eza = interactive_shell("type -P eza")
+          assert eza.startswith("/etc/profiles/per-user/${user}/"), f"eza resolves to {eza}, not the home profile's"
+          for command in ["ll /", "l /", "tree -L 1 /"]:
+              interactive_shell(command)
+
       with subtest("an interactive shell gets the shell integrations"):
           # starship_precmd rather than PROMPT_COMMAND: with ble.sh loaded, which .bashrc does unless told not to,
           # starship registers it with ble.sh's own hook instead, and `bash -ic` never draws a prompt to fill PS1
