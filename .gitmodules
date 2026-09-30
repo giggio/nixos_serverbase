@@ -1,0 +1,3 @@
+[submodule "modules/serverbase/home-manager"]
+	path = modules/serverbase/home-manager
+	url = ../home-manager-config.git

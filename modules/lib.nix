@@ -88,10 +88,9 @@
           nixpkgs.config = lib.mkForce { };
           setup = {
             environment = "test";
-            # The clone units want the network and credentials a test sandbox does not have, and leaving them on would
-            # make every other test's `systemctl --failed` assertion depend on how far their retries had got. The test
-            # that is actually about them (tests/clone-config.nix) turns them back on against a local repository.
-            vimFiles.enable = lib.mkDefault false;
+            # The clone unit wants the network and credentials a test sandbox does not have, and leaving it on would
+            # make every other test's `systemctl --failed` assertion depend on how far its retries had got. The test
+            # that is actually about it (tests/clone-config.nix) turns it back on against a local repository.
             nixosConfig = {
               enable = lib.mkDefault false;
               useCredentials = lib.mkDefault false;

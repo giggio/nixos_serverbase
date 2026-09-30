@@ -1,9 +1,7 @@
 {
   config,
   pkgs,
-  pkgs-unstable,
   lib,
-  inputs,
   ...
 }:
 
@@ -11,22 +9,12 @@
   imports = [
     ../../cachix.nix # ugly loading from the root folder, can we do something about it?
     ./clone-config.nix
+    ./home/home.nix
     ./secrets.nix
     ./sudo.nix
     ./services
     ./options.nix
   ];
-
-  home-manager = {
-    useGlobalPkgs = true;
-    useUserPackages = true;
-    users.${config.setup.username} = ./home-manager/home.nix;
-    extraSpecialArgs = { inherit inputs pkgs-unstable; };
-    sharedModules = [
-      ./options.nix
-      { setup.username = config.setup.username; }
-    ];
-  };
 
   nixpkgs.config.allowUnfree = false;
   nixpkgs.overlays = import ./overlays.nix { };

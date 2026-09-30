@@ -22,39 +22,6 @@ let
 in
 {
   options.setup = with lib; {
-    vimFiles = {
-      enable = mkEnableOption "Clone vimfiles enabled" // {
-        default = true;
-      };
-      repo = mkOption {
-        type = types.str;
-        default = "giggio/vimfiles";
-        example = literalExpression "{ repo = \"https://codeberg.org/giggio/vimfiles.git\"; }";
-      };
-      cloneDir = mkOption {
-        type = types.str;
-        default = "${home}/.vim";
-        example = literalExpression "{ cloneDir = \"/home/giggio/.vim\"; }";
-      };
-      customRepoUrl = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        example = literalExpression "{ customRepoUrl = \"https://codeberg.org/giggio/vimfiles.git\"; }";
-      };
-      customPrivateRepoUrl = mkOption {
-        type = types.nullOr types.str;
-        default = null;
-        example = literalExpression "{ customPrivateRepoUrl  = \"git@codeberg.org:giggio/vimfiles.git\"; }";
-      };
-      usePrivateRepo = mkEnableOption "Set if private repo should be used" // {
-        default = true;
-      };
-      symlinkDir = mkOption {
-        type = types.nullOr types.str;
-        default = "${home}/.config/nvim";
-        example = literalExpression "{ symlinkDir = \"/home/giggio/.config/nvim\"; }";
-      };
-    };
     nixosConfig = {
       enable = mkEnableOption "Clone nixOS configuration enabled" // {
         default = true;
@@ -73,12 +40,12 @@ in
       customRepoUrl = mkOption {
         type = types.nullOr types.str;
         default = null;
-        example = literalExpression "{ customRepoUrl = \"https://codeberg.org/giggio/vimfiles.git\"; }";
+        example = literalExpression "{ customRepoUrl = \"https://codeberg.org/giggio/nixos_serverbase.git\"; }";
       };
       customPrivateRepoUrl = mkOption {
         type = types.nullOr types.str;
         default = null;
-        example = literalExpression "{ customPrivateRepoUrl  = \"git@codeberg.org:giggio/vimfiles.git\"; }";
+        example = literalExpression "{ customPrivateRepoUrl  = \"git@codeberg.org:giggio/nixos_serverbase.git\"; }";
       };
       usePrivateRepo = mkEnableOption "Set if private repo should be used" // {
         default = true;
@@ -89,60 +56,6 @@ in
   config = {
     systemd = {
       services = {
-        clone-vimfiles =
-          let
-            clone_dir = config.setup.vimFiles.cloneDir;
-            repoUrl =
-              if config.setup.vimFiles.customRepoUrl != null then
-                config.setup.vimFiles.customRepoUrl
-              else
-                "https://codeberg.org/${config.setup.vimFiles.repo}.git";
-            privateRepoUrl =
-              if config.setup.vimFiles.customPrivateRepoUrl != null then
-                config.setup.vimFiles.customPrivateRepoUrl
-              else
-                "git@codeberg.org:${config.setup.vimFiles.repo}.git";
-          in
-          {
-            enable = config.setup.vimFiles.enable;
-            description = "Clone vimfiles into ~/.vim if missing";
-            wantedBy = [ "multi-user.target" ];
-            path = [ pkgs.coreutils ];
-
-            unitConfig = {
-              ConditionPathExists = "!${clone_dir}";
-              After = [ "network-online.target" ];
-              Wants = [ "network-online.target" ];
-              RequiresMountsFor = [ home ];
-              StartLimitIntervalSec = 600;
-              StartLimitBurst = 10;
-            };
-
-            serviceConfig = {
-              Type = "oneshot";
-            }
-            // retryServiceConfig;
-
-            script = ''
-              echo "Cloning vimfiles into ${clone_dir} using repo ${repoUrl}"
-              echo "Private repo is ${privateRepoUrl} (using private repo: ${
-                if config.setup.vimFiles.usePrivateRepo then "true" else "false"
-              })"
-              echo "Symlink dir is ${toString config.setup.vimFiles.symlinkDir})"
-              echo "Changing ownership to ${config.setup.username}"
-              ${clone_script}/bin/clone "${toString repoUrl}" "${clone_dir}" \
-              ${
-                if config.setup.vimFiles.symlinkDir != null then
-                  ''--symlink "${config.setup.vimFiles.symlinkDir}"''
-                else
-                  ""
-              } \
-              ${
-                if config.setup.vimFiles.usePrivateRepo then ''--private-git-origin "${privateRepoUrl}"'' else ""
-              } \
-              --chown "${config.setup.username}"
-            '';
-          };
         clone-nixos-config =
           let
             clone_dir = config.setup.nixosConfig.cloneDir;

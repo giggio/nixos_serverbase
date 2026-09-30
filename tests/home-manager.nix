@@ -1,6 +1,7 @@
 { testNodes, ... }:
 
-# Covers modules/serverbase/home-manager/home.nix. Almost nothing here is visible to the system: it is a pile of dotfiles
+# Covers modules/serverbase/home: home-manager-config, the submodule at modules/serverbase/home-manager, in its server
+# profile. Almost nothing here is visible to the system: it is a pile of dotfiles
 # and shell wiring that only exists once the user's shell has read them, so the check opens shells - a login shell for
 # what .profile and hm-session-vars.sh export, an interactive one for what .bashrc sets up - instead of looking at the
 # files home-manager wrote.
@@ -24,6 +25,15 @@ in
           hostName = "nixos";
           username = user;
         };
+        # What a server that predates the submodule has where home-manager now wants its links: vimfiles cloned into
+        # ~/.vim by the unit that used to do it, and ~/.config/nvim linked to that clone. tmpfiles runs in sysinit,
+        # before the activation does.
+        systemd.tmpfiles.rules = [
+          "d ${home}/.vim 0755 ${user} users -"
+          "f ${home}/.vim/init.vim 0644 ${user} users - \" the old clone"
+          "d ${home}/.config 0755 ${user} users -"
+          "L ${home}/.config/nvim - - - - ${home}/.vim"
+        ];
       }
     ];
   };
@@ -55,14 +65,11 @@ in
 
       with subtest("the dotfiles are managed and point into the store"):
           for path in [
-              ".gitconfig",
               ".hushlogin",
               ".tmux.conf",
               ".inputrc",
               ".vimrc",
-              ".local/bin/nr",
               ".config/starship.toml",
-              ".config/git",
               ".config/blesh/init.sh",
           ]:
               target = machine.succeed(f"readlink -m ${home}/{path}").strip()
@@ -70,13 +77,31 @@ in
                   f"{path} is not a home-manager managed link into the store, it points at '{target}'"
 
       with subtest("the configuration that is edited by hand is linked out of the store"):
-          # zellij's configuration is deliberately an out-of-store symlink: it is edited in the clone and picked up
-          # without a rebuild. It dangles until the machine has cloned its configuration, which a test never does.
-          # -m follows the whole chain: home-manager links the entry to its own generation in the store, and only that
-          # link points back out at the working copy
-          target = machine.succeed("readlink -m ${home}/.config/zellij").strip()
-          assert target == "${repoConfig}/config/zellij", \
-              f".config/zellij points at '{target}', which is not the working copy"
+          # These are deliberately out-of-store symlinks: edited in the clone and picked up without a rebuild. They
+          # dangle until the machine has cloned its configuration, which a test never does. -m follows the whole
+          # chain: home-manager links the entry to its own generation in the store, and only that link points back out
+          # at the working copy. vimfiles is the submodule's own submodule, which is why nothing clones it separately.
+          for path, expected in [
+              (".config/zellij", "config/zellij"),
+              (".config/git", "config/git"),
+              (".gitconfig", "home/.gitconfig"),
+              (".vim", "config/vimfiles"),
+              (".config/nvim", "config/vimfiles"),
+          ]:
+              target = machine.succeed(f"readlink -m ${home}/{path}").strip()
+              assert target == f"${repoConfig}/{expected}", \
+                  f"{path} points at '{target}', which is not the working copy's {expected}"
+
+      with subtest("the old vimfiles clone was moved aside, not lost"):
+          # planted by tmpfiles before the activation ran; its ~/.config/nvim link is simply replaced
+          machine.succeed("test -f ${home}/.vim.hm-backup/init.vim")
+
+      with subtest("the server profile leaves out what only the PC has"):
+          # the coding agents' configuration, and the desktop's compose key table
+          for path in [".claude/skills", ".agents/skills", ".config/opencode/agents", ".XCompose"]:
+              machine.fail(f"test -L ${home}/{path}")
+          # the .NET SDK, most of a gigabyte, comes in through this variable
+          assert interactive_shell('printf %s "''${DOTNET_ROOT:-}"') == "", "DOTNET_ROOT is set, so the .NET SDK came along"
 
       with subtest("a login shell carries the session variables"):
           for variable, expected in [
@@ -96,16 +121,18 @@ in
               assert expected in definition, f"'{alias}' does not resolve to {expected}: {definition}"
 
       with subtest("an interactive shell gets the shell integrations"):
-          assert "starship" in interactive_shell('printf %s "$PROMPT_COMMAND"'), \
-              "starship is not driving the prompt"
-          for function in ["_direnv_hook", "z"]:
+          # starship_precmd rather than PROMPT_COMMAND: with ble.sh loaded, which .bashrc does unless told not to,
+          # starship registers it with ble.sh's own hook instead, and `bash -ic` never draws a prompt to fill PS1
+          for function in ["starship_precmd", "_direnv_hook", "z"]:
               kind = interactive_shell(f"type -t {function} || true")
               assert kind == "function", f"'{function}' is a '{kind}', expected a shell function"
 
-          # atuin is installed but deliberately not hooked into bash: its integration is only wanted under the
-          # terminals that also load ble.sh, which a server session is not
-          assert interactive_shell("type -t _atuin_search || true") == "", \
-              "atuin hooked itself into bash, but enableBashIntegration is off"
+          # the agent the PC forwards (sudo.nix) must survive .bashrc: neither a gpg-agent with ssh support nor the
+          # PC's ssh-socket.bash may take SSH_AUTH_SOCK over
+          uid = machine.succeed("id -u ${user}").strip()
+          sock = interactive_shell('printf %s "$SSH_AUTH_SOCK"')
+          assert sock == f"/run/user/{uid}/ssh-remote-agent.sock", \
+              f"SSH_AUTH_SOCK is '{sock}' in an interactive shell, not the forwarded agent"
 
       with subtest("the lua interpreter finds both the packaged and the user installed modules"):
           lua_path = interactive_shell('printf %s "$LUA_PATH"')

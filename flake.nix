@@ -1,6 +1,8 @@
 {
   description = "NixOS configuration";
   inputs = {
+    # modules/serverbase/home-manager is a submodule, and without this a git fetch of this flake leaves it empty
+    self.submodules = true;
     nixpkgs.url = "github:nixos/nixpkgs/nixos-26.05";
     nixpkgs-unstable.url = "github:nixos/nixpkgs/nixos-unstable";
     # Toolchain for the vendor kernels that no cache has: the opi4pro boot chain (kernel, U-Boot, their cross compilers) and
@@ -10,10 +12,7 @@
     # rebuild of both kernels. There is no security argument for bumping it on its own: nothing here links against the pinned
     # userland, and the kernel sources themselves come from nixos-hardware and the vendor repos, which are not pinned to it.
     nixpkgs-bootchain.url = "github:nixos/nixpkgs/8623c4c20aa4ca2f5fb81510d2944066c3fb0d96"; # nixos-26.05, 2026-07-26
-    home-manager = {
-      url = "github:nix-community/home-manager/release-26.05";
-      inputs.nixpkgs.follows = "nixpkgs";
-    };
+    # No home-manager input: the servers use the one home-manager-config pins, see modules/serverbase/home/hm-inputs.nix
     nixos-hardware.url = "github:NixOS/nixos-hardware/master";
     sops-nix = {
       url = "github:Mic92/sops-nix";
