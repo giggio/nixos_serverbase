@@ -197,7 +197,7 @@ package_names_cmd = nix eval $(nix_flags) --raw --apply '$(canonical_names)' .\#
 test: check_boot-test
 
 ## Lints the markdown this working tree has TOUCHED - staged, unstaged and untracked - against
-## .markdownlint-cli2.jsonc. Run it from whichever repository you are changing; each has its own config, and the
+## .rumdl.toml. Run it from whichever repository you are changing; each has its own config, and the
 ## submodule is a separate git tree so its files are not in the superproject's diff.
 ##
 ## Deliberately not every file in the repository. A whole-repo sweep on a tree that has never been linted reports on
