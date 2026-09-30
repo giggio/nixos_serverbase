@@ -100,6 +100,8 @@ in
           # the coding agents' configuration, and the desktop's compose key table
           for path in [".claude/skills", ".agents/skills", ".config/opencode/agents", ".XCompose"]:
               machine.fail(f"test -L ${home}/{path}")
+          # docker is rootful here, and the PC's DOCKER_HOST points at a rootless socket this machine does not have
+          assert login_shell('printf %s "''${DOCKER_HOST:-}"') == "", "DOCKER_HOST is set, docker cannot reach the daemon"
           # the .NET SDK, most of a gigabyte, comes in through this variable
           assert interactive_shell('printf %s "''${DOTNET_ROOT:-}"') == "", "DOTNET_ROOT is set, so the .NET SDK came along"
 
