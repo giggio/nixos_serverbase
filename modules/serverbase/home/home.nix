@@ -79,9 +79,9 @@ in
         setup = {
           username = config.setup.username;
           homeManager = {
-            isNixOS = true;
+            platform = "nixos";
             isServer = true;
-            useGlobalPkgs = true;
+            isVM = config.setup.isVM;
             hostName = config.networking.hostName;
             # where clone-config.nix clones the configuration, and so where the out-of-store links point
             configPath = "${config.setup.nixosConfig.cloneDir}/nixos_serverbase/modules/serverbase/home-manager";
