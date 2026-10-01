@@ -173,6 +173,10 @@ $(out_iso_dir)/.%.iso.stamp: $(nix_deps)
 ## Builds the ISO files
 $(iso_files): $(out_iso_dir)/%.iso: $(out_iso_dir)/.%.iso.stamp;
 
+## Builds one install ISO, compressed lightly, and discards it: shows that the installer builds, in minutes instead of an hour
+build_iso_fast_%:
+	nix build $(nix_flags) .#$*_iso_fast --print-build-logs --keep-going --no-link
+
 # See the comment above about the .stamp file
 $(out_system_dir)/.%.stamp: $(nix_deps)
 	nix build $(nix_flags) .#nixosConfigurations.$*.config.system.build.toplevel --print-build-logs --keep-going --out-link "$(result_system_dir)/$*"

@@ -342,25 +342,33 @@
                 isDev = combination.isDev;
               };
             }
-            // lib.attrsets.optionalAttrs (combination.machine.supportsIso && combination.isVM == false) {
-              "${serverbaseModules.lib.mkNixosModuleName combination}_iso" =
-                let
-                  configName = serverbaseModules.lib.mkNixosModuleName combination;
-                  theConfiguration = lib.lists.findFirst (
-                    module: module.name == configName
-                  ) "unexpected module name" nixosModules;
-                  vmBootConfiguration = lib.lists.findFirst (
-                    module: module.name == "${configName}vmboot"
-                  ) "unexpected module name" nixosModules;
-                in
-                serverbaseModules.lib.mkIsoPackage {
-                  pkgs = import inputs.nixpkgs { system = theConfiguration.system; };
-                  isDev = combination.isDev;
-                  isVM = combination.isVM;
-                  installedSystem = evalConfig theConfiguration.configuration;
-                  installedSystemVMBoot = evalConfig vmBootConfiguration.configuration;
-                };
-            }
+            // lib.attrsets.optionalAttrs (combination.machine.supportsIso && combination.isVM == false) (
+              let
+                configName = serverbaseModules.lib.mkNixosModuleName combination;
+                theConfiguration = lib.lists.findFirst (
+                  module: module.name == configName
+                ) "unexpected module name" nixosModules;
+                vmBootConfiguration = lib.lists.findFirst (
+                  module: module.name == "${configName}vmboot"
+                ) "unexpected module name" nixosModules;
+                mkIso =
+                  fast:
+                  serverbaseModules.lib.mkIsoPackage {
+                    pkgs = import inputs.nixpkgs { system = theConfiguration.system; };
+                    isDev = combination.isDev;
+                    isVM = combination.isVM;
+                    installedSystem = evalConfig theConfiguration.configuration;
+                    installedSystemVMBoot = evalConfig vmBootConfiguration.configuration;
+                    inherit fast;
+                  };
+              in
+              {
+                "${configName}_iso" = mkIso false;
+                # The same installer, compressed lightly: see `fast` in mkIsoPackage. For the build that only has to
+                # prove the installer builds, not for anything anyone boots.
+                "${configName}_iso_fast" = mkIso true;
+              }
+            )
           ) combinations
         )
         // lib.foldr (machine_accumulator: new_machine: machine_accumulator // new_machine) { } (
@@ -433,6 +441,24 @@
               system = machine.defaultArch;
             }
           }_iso";
+        "${machine.name}_iso_fast" =
+          installerPackages."${
+            serverbaseModules.lib.mkNixosModuleName {
+              inherit machine;
+              isDev = false;
+              isVM = false;
+              system = machine.defaultArch;
+            }
+          }_iso_fast";
+        "${machine.name}dev_iso_fast" =
+          installerPackages."${
+            serverbaseModules.lib.mkNixosModuleName {
+              inherit machine;
+              isDev = true;
+              isVM = false;
+              system = machine.defaultArch;
+            }
+          }_iso_fast";
       }) (lib.filter (machine: machine.supportsIso) machines)
     );
 
@@ -443,6 +469,13 @@
       pkgs,
       isVM,
       isDev,
+      # Compress the squashfs with zstd level 1 instead of nixpkgs' level 19. The default is what makes the ISO small,
+      # and it costs about 25 minutes of four cores for the 16 GB closure of gmktec1. That is the right trade for
+      # something that is written to a USB stick and kept, and the wrong one for a build whose output is thrown away
+      # as soon as it has shown that the installer builds, which is what CI does with it. Not `null`: no compression at
+      # all would write the whole 16 GB twice (the squashfs, then the ISO around it) on a runner whose disk this does
+      # not know.
+      fast ? false,
     }:
     let
       cfg = installedSystem.config;
@@ -528,6 +561,7 @@
                 makeEfiBootable = true;
                 makeUsbBootable = true;
                 forceTextMode = true;
+                squashfsCompression = lib.mkIf fast "zstd -Xcompression-level 1";
               };
               swapDevices = lib.mkImageMediaOverride [ ];
               fileSystems = lib.mkImageMediaOverride config.lib.isoFileSystems; # An installation media cannot tolerate a host config defined file system layout on a fresh machine, before it has been formatted.

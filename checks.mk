@@ -249,9 +249,9 @@ list_checks:
 # an image is exercised only when someone reinstalls a server, which is exactly when a broken one is most expensive.
 # That argument is why the `_img` packages are in here and staying: nothing else reaches them at all.
 #
-# The `_iso` packages are the one exception, and only where a host says so through $(eval_skip) - build.yaml now runs
-# `make out/nix/iso`, so on a host too small to evaluate one they are covered by something strictly better than this
-# target, a real build. Everywhere else the default stands and they are evaluated here like everything else.
+# The `_iso` packages are the one exception, and only where a host says so through $(eval_skip) - update.yaml now runs
+# `make build_iso_fast_gmktec1` once a week, so on a host too small to evaluate one they are covered by something
+# strictly better than this target, a real build of the installer (the `_iso_fast` variant, compressed lightly). Everywhere else the default stands and they are evaluated here like everything else.
 #
 # Otherwise it is deliberately the whole `packages` attribute set rather than a filtered subset. The `machine_*`
 # packages duplicate work `nixosConfigurations` already did, which is a few seconds; a filter is a thing that
