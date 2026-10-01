@@ -836,7 +836,8 @@
             sops
             iproute2
             attic-client
-            rumdl # `make lint_md`
+            rumdl # `make lint-md`
+            shellcheck # `make lint-shell`
           ]
           ++ extraModules;
         shellHook = /* bash */ ''

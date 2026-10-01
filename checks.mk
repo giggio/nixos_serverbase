@@ -189,31 +189,47 @@ machine_names_cmd = nix eval $(nix_flags) --raw --apply '$(canonical_names)' .\#
 # Only `eval` uses this; see the comment there for why the install images especially need to be in it.
 package_names_cmd = nix eval $(nix_flags) --raw --apply '$(canonical_names)' .\#packages.$(architecture)-linux
 
-.PHONY: checks full_checks checks_report list_checks dirty_checks cache_checks test eval eval_costs lint_md lint_md_all
+.PHONY: checks full_checks checks_report list_checks dirty_checks cache_checks test eval eval_costs lint lint-fix lint-shell lint-md ci
 
 ### Tests
 
 ## Runs a quick boot test
 test: check_boot-test
 
-## Lints the markdown this working tree has TOUCHED - staged, unstaged and untracked - against
-## .rumdl.toml. Run it from whichever repository you are changing; each has its own config, and the
-## submodule is a separate git tree so its files are not in the superproject's diff.
-##
-## Deliberately not every file in the repository. A whole-repo sweep on a tree that has never been linted reports on
-## files the current change never came near, and the only ways out of that are to commit unrelated fixes or to
-## ignore the output - both worse than a narrow check that is always green. `lint_md_all` is there for the one
-## commit that cleans up the rest.
-lint_md:
-	@files=$$({ git diff --name-only --diff-filter=d HEAD -- '*.md'; \
-	            git ls-files --others --exclude-standard -- '*.md'; } | sort -u); \
-	if [ -z "$$files" ]; then echo "no markdown changed in this working tree"; exit 0; fi; \
-	echo "$$files" | sed 's/^/  linting /'; \
-	rumdl check $$files
+### Lint
 
-## Lints every markdown file in the repository. For the sweep commit, not for everyday work - see lint_md.
-lint_md_all:
+## Lints the shell scripts and the markdown
+lint: lint-shell lint-md
+
+# Skips the submodules, which lint themselves. A script is a file with a .sh or .bash extension or a bash shebang,
+# so the ones without an extension are covered too. Run from whichever repository you are changing: this file is
+# included by the superproject, and `git ls-files` there lists the superproject's own files.
+## Runs shellcheck on every shell script in the repository
+lint-shell:
+	@files=$$(git ls-files -z ':!nixos_serverbase' | while IFS= read -r -d '' f; do \
+	  [ -f "$$f" ] || continue; \
+	  case "$$f" in *.sh|*.bash) echo "$$f";; *) head -n1 "$$f" | grep -aqE '^#!(.*/|/usr/bin/env +)bash' && echo "$$f";; esac; \
+	done); \
+	[ -n "$$files" ] || { echo "no shell files found, is this a git checkout?" >&2; exit 1; }; \
+	echo "$$files" | xargs shellcheck --shell bash
+
+## Lints every markdown file in the repository against .rumdl.toml. Each repository has its own config, and the
+## submodule is a separate git tree, so run it in whichever one you are changing.
+lint-md:
 	@rumdl check
+
+## Fixes what rumdl can in the markdown
+lint-fix:
+	@rumdl fmt
+
+# smoke.yaml runs on the docker label and names its own image, so exec needs no label mapping. --use-gitignore=false
+# keeps .git, which the superproject's submodule checkout needs.
+# Not from inside the superproject's nixos_serverbase directory: there .git is a file pointing at
+# ../.git/modules/nixos_serverbase, the runner copies only this directory, and nix then cannot open the repository.
+# Run it from the superproject, or from a standalone clone of this repository.
+## Runs the smoke workflow locally on the working tree in Docker
+ci:
+	nix run nixpkgs#forgejo-runner -- exec --event push --workflows .forgejo/workflows/smoke.yaml --use-gitignore=false
 
 ## Lists the checks this flake defines
 list_checks:
