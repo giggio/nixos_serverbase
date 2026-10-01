@@ -882,6 +882,7 @@
       defaultShell = baseShell // {
         buildInputs =
           baseShell.buildInputs
+          ++ [ pkgs.nixd ] # the language server the coding agents use; not in baseShell, which CI enters
           ++ (lib.optionals (system == "x86_64-linux") (
             with pkgs;
             [
