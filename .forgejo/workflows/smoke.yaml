@@ -75,6 +75,8 @@ jobs:
             # a missing line here. No `system-features` and no /dev/kvm: nothing in this job boots a VM.
             echo 'extra-platforms = aarch64-linux'
           } >> /etc/nix/nix.conf
+          echo "Starting nix development environment..."
+          nix print-dev-env .#vm --verbose
       # `.#vm` rather than the default shell: the default one carries libguestfs-with-appliance and guestfs-tools and
       # they are not cached for this platform, so entering it costs a multi-minute build before any real work starts.
       # The Makefile also needs `ip` and VMS_DIR at PARSE time, both of which the shell supplies.

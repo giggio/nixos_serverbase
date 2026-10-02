@@ -63,6 +63,8 @@ jobs:
             # unless it believes it offers both. /dev/kvm itself comes from the runner, which passes the host device in.
             echo 'system-features = nixos-test benchmark big-parallel kvm'
           } >> /etc/nix/nix.conf
+          echo "Starting nix development environment..."
+          nix print-dev-env .#vm --verbose
       # The endpoint is a secret rather than a literal because this repository is public and the endpoint is on a
       # personal domain, which must not appear here. --set-default is what makes the bare cache name in the Makefile's
       # `attic push servers` resolve.
