@@ -76,17 +76,17 @@ jobs:
             echo 'extra-platforms = aarch64-linux'
           } >> /etc/nix/nix.conf
           echo "Starting nix development environment..."
-          nix print-dev-env .#vm --verbose
-      # `.#vm` rather than the default shell: the default one carries libguestfs-with-appliance and guestfs-tools and
+          nix print-dev-env .#build --verbose
+      # `.#build` rather than the default shell: the default one carries libguestfs-with-appliance and guestfs-tools and
       # they are not cached for this platform, so entering it costs a multi-minute build before any real work starts.
       # The Makefile also needs `ip` and VMS_DIR at PARSE time, both of which the shell supplies.
       - name: Check formatting
         run: |
-          source <(nix print-dev-env .#vm)
+          source <(nix print-dev-env .#build)
           nix fmt -- --fail-on-change
       # One process per attribute, bounded by $(dirty_jobs) - see the comment on the target. Nothing here is built, so
       # this needs no cache login, and therefore cannot be failed by a cache that is down or a token that expired.
       - name: Evaluate every machine, every check and every package
         run: |
-          source <(nix print-dev-env .#vm)
+          source <(nix print-dev-env .#build)
           make eval

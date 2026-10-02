@@ -9,3 +9,5 @@ out
 .direnv
 *.qcow2
 .rumdl_cache
+.devenv
+.pre-commit-config.yaml

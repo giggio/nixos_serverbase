@@ -849,10 +849,17 @@
     in
     attrs;
 
+  # `build` is what CI enters, with `nix print-dev-env .#build`. `default` and `vm` are the devenv shells, which only
+  # work from the clone `root` names; `vm` skips the workstation tools.
   mkDevShells =
     {
       pkgs,
       system,
+      # Absolute path of the clone that enters the shells. devenv reads the working directory to find its root, which a
+      # pure evaluation forbids, so it is fixed here and `nix flake check` and `make eval` can evaluate the shells.
+      root,
+      # What starship and `nix develop` show as the shell name; devenv would call it devenv-shell.
+      name ? "Image-Build-Environment",
       extraModules ? [ ],
       # Appended to the shell hook, for a superproject with site-specific setup to do on entry - a directory of
       # scripts to put on PATH, a file of local addresses to source. Empty here, and it has to stay that way: this
@@ -860,49 +867,88 @@
       extraShellHook ? "",
     }:
     let
-      baseShell = {
-        name = "Image build environment";
-        buildInputs =
-          with pkgs;
-          [
-            zstd
-            util-linux
-            sops
-            iproute2
-            attic-client
-            rumdl # `make lint-md`
-            shellcheck # `make lint-shell`
-          ]
-          ++ extraModules;
-        shellHook = /* bash */ ''
-          export VMS_DIR=$HOME/vms
-          ${extraShellHook}
-        '';
+      basePackages =
+        with pkgs;
+        [
+          zstd
+          util-linux
+          sops
+          iproute2
+          attic-client
+          gnumake
+          rumdl # `make lint-md`
+          shellcheck # `make lint-shell`
+        ]
+        ++ extraModules;
+      # Not in the base, which CI enters.
+      workstationPackages =
+        with pkgs;
+        [ nixd ] # the language server the coding agents use
+        ++ (lib.optionals (system == "x86_64-linux") [
+          # these libs are used to build VMs, not necessary in the RPi or inside VMs
+          zellij
+          qemu
+          # The software TPM the from-ISO VMs are launched with - see start-tpm.sh, which the Makefile copies
+          # into each VM directory. gmktec1's root is sealed to a TPM, so a VM of it without one cannot
+          # rehearse its own boot.
+          swtpm
+          tpm2-tools
+          libguestfs-with-appliance
+          guestfs-tools
+          picocom # for serial communication
+        ]);
+      shellHook = /* bash */ ''
+        export VMS_DIR=$HOME/vms
+        ${extraShellHook}
+      '';
+      shellFiles = "\\.(sh|bash)$";
+      devenvModule = {
+        devenv.root = root;
+        env.name = name;
+        enterShell = shellHook;
+
+        git-hooks.hooks = {
+          shellcheck = {
+            enable = true;
+            files = shellFiles;
+            args = [
+              "--shell"
+              "bash"
+            ];
+          };
+          shfmt = {
+            enable = true;
+            files = shellFiles;
+            # The default entry passes formatting flags, which make shfmt ignore .editorconfig.
+            entry = lib.mkForce "${pkgs.shfmt}/bin/shfmt --write";
+          };
+          nixfmt.enable = true;
+          rumdl = {
+            enable = true;
+            name = "rumdl";
+            entry = "${pkgs.rumdl}/bin/rumdl check";
+            files = "\\.md$";
+            language = "system";
+          };
+        };
       };
-      defaultShell = baseShell // {
-        buildInputs =
-          baseShell.buildInputs
-          ++ [ pkgs.nixd ] # the language server the coding agents use; not in baseShell, which CI enters
-          ++ (lib.optionals (system == "x86_64-linux") (
-            with pkgs;
-            [
-              # these libs are used to build VMs, not necessary in the RPi or inside VMs
-              zellij
-              qemu
-              # The software TPM the from-ISO VMs are launched with - see start-tpm.sh, which the Makefile copies
-              # into each VM directory. gmktec1's root is sealed to a TPM, so a VM of it without one cannot
-              # rehearse its own boot.
-              swtpm
-              tpm2-tools
-              libguestfs-with-appliance
-              guestfs-tools
-              picocom # for serial communication
-            ]
-          ));
-      };
+      mkDevenvShell =
+        packages:
+        inputs.devenv.lib.mkShell {
+          inherit inputs pkgs;
+          modules = [
+            devenvModule
+            { inherit packages; }
+          ];
+        };
     in
     {
-      vm = pkgs.mkShell baseShell;
-      default = pkgs.mkShell defaultShell;
+      build = pkgs.mkShell {
+        name = "Image build environment";
+        buildInputs = basePackages;
+        inherit shellHook;
+      };
+      default = mkDevenvShell (basePackages ++ workstationPackages);
+      vm = mkDevenvShell basePackages;
     };
 }

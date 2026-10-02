@@ -19,6 +19,12 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
     flake-utils.url = "github:numtide/flake-utils";
+    # The dev shell and the git hooks, through its flakes integration; mkDevShells in modules/lib.nix uses it, and so
+    # does the superproject, through this flake's `inputs`.
+    devenv = {
+      url = "github:cachix/devenv";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
     disko = {
       url = "github:nix-community/disko/latest";
       inputs.nixpkgs.follows = "nixpkgs";
@@ -110,8 +116,8 @@
           inherit nixosConfigurations machines;
         };
         devShells = self.nixosModules.lib.mkDevShells {
-          inherit pkgs;
-          inherit system;
+          inherit pkgs system;
+          root = "/home/giggio/p/nix/servers/nixos_serverbase";
         };
       }
     );

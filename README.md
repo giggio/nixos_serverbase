@@ -116,9 +116,9 @@ sops, and home-manager).
         // serverbase.nixosModules.lib.mkInstallerPackages {
           inherit nixosConfigurations machines;
         };
-        devShells.default = serverbase.nixosModules.lib.mkDevShell {
-          inherit pkgs;
-          inherit system;
+        devShells = serverbase.nixosModules.lib.mkDevShells {
+          inherit pkgs system;
+          root = "/absolute/path/to/your/clone";
         };
       }
     );
@@ -282,11 +282,20 @@ running and verify before flashing — see
 
 Provides all necessary tools like SOPS, build utilities, etc.
 
+The shell and the git hooks come from [devenv](https://devenv.sh), through its flakes integration, and `direnv` enters
+it:
+
 ```bash
-nix develop
-# or if you use direnv:
 direnv allow
 ```
+
+The first entry installs a pre-commit hook that runs shellcheck, shfmt, nixfmt and rumdl on the staged files. shfmt
+rewrites the file, so a commit can fail once and pass on the retry.
+
+To keep `nix flake check` pure, `root` in [flake.nix](flake.nix) is the absolute path of the author's clone
+(`/home/giggio/p/nix/servers/nixos_serverbase`). If your clone is somewhere else, the devenv shells and their hooks fail
+until you change that value and `devenv_root` in [.envrc](.envrc). The `build` shell, which CI uses, does not depend on
+it: `nix develop .#build`. Inside a VM, direnv enters the `vm` shell, which leaves out the workstation tools.
 
 ### Running Tests
 
@@ -338,7 +347,7 @@ The secrets file is at [./modules/serverbase/secrets/shared.yaml](./modules/serv
 You can edit it with:
 
 ```bash
-sops modules/serverbase/secrets/shared.yaml # if using the flake default shell with `nix develop` or `direnv`
+sops modules/serverbase/secrets/shared.yaml # if using the flake default shell with `direnv`
 # or
 nix run nixpkgs#sops modules/serverbase/secrets/shared.yaml # if not using the flake default shell
 ```

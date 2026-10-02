@@ -64,13 +64,13 @@ jobs:
             echo 'system-features = nixos-test benchmark big-parallel kvm'
           } >> /etc/nix/nix.conf
           echo "Starting nix development environment..."
-          nix print-dev-env .#vm --verbose
+          nix print-dev-env .#build --verbose
       # The endpoint is a secret rather than a literal because this repository is public and the endpoint is on a
       # personal domain, which must not appear here. --set-default is what makes the bare cache name in the Makefile's
       # `attic push servers` resolve.
       - name: Log into the cache
         run: |
-          source <(nix print-dev-env .#vm)
+          source <(nix print-dev-env .#build)
           attic login --set-default servers "${{ secrets.ATTIC_ENDPOINT }}" "${{ secrets.ATTIC_TOKEN }}"
           # Read FROM the cache too, not just write to it. The container's /nix starts empty on every run, so without a
           # substituter the opi4pro vendor kernel and U-Boot - which no public cache has - would be compiled from
@@ -80,29 +80,29 @@ jobs:
           # Printed on purpose: a substituter that failed to configure shows up as a four-hour build rather than as an
           # error, so the log should say plainly whether it is there.
           nix config show substituters
-      # `.#vm` rather than the default shell: the default one carries libguestfs-with-appliance and guestfs-tools, for
+      # `.#build` rather than the default shell: the default one carries libguestfs-with-appliance and guestfs-tools, for
       # writing disk images from a workstation, and they are not cached for this platform - entering it costs a
-      # multi-minute build before any real work starts. The base shell has everything the Makefile needs.
+      # multi-minute build before any real work starts. `build` is the plain, devenv-free base shell, and has everything the Makefile needs.
       #
       # This builds all six systems, the three machines and their dev variants; the dev variants share almost the whole
       # closure, so the marginal cost over three is evaluation and a handful of config derivations. Narrow it to
       # `make out/nix/system/pi4 out/nix/system/gmktec1 out/nix/system/opi4pro` if that stops being true.
       - name: Build the machines
         run: |
-          source <(nix print-dev-env .#vm)
+          source <(nix print-dev-env .#build)
           make out/nix/system
       # Before the checks, not after: the machine closures are the expensive half and they are already built and valid
       # at this point, so a failing check should not cost them.
       - name: Push the machines to the cache
         run: |
-          source <(nix print-dev-env .#vm)
+          source <(nix print-dev-env .#build)
           make cache_systems
       # `make checks` builds every check into its own log rather than letting nix interleave a dozen VM tests into one
       # stream, keeps going after a failure so one broken check does not hide the state of the rest, prints a table
       # naming each failure and its log, and exits non-zero if anything failed - so the job fails here.
       - name: Run the checks
         run: |
-          source <(nix print-dev-env .#vm)
+          source <(nix print-dev-env .#build)
           # The logs are the point of the step when a check fails, and the step runs under `set -e`, so the failure
           # has to be caught and re-raised after they are printed rather than allowed to abort the step first.
           # nullglob keeps a run that died before writing any log from turning the unmatched glob into a
@@ -118,5 +118,5 @@ jobs:
           exit $status
       - name: Push the checks to the cache
         run: |
-          source <(nix print-dev-env .#vm)
+          source <(nix print-dev-env .#build)
           make cache_checks
