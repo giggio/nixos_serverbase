@@ -7,8 +7,8 @@
 #      raw sectors. USB boot does not exist on this board.
 #   2. The SD card is not ejected after installation - it stays in the board forever, holding the boot chain. The installer
 #      therefore does not need to "get out of the way": nixos-install runs the target's bootloader hook inside the chroot
-#      (NIXOS_INSTALL_BOOTLOADER=1 -> boot.loader.external.installHook), which overwrites the installer's own boot.scr on the
-#      FAT partition with the final system's. The next boot lands in the installed system; no install loop is possible.
+#      (NIXOS_INSTALL_BOOTLOADER=1 -> boot.loader.external.installHook), which rewrites the boot menu on the FAT partition
+#      with the final system as its default entry. The next boot lands in the installed system; no install loop is possible.
 #   3. The image is LEAN: unlike the ISO, it does NOT embed the final system's closure (the base image is already ~6 GB and
 #      growing; the SD card is 4 GB). It carries only the flake SOURCE - injected into the image's ext4 root by the Makefile
 #      AFTER the build (like the age key), because nixos_serverbase is a git submodule and would otherwise be missing from the
@@ -71,7 +71,10 @@
               # SD image layout. See config-physical-opi4pro-common.nix's header for the full disk map.
               # ---------------------------------------------------------------------------------------------------------------
 
-              # The FAT partition holds Image + uInitrd + DTB + boot.scr (~65 MB of content). 256 MiB leaves headroom.
+              # The FAT partition holds boot.scr and a one-entry menu (~65 MB). It stays at 256 MiB, not the 3 GiB of a boot
+              # card, because the installer's ext4 root has to fit on the same 4 GB card. The installed system's hook sees a
+              # small partition and keeps one older generation in the menu; a card from <machine>boot_img or opi4pro-boot-card
+              # has room for the full menu.
               sdImage.firmwareSize = 256;
 
               # 48 MiB. The FAT partition MUST start after the raw bootloader region: boot_package.fex is written at 16400 KiB
@@ -80,17 +83,14 @@
               # kernel).
               sdImage.firmwarePartitionOffset = 48;
 
-              # Everything U-Boot loads lives on the FAT partition, INCLUDING boot.scr itself. This is the installer's own boot
-              # script (config.system.build.* here is the installer's, so init= points at the installer toplevel). During
-              # installation, nixos-install runs the bootloader hook inside the chroot, which overwrites these files with the
-              # final system's - that is the handover mechanism.
+              # Everything U-Boot loads lives on the FAT partition, INCLUDING boot.scr itself. The menu written here has one
+              # entry, the installer itself (config.system.build.* here is the installer's). During installation, nixos-install
+              # runs the bootloader hook inside the chroot, which rewrites the menu with the final system as its default entry
+              # and drops the installer's files - that is the handover mechanism.
               sdImage.populateFirmwareCommands = /* bash */ ''
                 FWDIR="''${FWDIR:-$(pwd)/firmware}"
                 mkdir -p "$FWDIR"
-                cp -v "${config.boot.kernelPackages.kernel}/Image" "$FWDIR/Image"
-                cp -v ${config.system.build.opi4proInitrdUImage}/uInitrd "$FWDIR/uInitrd"
-                install -D -m 644 "${config.boot.kernelPackages.kernel}/dtbs/${config.hardware.deviceTree.name}" "$FWDIR/allwinner/sun60i-a733-orangepi-4-pro.dtb"
-                cp -v ${config.system.build.opi4proBootScript} "$FWDIR/boot.scr"
+                ${config.system.build.opi4proBootFiles.populateFirmware}/bin/opi4pro-populate-firmware "$FWDIR" ${config.system.build.toplevel} 0
               '';
 
               # The installer's root partition carries the flake SOURCE at /etc/nixos - this is what keeps the image small. The
@@ -290,8 +290,8 @@
                   ${finalSystem.config.system.build.destroyFormatMount}/bin/disko-destroy-format-mount --yes-wipe-all-disks
 
                   echo '====== Mounting the SD FAT partition into the target at /mnt/boot/firmware...'
-                  # The final system's bootloader hook (run by nixos-install inside the chroot) writes the kernel, initrd, DTB
-                  # and boot.scr to /boot/firmware - which inside the chroot is this bind mount. This is the moment the SD card
+                  # The final system's bootloader hook (run by nixos-install inside the chroot) rewrites the boot menu on
+                  # /boot/firmware - which inside the chroot is this bind mount. This is the moment the SD card
                   # stops booting the installer and starts booting the installed system.
                   mkdir -p /mnt/boot/firmware
                   mount --bind /boot/firmware /mnt/boot/firmware

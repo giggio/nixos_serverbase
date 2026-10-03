@@ -12,12 +12,14 @@
 #                  there for the life of the system, servicing SMC (Secure Monitor Call) requests from EL3. BINARY BLOB.
 #   4. SCP       - firmware for the "arisc" power-management coprocessor, started by BL31 on request. BINARY BLOB.
 #   5. U-Boot    - Allwinner's fork of U-Boot 2018.05, built as a 32-bit ARM binary even though the CPU/kernel are 64-bit.
-#                  Built from source here. Loads boot.scr, then the kernel/initrd/DTB, then hands off.
+#                  Built from source here. Runs boot.scr, which shows the generation menu; the chosen entry's kernel,
+#                  initrd and DTB are loaded, then it hands off.
 #   6. Linux     - the vendor 6.6.98 aarch64 kernel, built from source here.
 #
 # The 32->64-bit handoff: a 32-bit program cannot enter a 64-bit kernel by itself; only EL3 can switch the CPU's execution
 # state. So vendor U-Boot issues an SMC (ARM_SVC_RUNNSOS) to the still-resident BL31, which performs the switch and jumps to
-# the kernel. This is why BL31 must survive intact all the way to handoff - see the memory-map notes on boot.scr below.
+# the kernel. This is why BL31 must survive intact all the way to handoff - see the memory-map notes on boot.scr in
+# opi4pro-boot-files.nix.
 #
 # Three blobs remain irreducible (boot0, BL31/monitor, SCP). Even Armbian ships these as committed binaries; no source exists
 # anywhere. Everything else here - U-Boot, kernel, initrd, boot script - is compiled from source.
@@ -30,13 +32,15 @@
 #
 # WHERE THINGS LIVE ON DISK (both for the installer and the installed system):
 #   SD card, raw sectors : boot0 @ 8 KiB, boot_package (U-Boot+BL31+SCP) @ 16400 KiB. Written by dd; no filesystem.
-#   SD card, partition 1 : FAT, label FIRMWARE, starts at 48 MiB, MARKED BOOTABLE. Holds Image, uInitrd, the DTB, and boot.scr.
+#   SD card, partition 1 : FAT, label FIRMWARE, starts at 48 MiB, MARKED BOOTABLE. Holds boot.scr and the generation menu
+#                          (menu/extlinux.conf, with the kernels, initrds and DTBs under menu/nixos/). 3 GiB on a
+#                          card built by <machine>boot_img or opi4pro-boot-card, 256 MiB on the installer's.
 #   SD card, partition 2 : ext4, label NIXOS_SD - the INSTALLER's root filesystem. Dead weight after installation.
 #   NVMe                 : everything else (/ and the nix store) on the installed system.
-# boot.scr lives on the FAT partition (not on an ext4 root) so the SD card only has to carry boot artifacts once the real
-# system is on the NVMe. U-Boot finds it there because the FAT partition carries the bootable flag (set by the installer
-# image's postBuildCommands) and U-Boot's distro-boot scan only looks at bootable partitions, under the prefixes "/" and
-# "/boot/".
+# Everything U-Boot reads lives on the FAT partition (not on an ext4 root) so the SD card only has to carry boot artifacts once
+# the real system is on the NVMe. U-Boot finds boot.scr there because the FAT partition carries the bootable flag and U-Boot's
+# distro-boot scan only looks at bootable partitions, under the prefixes "/" and "/boot/". The layout and its reasons are in
+# opi4pro-boot-files.nix.
 {
   lib,
   modulesPath,
@@ -61,9 +65,9 @@ let
   # Everything outside the boot chain still follows `nixpkgs` and gets every patch as before.
   # Instantiated with an empty config and NO overlays on purpose: the boot chain must not be reachable from the machine's
   # overlays, or an unrelated package set change would start invalidating it again through the back door.
-  # Deliberately NOT moved here: `installOpi4ProBootloader`, `flashUboot`, `bootScript` and `initrdUImage`. Those are cheap, and
-  # the first two are scripts that run as root on the live system, so they should keep tracking the patched coreutils/util-linux
-  # the rest of the system uses. They also embed the current generation's store path, so they rebuild on every switch regardless.
+  # Deliberately NOT moved here: `installOpi4ProBootloader`, `flashUboot` and everything in opi4pro-boot-files.nix. Those are
+  # cheap, and the scripts among them run as root on the live system, so they should keep tracking the patched
+  # coreutils/util-linux the rest of the system uses.
   #
   # It is also a CROSS package set: built on x86_64, targeting the board. Everything below used to be compiled by an aarch64
   # toolchain, which on the only builders that exist here means binfmt emulation - 4-6 hours for the chain. Cross-compiling
@@ -102,90 +106,47 @@ let
     };
   };
 
+  bootFiles = import ./opi4pro-boot-files.nix {
+    inherit pkgs lib;
+    dtbName = config.hardware.deviceTree.name;
+  };
+
   # ---------------------------------------------------------------------------------------------------------------------------
   # Bootloader install hook: makes `nixos-rebuild switch` actually update what the board boots.
   # ---------------------------------------------------------------------------------------------------------------------------
   # Without this, `nixos-rebuild switch` would activate a new generation in RAM but every reboot would return to the system that
-  # was baked into the SD image, because the kernel/initrd/DTB live on the FAT firmware partition and boot.scr has the
-  # generation's /nix/store path baked into it. This hook rewrites all four artifacts on every switch.
+  # was baked into the SD image, because everything U-Boot loads lives on the FAT firmware partition. This hook rewrites the
+  # boot menu there on every switch: a U-Boot extlinux menu with the default entry plus the newest generations, behind a static
+  # boot.scr that sets the memory map first. What is on the card, and why it has that shape, is in opi4pro-boot-files.nix.
   #
-  # IMPORTANT: the boot.cmd heredoc below MUST stay in sync with the `bootScript` derivation further down. They generate the
-  # same script for two different moments (switch-time vs image-build-time). If you change memory addresses in one, change both.
-  # "In sync" here means BYTE-IDENTICAL output, not merely equivalent: a card flashed from the boot-only image
-  # (setup-opi4pro-boot-image.nix) is verified by comparing its four files against a running system's /boot/firmware, and this
-  # is the only one of the four that is generated rather than copied. The derivation keeps its explanatory comments in the
-  # source and strips them before mkimage; this heredoc has none to begin with. Do not add any here.
+  # It is also what ends the installer: nixos-install runs this hook inside the chroot, the menu's default entry becomes the
+  # installed system, and the installer's own files are removed, so the next boot goes straight into the installed system.
   installOpi4ProBootloader = pkgs.writeShellApplication {
     name = "install-opi4pro-bootloader";
-    runtimeInputs = (
-      with pkgs;
-      [
-        coreutils
-      ]
-    );
+    runtimeInputs = with pkgs; [
+      coreutils
+      util-linux # mountpoint
+    ];
     text = ''
-      set -euo pipefail
       toplevel="$1"
       fw=/boot/firmware
 
-      # Both artifacts this script wraps with mkimage (uInitrd and boot.scr) carry a legacy U-Boot header whose ih_time field
-      # is, by default, the wall clock at generation time - which also feeds the header CRC. That alone would make every
-      # switch-generated file differ from the nix-built one even when the payload is identical, and byte-identity is exactly
-      # what makes a flashed card verifiable against a running system (see setup-opi4pro-boot-image.nix). mkimage honours
-      # SOURCE_DATE_EPOCH, so pin it to the same value nix uses for its builds (1980-01-01, the epoch nix exports into every
-      # build sandbox). U-Boot never reads ih_time for anything, so freezing it costs nothing.
-      export SOURCE_DATE_EPOCH=315532800
-
-      # Refuse to run if the FAT firmware partition is not mounted - otherwise we would silently write the kernel into an empty
-      # directory on the root filesystem and the board would keep booting the old kernel with no visible error.
-      if ! ${pkgs.util-linux}/bin/mountpoint -q "$fw"; then
+      # Refuse to run if the FAT firmware partition is not mounted - otherwise we would silently write the menu into an empty
+      # directory on the root filesystem and the board would keep booting the old system with no visible error.
+      if ! mountpoint -q "$fw"; then
         echo "ERROR: $fw is not mounted; refusing to install bootloader files" >&2
         exit 1
       fi
 
-      echo "opi4pro: installing kernel, initrd, dtb to $fw"
-      # Raw aarch64 Image (no uImage wrapper): the boot script uses `booti`, which takes the kernel unwrapped.
-      cp "$toplevel/kernel" "$fw/Image.new" && mv "$fw/Image.new" "$fw/Image"
+      generations=${toString bootFiles.menuGenerations}
+      size_mib="$(df --output=size -BM "$fw" | tail -n 1 | tr -dc '0-9')"
+      if [ "$size_mib" -lt ${toString bootFiles.smallCardThresholdMiB} ]; then
+        generations=${toString bootFiles.smallCardGenerations}
+        echo "opi4pro: NOTE — the FAT partition is only ''${size_mib} MiB, so the menu keeps $generations older generation(s)."
+        echo "opi4pro:        A card from <machine>boot_img or opi4pro-boot-card has room for ${toString bootFiles.menuGenerations}."
+      fi
 
-      # The initrd, however, IS wrapped as a legacy U-Boot image ("uInitrd"). U-Boot needs the wrapper's size/compression
-      # metadata to hand a ramdisk to the kernel. -C gzip must match boot.initrd.compressor below.
-      ${pkgs.ubootTools}/bin/mkimage -A arm -O linux -T ramdisk -C gzip -n uInitrd -d "$toplevel/initrd" "$fw/uInitrd.new"
-      mv "$fw/uInitrd.new" "$fw/uInitrd"
-
-      mkdir -p "$fw/allwinner"
-      cp "$toplevel/dtbs/allwinner/sun60i-a733-orangepi-4-pro.dtb" "$fw/allwinner/.dtb.new"
-      mv "$fw/allwinner/.dtb.new" "$fw/allwinner/sun60i-a733-orangepi-4-pro.dtb"
-
-      echo "opi4pro: regenerating boot.scr on the FAT partition for $toplevel"
-      # kernel-params is the file NixOS writes containing exactly `boot.kernelParams`. Reading it (rather than hardcoding) keeps
-      # switch-time and image-time boot arguments identical.
-      # NOTE: no `root=` here. NixOS uses systemd inside the initrd ("systemd stage 1"), and systemd-fstab-generator builds
-      # sysroot.mount from the initrd's own fstab. Passing root= as well makes it generate the unit twice and stage 1 aborts with
-      # "Failed to create unit file '/run/systemd/generator/sysroot.mount', as it already exists".
-      bootargs="init=$toplevel/init $(cat "$toplevel/kernel-params")"
-      tmp=$(mktemp)
-      cat > "$tmp" <<EOF
-      setenv kernel_addr_r 0x41000000
-      setenv fdt_addr_r 0x4a000000
-      setenv ramdisk_addr_r 0x4b000000
-      setenv fdt_high 0xffffffff
-      setenv initrd_high 0xffffffff
-      load mmc 0:1 \$ramdisk_addr_r uInitrd
-      load mmc 0:1 \$kernel_addr_r Image
-      load mmc 0:1 \$fdt_addr_r allwinner/sun60i-a733-orangepi-4-pro.dtb
-      fdt addr \$fdt_addr_r
-      fdt resize 65536
-      setenv bootargs "$bootargs"
-      booti \$kernel_addr_r \$ramdisk_addr_r \$fdt_addr_r
-      EOF
-      # boot.scr goes to the FAT partition, at its root. U-Boot's distro-boot scan looks for "boot.scr" under the prefixes
-      # "/" and "/boot/" on every BOOTABLE partition - and the installer image marks the FAT partition (and only it) bootable.
-      # Writing it here (rather than /boot/boot.scr on the root filesystem) is what lets the SD card carry only boot artifacts,
-      # and it is also what ends the installer: nixos-install runs this hook inside the chroot, overwriting the installer's own
-      # boot.scr with the final system's, so the next boot goes straight into the installed system instead of installing again.
-      ${pkgs.ubootTools}/bin/mkimage -C none -A arm -T script -d "$tmp" "$fw/boot.scr.new"
-      mv "$fw/boot.scr.new" "$fw/boot.scr"
-      rm -f "$tmp"
+      ${bootFiles.populateFirmware}/bin/opi4pro-populate-firmware "$fw" "$toplevel" "$generations"
       sync
       if ! ${flashUboot}/bin/opi4pro-flash-uboot --check; then
         echo "opi4pro: NOTE — the bootloader on the card is out of date. Run: sudo opi4pro-flash-uboot" >&2
@@ -193,7 +154,6 @@ let
       echo "opi4pro: bootloader install complete"
     '';
   };
-
   # ---------------------------------------------------------------------------------------------------------------------------
   # Upstream sources.
   # ---------------------------------------------------------------------------------------------------------------------------
@@ -729,70 +689,10 @@ let
         touch $out
       '';
 
-  # ---------------------------------------------------------------------------------------------------------------------------
-  # boot.scr - the U-Boot script baked into the SD image (the image-build-time twin of installOpi4ProBootloader).
-  # ---------------------------------------------------------------------------------------------------------------------------
-  # The vendor U-Boot's distro-boot logic scans partitions for /boot/boot.scr and sources it. This is where we take control of
-  # the memory map, which is the single most fragile part of this port.
-  bootScript = pkgs.runCommand "boot.scr" { nativeBuildInputs = [ pkgs.ubootTools ]; } (
-    let
-      # No `root=`: see the note in installOpi4ProBootloader. The initrd's own fstab is the authoritative source, and passing
-      # root= as well makes systemd stage 1 generate sysroot.mount twice and abort.
-      bootArgs = "init=${config.system.build.toplevel}/init ${toString config.boot.kernelParams}";
-    in
-    /* bash */ ''
-      # The comments below document the memory map next to the lines they explain, but they must NOT reach the artifact:
-      # installOpi4ProBootloader emits the same commands WITHOUT them, and the two outputs have to be byte-identical. That is
-      # what lets a freshly flashed card (see setup-opi4pro-boot-image.nix) be verified with a plain `cmp` against a running
-      # system's /boot/firmware/boot.scr - otherwise every comparison reports a false mismatch on this one file. So the
-      # annotated script is written first and the comment/blank lines are stripped before mkimage sees it.
-      cat << EOF > boot.cmd.annotated
-      # Armbian's hardware-tested sun60iw2 memory map. BL31 (the secure monitor) is RESIDENT at 0x48000000-0x48ffffff and is
-      # still needed at handoff time - U-Boot calls into it via SMC to switch the CPU to 64-bit and enter the kernel. So the
-      # kernel goes BELOW it and the FDT/initrd go ABOVE it.
-      setenv kernel_addr_r 0x41000000
-      setenv fdt_addr_r 0x4a000000
-      setenv ramdisk_addr_r 0x4b000000
-
-      # fdt_high/initrd_high = 0xffffffff means "do not relocate, use in place". This is essential, not cosmetic: by default
-      # U-Boot relocates the initrd to the top of its bootm pool (bootm_size=0xa000000, so the top is 0x4a000000). A 38 MB
-      # NixOS initrd relocated there lands at ~0x479db000-0x49fff2b5 - directly on top of resident BL31, destroying the monitor
-      # seconds before the SMC that needs it. The board then hangs silently right after "Starting kernel ...".
-      setenv fdt_high 0xffffffff
-      setenv initrd_high 0xffffffff
-
-      load mmc 0:1 \$ramdisk_addr_r uInitrd
-      load mmc 0:1 \$kernel_addr_r Image
-      load mmc 0:1 \$fdt_addr_r allwinner/sun60i-a733-orangepi-4-pro.dtb
-
-      # Grow the FDT so U-Boot can inject the /chosen node (bootargs, initrd start/end) without running out of space.
-      fdt addr \$fdt_addr_r
-      fdt resize 65536
-
-      setenv bootargs "${bootArgs}"
-      # booti = boot a raw aarch64 Image. (bootm would demand a legacy uImage wrapper and reject a 64-bit payload outright on
-      # this 32-bit U-Boot; the vendor's SMC handoff to BL31 is what actually enters the kernel.)
-      booti \$kernel_addr_r \$ramdisk_addr_r \$fdt_addr_r
-      EOF
-      sed -e '/^[[:space:]]*#/d' -e '/^[[:space:]]*$/d' boot.cmd.annotated > boot.cmd
-      mkimage -C none -A arm -T script -d boot.cmd boot.scr
-      cp boot.scr $out
-    ''
-  );
-
-  # The initrd, wrapped in U-Boot's legacy image format. -C gzip must match boot.initrd.compressor below: the wrapper only
-  # records which compression was used, so a mismatch means U-Boot hands the kernel a ramdisk it cannot unpack.
-  initrdUImage = pkgs.runCommand "uInitrd" { nativeBuildInputs = [ pkgs.ubootTools ]; } /* bash */ ''
-    mkdir -p "$out"
-    ${pkgs.ubootTools}/bin/mkimage -A arm -O linux -T ramdisk -C gzip -n "uInitrd" -d "${config.system.build.initialRamdisk}/initrd" "$out/uInitrd"
-    echo "Verifying uInitrd..."
-    ${pkgs.ubootTools}/bin/mkimage -l "$out/uInitrd"
-  '';
-
   # Flashes the raw Allwinner bootloader region of the SD card the board is currently running from.
   #
   # Why this exists: U-Boot is NOT on a filesystem. It lives in raw sectors (boot0 at 8 KiB, boot_package at 16400 KiB), which
-  # `nixos-rebuild switch` deliberately never touches — the install hook only rewrites kernel/initrd/DTB/boot.scr. So any change
+  # `nixos-rebuild switch` deliberately never touches — the install hook only rewrites the FAT partition. So any change
   # to the U-Boot derivation (defconfig, KCFLAGS, patches, CONFIG_BOOTDELAY, ...) has no effect until this is run.
   #
   # Writing these sectors on a live, mounted card is safe: the region ends around 17.8 MiB and partition 1 starts at 48 MiB, so
@@ -904,7 +804,9 @@ in
       "clk_ignore_unused"
     ];
     initrd = {
-      # Must be gzip: the uInitrd wrapper above is tagged -C gzip, and U-Boot's legacy ramdisk format has no way to negotiate.
+      # gzip is what every initrd this board has booted used, back when U-Boot needed it wrapped and tagged as a uInitrd. The
+      # menu hands U-Boot the raw file now, so only the kernel reads the compression, but nobody has checked which other
+      # decompressors the vendor config builds in.
       compressor = "gzip";
       # The vendor kernel is monolithic for the drivers we need at stage 1; forcing an empty module list avoids the initrd trying
       # to load modules that do not exist in this tree.
@@ -925,12 +827,12 @@ in
     consoleLogLevel = 7; # verbose kernel output on the serial console; this board has no other diagnostic channel
 
     loader = {
-      # extlinux would fight us for control of the boot files and expects a memory map this board cannot use (see boot.scr above).
-      # We drive the boot entirely from boot.scr instead.
+      # The menu IS generic-extlinux-compatible's builder, but run by the hook below: the module would install it to /boot on
+      # the NVMe, which U-Boot cannot read here, and its conf would be booted without the memory map boot.scr sets.
       generic-extlinux-compatible.enable = lib.mkForce false;
       grub.enable = false;
 
-      # Makes `nixos-rebuild switch` update the kernel/initrd/DTB on the FAT partition and regenerate /boot/boot.scr.
+      # Makes `nixos-rebuild switch` rewrite the boot menu on the FAT partition.
       external = {
         enable = true;
         installHook = "${installOpi4ProBootloader}/bin/install-opi4pro-bootloader";
@@ -941,7 +843,7 @@ in
 
   nixpkgs.hostPlatform = lib.mkDefault "aarch64-linux";
 
-  # The ONLY thing mounted from the SD card on the installed system. The install hook updates all four boot artifacts here on
+  # The ONLY thing mounted from the SD card on the installed system. The install hook rewrites the boot menu here on
   # every `nixos-rebuild switch` (and during `nixos-install`, which runs the hook inside the chroot). nofail keeps a missing or
   # damaged FAT partition from blocking multi-user boot (you would still get a shell to fix it from).
   fileSystems."/boot/firmware" = {
@@ -956,17 +858,15 @@ in
     ];
   };
 
-  # Allows caching, run, for example:
-  # nix build .#nixosConfigurations.opi4pro.config.system.build.opi4proInitrdUImage --no-link --print-out-paths | attic push servers --stdin
   system.build = {
     # Exposes the bootloader on its own so it can be built and flashed without regenerating the whole SD image:
     #   nix build .#nixosConfigurations.opi4pro.config.system.build.opi4proUboot --print-build-logs
     #   sudo dd if=result/boot_package.fex of=/dev/sdX bs=1k seek=16400 conv=notrunc,fsync
     opi4proUboot = ubootOrangePi4Pro;
-    opi4proInitrdUImage = initrdUImage;
     opi4proFlashUboot = flashUboot;
-    # Consumed by the installer image (setup-opi4pro.nix) to place this system's boot.scr on the FAT partition at build time.
-    opi4proBootScript = bootScript;
+    # The card's files and the tools that write them, built for the board. The installer image populates its own FAT
+    # partition with these; the card images build their own instance for the PC.
+    opi4proBootFiles = bootFiles;
     # Exposed so tests/opi4pro-kernel-config.nix can pull it into `make checks`. Building it builds the kernel, which CI has
     # already done and cached by the time the checks run.
     opi4proKernelConfigAssertions = kernelConfigAssertions;

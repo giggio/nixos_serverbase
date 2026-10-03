@@ -177,6 +177,14 @@ $(iso_files): $(out_iso_dir)/%.iso: $(out_iso_dir)/.%.iso.stamp;
 build_iso_fast_%:
 	nix build $(nix_flags) .#$*_iso_fast --print-build-logs --keep-going --no-link
 
+## Builds a boot-only SD card image from a running board's generations, read over ssh (read-only on the board).
+## Usage: make boot_card_<machine> BOARD=<ssh target>; writes out/nix/img/<machine>boot-card-<date>.img.zst
+boot_card_%:
+	@test -n "$(BOARD)" || { echo "ERROR: BOARD=<ssh target of the running board> is required" >&2; exit 1; }
+	nix build $(nix_flags) .#$*boot_card --print-build-logs --out-link "$(result_dir)/boot_card_$*"
+	mkdir -p "$(out_img_dir)"
+	"$(result_dir)/boot_card_$*/bin/opi4pro-boot-card" "$(BOARD)" "$(out_img_dir)/$*boot-card-$$(date +%Y%m%d-%H%M%S).img.zst"
+
 # See the comment above about the .stamp file
 $(out_system_dir)/.%.stamp: $(nix_deps)
 	nix build $(nix_flags) .#nixosConfigurations.$*.config.system.build.toplevel --print-build-logs --keep-going --out-link "$(result_system_dir)/$*"

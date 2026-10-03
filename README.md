@@ -142,7 +142,8 @@ You can also create QEMU VMs.
 | Package | What it is |
 |---|---|
 | `<machine>_img` | SD image. For most boards the whole system runs from the card; for machines with `imgIsInstaller = true` it is an unattended installer that wipes the target disk and installs onto it. |
-| `<machine>boot_img` | **Boot-only** SD image, for `imgIsInstaller` machines only. Reproduces just the boot chain so a card can be replaced without reinstalling. Never touches the system disk. |
+| `<machine>boot_img` | **Boot-only** SD image, for `imgIsInstaller` machines only. Reproduces just the boot chain so a card can be replaced without reinstalling. Never touches the system disk. Its boot menu has one entry, this revision's system. |
+| `<machine>boot_card` | Script that builds the same boot-only card from the generations a **running** board has, read over ssh: the full boot menu. `make boot_card_<machine> BOARD=<ssh target>`. |
 | `<machine>_iso` | Installer ISO, for machines with `supportsIso = true`. |
 | `<machine><arch>vm` | QEMU run script. |
 
@@ -241,18 +242,23 @@ flash anything:
   installer runs, or the board will try to build the vendor kernel and U-Boot
   itself. `make cache_opi4pro` pushes it.
 
-To replace a worn-out or undersized SD card **without** reinstalling, build the
-boot-only image instead. It carries just the bootloader region and the four boot
-files, is about 304 MiB (~51 MiB compressed), and never touches the SSD:
+The board boots through a U-Boot menu of its NixOS generations, shown on the
+serial console for 5 seconds at every boot: the current system plus up to 20
+older ones, so rolling back is picking an entry. `nixos-rebuild switch` rewrites
+the menu on the card.
+
+To replace a worn-out SD card **without** reinstalling, build a boot-only card.
+It carries just the bootloader region and a 3 GiB FAT partition with the menu,
+fits a 4 GB card, and never touches the SSD. With the board running, read its
+generations over ssh (read-only on the board):
 
 ```bash
-make out/nix/img/opi4proboot.img.zst          # or: nix build .#opi4proboot_img
-zstdcat out/nix/img/opi4proboot.img.zst | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
+make boot_card_opi4pro BOARD=<ssh target>
+zstdcat out/nix/img/opi4proboot-card-<date>.img.zst | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
 ```
 
-The card is tied to one system generation (`boot.scr` bakes an absolute
-`init=/nix/store/...` path), so build it from the revision the board is actually
-running and verify before flashing — see
+If the board is down, `make out/nix/img/opi4proboot.img.zst` builds a card with
+one entry, this revision's system, which must already be on the SSD — see
 [docs/opi4pro/DISASTER-RECOVERY.md](./docs/opi4pro/DISASTER-RECOVERY.md#7-replace-the-sd-card-without-reinstalling).
 
 ### Deploying to Gmktec G3 Plus

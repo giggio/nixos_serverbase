@@ -383,7 +383,7 @@ therefore *not* the acceptance test. The acceptance test is a first boot with th
 |---|---|
 | SD raw offset 8 KiB | `boot0_sdcard.fex` (DRAM init) |
 | SD raw offset 16400 KiB | `boot_package.fex` (U-Boot + BL31 + SCP) |
-| SD partition 1 — FAT, label `FIRMWARE`, starts 48 MiB, **bootable** | `Image`, `uInitrd`, `allwinner/sun60i-a733-orangepi-4-pro.dtb`, `boot.scr` |
+| SD partition 1 — FAT, label `FIRMWARE`, starts 48 MiB, **bootable** | `Image`, `uInitrd`, `allwinner/sun60i-a733-orangepi-4-pro.dtb`, `boot.scr` (since October 2026: `boot.scr` and the boot menu, see §7, *What a `switch` does and does not update*) |
 | SD partition 2 — ext4, label `NIXOS_SD` | the installer's root; dead weight after installation, and omitted entirely by the boot-only image (§7.4) |
 | NVMe `/dev/nvme0n1` — GPT, one ext4 partition, label `NIXOS_ROOT`, partlabel `disk-main-nixos` | `/`, `/nix`, everything else |
 
@@ -469,12 +469,28 @@ nix path-info --recursive --sigs-required 1 \
 
 ### What a `switch` does and does not update
 
+> **Superseded in October 2026.** The board now boots through a U-Boot menu of its generations. `boot.scr` is static
+> (it sets the memory map of Phase 4, then runs `sysboot` on `menu/extlinux.conf`), and the install hook writes the menu
+> into `menu/`, with the newest 20 generations. `uInitrd` is gone: the menu hands U-Boot the raw initrd. Two more vendor
+> U-Boot limits turned up on the way, and shape the conf: `pxe.c` refuses paths over 127 characters, so nixpkgs' extlinux
+> builder (whose file names are whole store names) could not be used, and the menu's timeout runs 24000 times too fast,
+> because the sunxi `get_tbclk()` returns `CONFIG_SYS_HZ` while `get_ticks()` returns the 24 MHz counter.
+> `modules/opi4pro-boot-files.nix` holds the layout and the reasons for it, and DISASTER-RECOVERY.md §5a how to use the
+> menu. The rest of this section, and the next, describe the layout before that.
+
 `nixos-rebuild switch` runs the install hook, which rewrites **four** things on the FAT partition: `Image`, `uInitrd`,
 the DTB and `boot.scr`. Watch for these lines; if they do not appear, the board will reboot into the old system:
 
 ```text
 opi4pro: installing kernel, initrd, dtb to /boot/firmware
 opi4pro: regenerating boot.scr on the FAT partition for /nix/store/...
+```
+
+With the menu, the lines to watch for are:
+
+```text
+opi4pro: writing the boot menu to /boot/firmware/menu (default entry + up to 20 generations)
+opi4pro: bootloader install complete
 ```
 
 It does **not** touch the raw bootloader sectors. U-Boot lives outside every filesystem, so any change to the U-Boot
@@ -587,7 +603,7 @@ boot on this SoC only becomes possible if and when mainline TF-A and U-Boot gain
 | EDID | The data a display returns describing its capabilities. A corrupt read is what makes the vendor HDMI driver flap. |
 | EHCI / OHCI / xHCI | USB host controller types: EHCI = USB 2.0 (480M), OHCI = USB 1.1 (12M), xHCI = USB 3 (5/10G plus a 480M companion). |
 | EL0–EL3 | ARMv8 Exception Levels: EL0 user, EL1 kernel, EL2 hypervisor, EL3 secure monitor (highest). |
-| extlinux | A simple boot-configuration format NixOS uses by default on ARM; disabled here in favour of `boot.scr`. |
+| extlinux | A simple boot-configuration format NixOS uses by default on ARM. Since October 2026 it is the boot menu here, run by `sysboot` from `boot.scr` rather than found by distro boot, which would skip the memory map. |
 | .fex | Allwinner's file extension for firmware-pipeline artifacts. |
 | frame pointer | A register (r7 in Thumb) holding the current stack frame's base. Its prologue pushes to the stack — fatal inside U-Boot's cache-teardown path, hence `-fomit-frame-pointer`. |
 | HPD | Hot-Plug Detect — the HDMI signal line indicating a display is attached. |

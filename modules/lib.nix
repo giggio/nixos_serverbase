@@ -381,8 +381,9 @@
               #   - machine.imgIsInstaller = true: a lean UNATTENDED INSTALLER SD image - it boots the board, wipes the NVMe
               #     with the final system's disko config, and installs the final system onto it from the flake, pulling the
               #     pre-built closure from the attic cache (e.g. opi4pro). See modules/setup-opi4pro.nix.
-              # Installer machines additionally get a third, <name>boot_img: a BOOT-ONLY card image for replacing a card under
-              # an already-installed system, which reinstalls nothing. See modules/setup-opi4pro-boot-image.nix.
+              # Installer machines additionally get <name>boot_img, a BOOT-ONLY card image for replacing a card under an
+              # already-installed system, which reinstalls nothing, and <name>boot_card, the script that builds the same card
+              # from the generations a running board has. See modules/setup-opi4pro-boot-image.nix.
               mkImg =
                 isDev:
                 let
@@ -401,12 +402,19 @@
                     nixos-system = nixosConfigurations."${configName}";
                     inherit isDev;
                   };
+              # Built on, and run on, the x86_64 machines that build everything else: both only copy the board's files around.
               mkBootImg =
                 isDev:
                 serverbaseModules.lib.mkOpi4ProBootImage {
-                  pkgs = import inputs.nixpkgs { system = "${machine.defaultArch}-linux"; };
+                  pkgs = import inputs.nixpkgs { system = "x86_64-linux"; };
                   finalSystem = nixosConfigurations."${machine.name}${if isDev then "dev" else ""}";
                   inherit isDev;
+                };
+              mkBootCard =
+                isDev:
+                serverbaseModules.lib.mkOpi4ProBootCard {
+                  pkgs = import inputs.nixpkgs { system = "x86_64-linux"; };
+                  finalSystem = nixosConfigurations."${machine.name}${if isDev then "dev" else ""}";
                 };
             in
             {
@@ -416,6 +424,8 @@
             // lib.attrsets.optionalAttrs (machine.imgIsInstaller or false) {
               "${machine.name}boot_img" = mkBootImg false;
               "${machine.name}devboot_img" = mkBootImg true;
+              "${machine.name}boot_card" = mkBootCard false;
+              "${machine.name}devboot_card" = mkBootCard true;
             }
           ) imageSupportingMachines
         );

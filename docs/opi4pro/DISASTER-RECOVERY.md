@@ -8,9 +8,11 @@ nothing. It walks from "the board is dead" to "the board boots again", preferrin
 > Almost every failure is repaired by rewriting something on the SD card, while the SSD (which holds every NixOS
 > generation you have ever built) is left untouched.
 >
-> **If the card itself is dying or too small, you do not need to reinstall.** Build the boot-only image
-> (`nix build .#opi4proboot_img`), flash it to a new card, swap it in. It reproduces the whole boot chain and never
-> touches the NVMe. See **§7**.
+> **To boot an older generation, pick it from the boot menu** on the serial console. See **§5a**.
+>
+> **If the card itself is dying, you do not need to reinstall.** With the board still running, build a card from its
+> generations (`make boot_card_opi4pro BOARD=<ssh target>`), flash it to a new card, swap it in. It reproduces the whole
+> boot chain and never touches the NVMe. See **§7**.
 
 ---
 
@@ -40,7 +42,7 @@ Throughout, `/dev/sdX` means the **whole SD card device** (e.g. `/dev/sdb`, or `
 |---|---|
 | raw offset **8 KiB** | `boot0_sdcard.fex` — Allwinner's DRAM-init blob, read directly by the SoC's boot ROM |
 | raw offset **16400 KiB** | `boot_package.fex` — U-Boot + BL31 (secure monitor) + SCP firmware, read by boot0 |
-| partition 1 — vfat, label `FIRMWARE`, starts at 48 MiB, **bootable flag set** | `Image` (kernel), `uInitrd` (initrd), `allwinner/sun60i-a733-orangepi-4-pro.dtb`, **`boot.scr`** |
+| partition 1 — vfat, label `FIRMWARE`, starts at 48 MiB, **bootable flag set** | **`boot.scr`**, and the boot menu: `menu/extlinux.conf` plus the kernels, initrds and DTBs it loads, under `menu/nixos/`. 3 GiB on a boot-only card, 256 MiB on an installer card |
 | partition 2 — ext4, label `NIXOS_SD` | Leftover installer root. **Not used by the running system.** Ignore it. *Absent entirely on a card written by the boot-only image (§7) — that is normal, not damage.* |
 
 **NVMe SSD** — the root filesystem:
@@ -51,8 +53,8 @@ Throughout, `/dev/sdX` means the **whole SD card device** (e.g. `/dev/sdb`, or `
 
 Two things about this layout are load-bearing and easy to break:
 
-1. **`boot.scr` lives on the FAT partition (partition 1), not on any ext4 root.** Older cards had it at `/boot/boot.scr`
-   on partition 2. If you are looking at an old card, that is why.
+1. **Everything U-Boot reads lives on the FAT partition (partition 1), not on any ext4 root.** Older cards had `boot.scr`
+   at `/boot/boot.scr` on partition 2. If you are looking at an old card, that is why.
 2. **The bootable flag must be on partition 1.** U-Boot's distro-boot scan runs `part list mmc 0 -bootable` and only
    searches partitions in that list for `boot.scr`. If the flag is on partition 2 (the nixpkgs default), U-Boot will
    never find the boot script. Fix with `sudo sfdisk --activate /dev/sdX 1`.
@@ -68,13 +70,13 @@ Power the board with serial attached and read the output. Do not skip this — t
 | **Nothing at all** | Replug the serial adapter; fully power-cycle the board (20 s unplugged). If still silent, see §2's checks — the raw bootloader may be missing. | **§2**, then **§3** |
 | `HELLO! BOOT0 is starting!` then it stops or loops | The bootloader region is damaged or wrong. | **§3** |
 | U-Boot banner (`U-Boot 2018.07-g…`) appears, then `undefined instruction`, or a hang right after `Starting kernel ...` | U-Boot itself is bad. | **§3** |
-| U-Boot runs but cannot find `boot.scr`, or reports `Bad Data CRC`, or cannot load `Image` | Bootloader fine; the boot files or the bootable flag are wrong. | **§4** |
-| Kernel banner appears, then stage 1 fails: cannot find root, drops to an initrd emergency shell | Boot files fine; the NVMe root is unreachable or the generation is broken. | **§5** |
-| Boots, but the system is broken (services failing, bad config) | Roll back to a previous generation. | **§5** |
+| U-Boot runs but cannot find `boot.scr`, shows no menu, or an entry fails with `Skipping … for failure retrieving` | Bootloader fine; the boot files or the bootable flag are wrong. | **§4**, then **§5b** |
+| Kernel banner appears, then stage 1 fails: cannot find root, drops to an initrd emergency shell | Boot files fine; the NVMe root is unreachable or the generation is broken. | **§5a** |
+| Boots, but the system is broken (services failing, bad config) | Roll back to a previous generation from the menu. | **§5a** |
 
 **The key insight for this board:** `/nix/store` on the NVMe almost always survives, and it still contains
-**every previous generation**. So recovery is nearly always "point the boot chain back at a generation that worked"
-(§5), not "rebuild everything".
+**every previous generation**, and the boot menu lists the newest of them. So recovery is nearly always "pick a
+generation that worked" (§5), not "rebuild everything".
 
 ---
 
@@ -222,27 +224,39 @@ nothing mounted is being written.
 
 ## 4. Inspect and repair the boot files (FAT partition)
 
-Do this when U-Boot runs but cannot load or verify the kernel/initrd/DTB/boot script.
+Do this when U-Boot runs but shows no menu, or the menu cannot load an entry's kernel, initrd or DTB.
 
 ```bash
 sudo mkdir -p /mnt/fw
 sudo mount /dev/sdX1 /mnt/fw
 ls -lR /mnt/fw
+cat /mnt/fw/menu/extlinux.conf
 ```
 
-You must see all four (sizes approximate):
+You must see (sizes approximate):
 
 ```text
-/mnt/fw/Image                                        ~25 MB   raw aarch64 kernel
-/mnt/fw/uInitrd                                      ~38 MB   initrd wrapped in U-Boot's legacy format
-/mnt/fw/allwinner/sun60i-a733-orangepi-4-pro.dtb     ~200 KB  device tree
-/mnt/fw/boot.scr                                     ~1 KB    the compiled U-Boot boot script
+/mnt/fw/boot.scr                  ~300 B    static boot script: memory map, then `sysboot` on the menu
+/mnt/fw/menu/extlinux.conf        a few KB  the menu, one LABEL per generation
+/mnt/fw/menu/nixos/<hash>-Image   ~27 MB    kernels, one per distinct kernel
+/mnt/fw/menu/nixos/<hash>-initrd  ~40 MB    initrds, raw (no uInitrd wrapper), one per distinct initrd
+/mnt/fw/menu/nixos/<hash>-dtb     ~210 KB   device trees, one per distinct kernel
 ```
 
-If `boot.scr` is missing but the others are present, you are probably looking at a card built before `boot.scr` moved to
-the FAT partition — check partition 2 for an old `/boot/boot.scr`, and see the bootable-flag note in §0.
+`<hash>` is the store hash of what the file was copied from. Every `LINUX`, `INITRD` and `FDT` line in `extlinux.conf`
+names one of them by its absolute path. A file a line names that is missing, zero-length or truncated breaks that entry
+only: U-Boot skips it and tries the next entry. §5c rewrites the whole partition from the PC.
 
-If any file is missing, zero-length or truncated, §5 rewrites all four together.
+Two things this U-Boot needs from the conf, both learned by booting it (2026-10-03):
+
+- **No path over 127 characters**, conf directory included. `pxe.c` prints `Base path too long` and skips the entry.
+  That is why the files have short names instead of the store names nixpkgs' extlinux builder would give them.
+- **`TIMEOUT 1200000`, not `50`.** This U-Boot's menu counts its timeout in units 24000 times too short, so `50` boots
+  the default instantly. `1200000` is 5 seconds here. See `menuTimeout` in `modules/opi4pro-boot-files.nix`.
+
+**A card from before the boot menu** has `Image`, `uInitrd`, `allwinner/…dtb` and a larger `boot.scr` at the root of the
+partition instead, and no `menu/`. That layout still boots, one generation only; the first `nixos-rebuild switch` of a
+configuration with the menu replaces it.
 
 ```bash
 sudo umount /mnt/fw
@@ -252,17 +266,98 @@ sudo umount /mnt/fw
 
 ## 5. Roll the board back to a working generation (no rebuild)
 
-This is the main recovery path. It works entirely from the board's own disks: every previous NixOS generation is still
-in `/nix/store` **on the NVMe**. Pick one that worked and rewrite the four boot artifacts to point at it.
+This is the main recovery path. Every previous NixOS generation is still in `/nix/store` **on the NVMe**, and the boot
+menu on the card lists the newest of them (the current system plus up to 20 older ones). Pick one that worked.
 
-> This section rewrites the four files **in place** on the existing card, from a generation already on the NVMe — which
-> is what you want for a rollback, and it needs no network and no rebuild. If instead the card itself is bad and you
-> want a fresh one carrying the *current* system, §7 builds that in one command.
+### 5a. Pick an older generation from the boot menu
 
-### 5a. Mount both disks and list the generations
+No card removal, no PC. Power on with serial attached. After U-Boot's 5-second countdown (do not press anything there),
+the menu appears:
 
-You need the NVMe in your PC (an M.2 USB enclosure) **or** you can do this from the board itself if it still reaches a
-shell (including the initrd emergency shell). The PC route:
+```text
+------------------------------------------------------------
+1:  NixOS - Default
+2:  NixOS - Configuration 48-default (2026-10-01 01:23 - 26.05.20260927.cf5e765)
+3:  NixOS - Configuration 47-default (2026-09-30 12:44 - 26.05.20260927.cf5e765)
+…
+Enter choice:
+```
+
+Type the number in front of the entry and Enter, within 5 seconds. That number is the entry's position in the list,
+not the generation: for generation 46 above it is `4`, and typing `46` only gets `46 not found` and the menu again. Any
+keypress stops the countdown, so you can read the list first; after that the menu waits for a choice. With no input it
+boots `Default`, which is the newest generation. Ctrl-C leaves the menu for the `=>` prompt.
+
+Once logged in, confirm you are on the generation you picked:
+
+```bash
+cat /proc/cmdline                    # the init= path must be the generation you chose
+readlink -f /run/booted-system
+findmnt /                            # SOURCE must be /dev/nvme0n1p1
+```
+
+The menu choice lasts one boot. To make it the default, so the next `nixos-rebuild` builds on top of it:
+
+```bash
+sudo nix-env -p /nix/var/nix/profiles/system --switch-generation 42    # the number you picked
+sudo /nix/var/nix/profiles/system/bin/switch-to-configuration switch
+```
+
+That runs the bootloader hook too, so the menu's `Default` becomes that generation.
+
+### 5b. If the menu does not come up, but the U-Boot prompt does
+
+Interrupt the 5-second countdown (any keypress; holding `s` also works) and run what `boot.scr` runs:
+
+```text
+=> setenv kernel_addr_r 0x41000000
+=> setenv fdt_addr_r 0x4a000000
+=> setenv pxefile_addr_r 0x4a800000
+=> setenv ramdisk_addr_r 0x4b000000
+=> setenv fdt_high 0xffffffff
+=> setenv initrd_high 0xffffffff
+=> sysboot mmc 0:1 any ${pxefile_addr_r} /menu/extlinux.conf
+```
+
+If `sysboot` cannot read the menu, boot one entry by hand after the same six `setenv` lines. `ls mmc 0:1 /menu/nixos`
+lists the files; load the initrd **last**, because `booti` needs its size, and `${filesize}` holds whatever was loaded
+most recently:
+
+```text
+=> load mmc 0:1 ${kernel_addr_r} /menu/nixos/<hash>-Image
+=> load mmc 0:1 ${fdt_addr_r} /menu/nixos/<hash>-dtb
+=> load mmc 0:1 ${ramdisk_addr_r} /menu/nixos/<other hash>-initrd
+=> setenv bootargs "console=tty0 console=ttyS0,115200n8 earlyprintk=sunxi-uart,0x02500000 clk_ignore_unused init=/nix/var/nix/profiles/system-42-link/init"
+=> booti ${kernel_addr_r} ${ramdisk_addr_r}:${filesize} ${fdt_addr_r}
+```
+
+`init=/nix/var/nix/profiles/system/init` boots whatever the current profile points at; `system-42-link` a specific
+generation. Any kernel and initrd on the card will do as long as they are recent enough for that generation's modules.
+Useful prompt commands: `ls mmc 0:1 /menu/nixos`, `part list mmc 0 -bootable` (confirms partition 1 is the one being
+scanned), `printenv`.
+
+If this boots, you have a running system — log in and run `sudo nixos-rebuild switch --rollback`, or §5a's two commands,
+then reboot.
+
+Notes on the memory map, so you can reason about it years from now:
+
+- **The addresses are load-bearing.** BL31 — the secure-monitor firmware — is *resident* at `0x48000000`–`0x48ffffff`
+  and is still needed at the very last moment, because U-Boot calls into it via SMC to switch the CPU to 64-bit and
+  enter the kernel. So the kernel loads *below* it and the DTB, the menu file and the initrd *above* it.
+- **`fdt_high` / `initrd_high` = `0xffffffff` means "do not relocate".** Without them U-Boot moves the ~40 MB initrd to
+  the top of its bootm pool, which lands on top of BL31 and destroys the monitor — the board then hangs silently right
+  after `Starting kernel ...`. This is also why the menu is not at `/extlinux/extlinux.conf`: distro boot would find it
+  there before `boot.scr` and boot it without these settings.
+- **Everything loads from `mmc 0:1`** — the FAT partition. The kernel finds the NVMe root later, from the initrd.
+- **There is deliberately no `root=` argument.** NixOS runs systemd inside the initrd and derives the root filesystem
+  from the initrd's own fstab (which disko generated pointing at the NVMe). Passing `root=` as well makes it generate
+  `sysroot.mount` twice and stage 1 aborts with *"Failed to create unit file … as it already exists"*.
+
+### 5c. Rewrite the card from the PC
+
+When neither the menu nor the prompt gets you anywhere, and the card is fine but its FAT partition is not. This works
+from the disks alone: the NVMe in an M.2 USB enclosure, the SD card in the reader. (If the **card** is the problem
+rather than its files, §7 is quicker: it builds a new one.)
 
 ```bash
 lsblk -f                                   # find the NVMe (ext4, label NIXOS_ROOT) and the SD card
@@ -282,95 +377,55 @@ system-42-link -> /nix/store/bbbb…-nixos-system-opi4pro-…
 system-43-link -> /nix/store/cccc…-nixos-system-opi4pro-…
 ```
 
-The highest number is the one that just broke. **Pick the one below it.**
+The highest number is the newest. **Pick one you know booted.** The links are absolute `/nix/store` paths that mean the
+board's store, so resolve them by hand under `/mnt/nixos`:
 
 ```bash
 GEN=42                                     # <-- change to the generation you want
 
-TOPLEVEL_ON_DISK="$(readlink -f "/mnt/nixos/nix/var/nix/profiles/system-$GEN-link")"
-echo "$TOPLEVEL_ON_DISK"                   # /mnt/nixos/nix/store/bbbb…-nixos-system-…
-
-# The SAME path as the BOARD will see it (prefix stripped). This is what goes into the boot arguments.
-TOPLEVEL_ON_BOARD="${TOPLEVEL_ON_DISK#/mnt/nixos}"
-echo "$TOPLEVEL_ON_BOARD"                  # /nix/store/bbbb…-nixos-system-…
-
-# Sanity check: all of these must exist
-ls -l "$TOPLEVEL_ON_DISK/kernel" "$TOPLEVEL_ON_DISK/initrd" "$TOPLEVEL_ON_DISK/init" "$TOPLEVEL_ON_DISK/kernel-params"
-ls -l "$TOPLEVEL_ON_DISK/dtbs/allwinner/sun60i-a733-orangepi-4-pro.dtb"
+TOPLEVEL_ON_BOARD="$(readlink "/mnt/nixos/nix/var/nix/profiles/system-$GEN-link")"
+TOPLEVEL_ON_DISK="/mnt/nixos$TOPLEVEL_ON_BOARD"
+echo "$TOPLEVEL_ON_BOARD"                  # /nix/store/bbbb…-nixos-system-…   (goes into init=)
+KERNEL="/mnt/nixos$(readlink "$TOPLEVEL_ON_DISK/kernel")"
+INITRD="/mnt/nixos$(readlink "$TOPLEVEL_ON_DISK/initrd")"
+DTB="/mnt/nixos$(readlink "$TOPLEVEL_ON_DISK/dtbs")/allwinner/sun60i-a733-orangepi-4-pro.dtb"
+ls -l "$KERNEL" "$INITRD" "$DTB" "$TOPLEVEL_ON_DISK/init" "$TOPLEVEL_ON_DISK/kernel-params"   # all must exist
 ```
 
-### 5b. Get `mkimage`
-
-Needed to wrap the initrd and compile the boot script.
+Write a one-entry menu and the static `boot.scr`. The menu's file names are free; these are short on purpose:
 
 ```bash
-nix shell nixpkgs#ubootTools      # or: nix-shell -p ubootTools
-mkimage -V                        # confirm it runs
-```
+sudo mkdir -p /mnt/fw/menu/nixos
+sudo cp "$KERNEL" /mnt/fw/menu/nixos/rescue-Image
+sudo cp "$INITRD" /mnt/fw/menu/nixos/rescue-initrd
+sudo cp "$DTB"    /mnt/fw/menu/nixos/rescue.dtb
 
-### 5c. Rewrite the kernel, initrd and DTB on the FAT partition
+sudo tee /mnt/fw/menu/extlinux.conf > /dev/null <<EOF
+DEFAULT rescue
+TIMEOUT 1200000
+MENU TITLE ------------------------------------------------------------
 
-```bash
-sudo cp "$TOPLEVEL_ON_DISK/kernel" /mnt/fw/Image
-
-sudo mkimage -A arm -O linux -T ramdisk -C gzip -n uInitrd \
-  -d "$TOPLEVEL_ON_DISK/initrd" /mnt/fw/uInitrd
-
-sudo mkdir -p /mnt/fw/allwinner
-sudo cp "$TOPLEVEL_ON_DISK/dtbs/allwinner/sun60i-a733-orangepi-4-pro.dtb" \
-  /mnt/fw/allwinner/sun60i-a733-orangepi-4-pro.dtb
-```
-
-Why the initrd is wrapped but the kernel is not: the boot script uses `booti`, which takes a **raw** aarch64 `Image`,
-but U-Boot needs the legacy `uInitrd` wrapper to learn the ramdisk's size and compression. `-C gzip` must match the
-initrd's actual compression (the configuration forces gzip for exactly this reason).
-
-**Check:** `mkimage -l /mnt/fw/uInitrd` should print `Image Type: ARM Linux RAMDisk Image (gzip compressed)` and a sane
-size.
-
-### 5d. Rewrite `boot.scr` (also on the FAT partition)
-
-`boot.scr` is a *compiled* U-Boot script with the target generation's store path baked in, which is why it must be
-regenerated whenever you change generations.
-
-```bash
-cat > /tmp/boot.cmd <<EOF
-setenv kernel_addr_r 0x41000000
-setenv fdt_addr_r 0x4a000000
-setenv ramdisk_addr_r 0x4b000000
-setenv fdt_high 0xffffffff
-setenv initrd_high 0xffffffff
-load mmc 0:1 \$ramdisk_addr_r uInitrd
-load mmc 0:1 \$kernel_addr_r Image
-load mmc 0:1 \$fdt_addr_r allwinner/sun60i-a733-orangepi-4-pro.dtb
-fdt addr \$fdt_addr_r
-fdt resize 65536
-setenv bootargs "init=$TOPLEVEL_ON_BOARD/init $(cat "$TOPLEVEL_ON_DISK/kernel-params")"
-booti \$kernel_addr_r \$ramdisk_addr_r \$fdt_addr_r
+LABEL rescue
+  MENU LABEL NixOS - Configuration $GEN (written by hand)
+  LINUX /menu/nixos/rescue-Image
+  INITRD /menu/nixos/rescue-initrd
+  APPEND init=$TOPLEVEL_ON_BOARD/init $(cat "$TOPLEVEL_ON_DISK/kernel-params")
+  FDT /menu/nixos/rescue.dtb
 EOF
-
-cat /tmp/boot.cmd                    # READ IT. init= must start with /nix/store, NOT /mnt/nixos.
-
-sudo mkimage -C none -A arm -T script -d /tmp/boot.cmd /mnt/fw/boot.scr
+cat /mnt/fw/menu/extlinux.conf   # READ IT. init= must start with /nix/store, NOT /mnt/nixos.
 ```
 
-Notes on the content, so you can reason about it years from now:
+`boot.scr` is the same on every card, so build it rather than write it:
 
-- **The memory addresses are load-bearing.** BL31 — the secure-monitor firmware — is *resident* at
-  `0x48000000`–`0x48ffffff` and is still needed at the very last moment, because U-Boot calls into it via SMC to switch
-  the CPU to 64-bit and enter the kernel. So the kernel loads *below* it and the DTB and initrd *above* it.
-- **`fdt_high` / `initrd_high` = `0xffffffff` means "do not relocate".** Without them U-Boot moves the ~38 MB initrd to
-  the top of its bootm pool, which lands on top of BL31 and destroys the monitor — the board then hangs silently right
-  after `Starting kernel ...`.
-- **Everything loads from `mmc 0:1`** — the FAT partition. Nothing is read from the SD's ext4 partition, and nothing on
-  the SD is read from the NVMe at this stage; the kernel finds the NVMe root later, from the initrd.
-- **There is deliberately no `root=` argument.** NixOS runs systemd inside the initrd and derives the root filesystem
-  from the initrd's own fstab (which disko generated pointing at the NVMe). Passing `root=` as well makes it generate
-  `sysroot.mount` twice and stage 1 aborts with *"Failed to create unit file … as it already exists"*.
-- `kernel-params` is the file NixOS writes containing exactly the kernel parameters that generation was built with;
-  reading it keeps this script consistent with the real configuration.
+```bash
+cd /path/to/your/nixos-config
+nix build .#nixosConfigurations.opi4pro.config.system.build.opi4proBootFiles.bootScript -o result-bootscr
+sudo cp result-bootscr /mnt/fw/boot.scr
+```
 
-### 5e. Unmount and boot
+Without a checkout, compile the seven lines of §5b (the six `setenv` and the `sysboot`) with
+`nix shell nixpkgs#ubootTools -c mkimage -C none -A arm -T script -d boot.cmd boot.scr` instead; in a file, the
+`${pxefile_addr_r}` stays literal for U-Boot to expand.
 
 ```bash
 sync
@@ -381,52 +436,13 @@ Reassemble the board and power on with serial attached. **Check it worked**, in 
 
 1. `U-Boot 2018.07-g…` banner, then a 5-second countdown
 2. `Found U-Boot script` (from partition 1)
-3. three successful `… bytes read` lines (initrd ≈ 38 MB, kernel ≈ 25 MB, DTB ≈ 200 KB)
+3. the menu, then `Retrieving file:` lines for the kernel, initrd and DTB
 4. `Starting kernel ...`
 5. `NOTICE: [SCP] :arisc startup ready` and `NOTICE: BL3-1: Next image address = 0x41000000`
 6. `[ 0.000000] Booting Linux on physical CPU …`
 7. stage 1 mounts the NVMe root, then a login prompt
 
-Once logged in, confirm you are on the generation you intended and that root really is on the SSD:
-
-```bash
-cat /proc/cmdline                    # the init= path must be the generation you chose
-readlink -f /run/current-system
-findmnt /                            # SOURCE must be /dev/nvme0n1p1
-```
-
-Then make it permanent, so the next `nixos-rebuild` builds on top of the working generation:
-
-```bash
-sudo nix-env -p /nix/var/nix/profiles/system --switch-generation 42
-sudo /nix/var/nix/profiles/system/bin/switch-to-configuration switch
-```
-
-### 5f. If you can reach the U-Boot prompt, you can skip most of this
-
-Booting an older generation by hand needs no card removal at all. Interrupt the 5-second countdown (any keypress;
-holding `s` also works), then:
-
-```text
-=> setenv kernel_addr_r 0x41000000
-=> setenv fdt_addr_r 0x4a000000
-=> setenv ramdisk_addr_r 0x4b000000
-=> setenv fdt_high 0xffffffff
-=> setenv initrd_high 0xffffffff
-=> load mmc 0:1 ${ramdisk_addr_r} uInitrd
-=> load mmc 0:1 ${kernel_addr_r} Image
-=> load mmc 0:1 ${fdt_addr_r} allwinner/sun60i-a733-orangepi-4-pro.dtb
-=> fdt addr ${fdt_addr_r}
-=> fdt resize 65536
-=> setenv bootargs "console=tty0 console=ttyS0,115200n8 earlyprintk=sunxi-uart,0x02500000 clk_ignore_unused init=/nix/var/nix/profiles/system/init"
-=> booti ${kernel_addr_r} ${ramdisk_addr_r} ${fdt_addr_r}
-```
-
-`init=/nix/var/nix/profiles/system/init` boots whatever the current profile points at. For a specific older generation
-use `init=/nix/var/nix/profiles/system-42-link/init`. Useful prompt commands: `ls mmc 0:1` (list the FAT partition),
-`part list mmc 0 -bootable` (confirm partition 1 is the one being scanned), `printenv`.
-
-If this boots, you have a running system — log in and run `sudo nixos-rebuild switch --rollback`, then reboot.
+Then confirm and make it permanent with §5a's commands. The switch rewrites the menu properly, with every generation.
 
 ---
 
@@ -472,72 +488,70 @@ place: `journalctl -u unattended-install`, `ip a`, `resolvectl status`, `lsblk -
 
 ## 7. Replace the SD card without reinstalling
 
-This is the right path when the **card** is the problem — it is failing, it is too small, or you simply want a spare
-ready — and the NVMe root is healthy. It reinstalls nothing and never touches the SSD.
+This is the right path when the **card** is the problem — it is failing (cards here last about two years), or you
+simply want a spare ready — and the NVMe root is healthy. It reinstalls nothing and never touches the SSD.
 
-`nix build .#opi4proboot_img` produces a **boot-only** card image: the raw bootloader region plus a single bootable FAT
-partition holding the same four files a `nixos-rebuild switch` writes. It is ~304 MiB uncompressed (about 51 MiB
-compressed), against several GB for the installer, and it fits a 4 GB card with room to spare.
+A **boot-only** card is the raw bootloader region plus one bootable FAT partition of 3 GiB holding `boot.scr` and the
+boot menu. The image is ~3.05 GiB uncompressed, roughly 50–150 MiB compressed, and fits any 4 GB card. There are two
+ways to fill its menu.
 
-> **The one coupling you must respect.** `boot.scr` bakes an absolute `init=/nix/store/<toplevel>/init`, so the card is
-> tied to one specific system generation, and **that store path must already exist on the NVMe**. Build the card from
-> the same flake revision the board is actually running. Deploy first, then build the card, then verify the two match
-> before flashing.
+### 7a. From the running board (the normal way)
+
+`opi4pro-boot-card` reads the board's generations over ssh and builds the card with the menu the board's own
+`nixos-rebuild switch` would write: the current system plus up to 20 older generations. It is read-only on the board —
+no sudo, nothing written there — and every entry is on the NVMe by construction, because that is where it was read
+from.
 
 ```bash
-# 1. Deploy the revision you are about to build the card from, so the NVMe has its closure.
-#    (Skip only if the board is already running exactly this revision.)
-nixos-rebuild switch --flake .#opi4pro --target-host <user>@<board> --use-remote-sudo
-
-# 2. VERIFY. These two must print the SAME store path. If they differ, stop — the card will not boot.
-nix eval --raw .#nixosConfigurations.opi4pro.config.system.build.toplevel
-ssh <board> readlink -f /run/current-system
-
-# 3. Build and flash.
-nix build .#opi4proboot_img --print-build-logs
-lsblk                                    # CONFIRM the device
-zstdcat result/opi4proboot.img.zst | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
+cd /path/to/your/nixos-config
+make boot_card_opi4pro BOARD=<ssh target>     # prints the menu it wrote, and the image path
+lsblk                                         # CONFIRM the device
+zstdcat out/nix/img/opi4proboot-card-<date>.img.zst | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
 sync
 ```
 
-Or, with the Makefile: `make out/nix/img/opi4proboot.img.zst`.
-
-### Verify the card before you trust it
-
-The four files are generated so that a card and a running system are **byte-identical**, which makes this a real check
-rather than an eyeball comparison. On the board:
+The script checks every file it copied against its sha256 on the board, and reads the whole partition back before it
+compresses the image. To check what landed on the card, compare its first 3120 MiB (48 MiB of bootloader region plus the
+3072 MiB partition, the whole image) with the image:
 
 ```bash
-sudo sha256sum /boot/firmware/{Image,uInitrd,boot.scr} /boot/firmware/allwinner/*.dtb
+zstdcat out/nix/img/opi4proboot-card-<date>.img.zst | sudo cmp -n $((3120 * 1024 * 1024)) - /dev/sdX && echo "card matches the image"
 ```
 
-and on the PC, with the freshly flashed card's FAT partition mounted:
+### 7b. From the flake alone (the board is down)
+
+`nix build .#opi4proboot_img` builds a card whose menu has **one** entry: the system of the revision you build from.
+
+> **The one coupling you must respect.** That entry boots `init=/nix/store/<toplevel>/init`, so **that store path must
+> already exist on the NVMe**. Build the card from the revision the board was last running, and check before flashing.
 
 ```bash
-sha256sum /path/to/FIRMWARE/{Image,uInitrd,boot.scr} /path/to/FIRMWARE/allwinner/*.dtb
+# These two must print the SAME store path. If they differ, stop — the entry will not boot.
+nix eval --raw .#nixosConfigurations.opi4pro.config.system.build.toplevel
+ssh <board> readlink -f /run/current-system        # or, with the board down, the NVMe mounted on the PC:
+readlink /mnt/nixos/nix/var/nix/profiles/system-<N>-link
+
+make out/nix/img/opi4proboot.img.zst               # or: nix build .#opi4proboot_img
+lsblk                                              # CONFIRM the device
+zstdcat out/nix/img/opi4proboot.img.zst | sudo dd of=/dev/sdX bs=4M status=progress conv=fsync
+sync
 ```
 
-All four hashes must match. Two details make that possible, and both will bite you if they are ever undone:
-
-- The `boot.scr` derivation strips its own explanatory comments before `mkimage` sees them, so it emits exactly what the
-  switch-time install hook emits. (Before this, the card's `boot.scr` was 1872 bytes and the system's 788 — same
-  commands, different bytes.)
-- Both `mkimage` call sites pin `SOURCE_DATE_EPOCH`. The legacy U-Boot header stores a generation timestamp that also
-  feeds the header CRC, so without pinning, a switch-generated `uInitrd`/`boot.scr` could never match a nix-built one
-  even with an identical payload — the sizes match and 8 bytes differ.
+The first `nixos-rebuild switch` on the board fills the menu with every generation.
 
 ### When this is *not* the right tool
 
 - **The NVMe root is gone or corrupt** → §6, the installer, which wipes and reinstalls.
-- **You need a generation that is on the NVMe but not in your flake** (a rollback) → §5, which rewrites the four files
-  in place from whatever is already in `/nix/store`.
+- **You need a generation that is on the NVMe but not in the menu** → §5b boots it from the prompt, §5c writes it to the
+  card by hand.
 - **Only the bootloader is bad and the card is otherwise fine** → §3, cheaper.
 
 ### Keep a spare
 
-The old card is a perfect backup of a known-good boot chain, so keep it rather than reusing it — if a new card
-misbehaves, put the old one back and you are running again in a minute. Building a spare while the system is healthy
-costs one command, and it is the cheapest insurance on this board given the card can never be removed.
+The old card is a backup of a known-good boot chain, so keep it rather than reusing it — if a new card misbehaves, put
+the old one back and you are running again in a minute. Its menu ages, though: it lists the generations of the day it
+was last in the board, and those stay bootable only until a garbage collection removes them from the NVMe. Rebuild the
+spare with §7a now and then.
 
 ---
 
@@ -623,13 +637,16 @@ rejected.
 |---|---|
 | Serial console | 115200 baud, 8N1 |
 | U-Boot countdown | 5 seconds (any key aborts; holding `s` also drops to shell) |
+| Boot menu | after the countdown, 5 seconds; type the entry number and Enter. Default = newest generation, then up to 20 older |
 | boot0 raw offset | 8 KiB (`dd … bs=1k seek=8`) |
 | boot_package raw offset | 16400 KiB (`dd … bs=1k seek=16400`) |
-| SD partition 1 (`FIRMWARE`) | vfat, starts 48 MiB, 256 MiB, **bootable**; holds `Image`, `uInitrd`, `allwinner/*.dtb`, `boot.scr` |
+| SD partition 1 (`FIRMWARE`) | vfat, starts 48 MiB, 3 GiB (256 MiB on an installer card), **bootable**; holds `boot.scr` and `menu/` |
+| The menu | `menu/extlinux.conf`; deliberately not `/extlinux/`, which distro boot would boot without `boot.scr`. Paths in it at most 127 characters; `TIMEOUT 1200000` is 5 seconds on this U-Boot |
 | SD partition 2 (`NIXOS_SD`) | ext4; leftover installer root, unused. Absent on a boot-only card |
 | NVMe root | `/dev/nvme0n1p1`, ext4, label `NIXOS_ROOT`; holds `/nix/store` and all generations |
 | Kernel load address | `0x41000000` (below BL31) |
 | DTB load address | `0x4a000000` (above BL31) |
+| Menu file load address | `0x4a800000` (`pxefile_addr_r`, above BL31) |
 | Initrd load address | `0x4b000000` (above BL31) |
 | BL31 (resident — never overwrite) | `0x48000000`–`0x48ffffff` |
 | Must-have U-Boot flag | `-fomit-frame-pointer` in `KCFLAGS` — omitting it bricks the boot |
@@ -640,7 +657,7 @@ rejected.
 | Reflash bootloader from the board | `sudo opi4pro-flash-uboot` |
 | Build bootloader only | `nix build .#nixosConfigurations.opi4pro.config.system.build.opi4proUboot` |
 | Build installer image (wipes NVMe) | `nix build .#opi4pro_img` |
-| Build boot-only card image (§7, safe) | `nix build .#opi4proboot_img` — ~304 MiB, fits a 4 GB card |
-| Card must match the running generation | `nix eval --raw .#nixosConfigurations.opi4pro.config.system.build.toplevel` vs `readlink -f /run/current-system` |
-| Card is verifiable by hash | the four FAT files are byte-identical to a running system's `/boot/firmware` |
+| Build a boot-only card from the running board (§7a, safe) | `make boot_card_opi4pro BOARD=<ssh target>` — 3.05 GiB image, fits a 4 GB card |
+| Build a boot-only card from the flake (§7b, safe) | `nix build .#opi4proboot_img` — one entry, which must already be on the NVMe |
+| Card is verifiable | `zstdcat <image> \| sudo cmp -n $((3120 * 1024 * 1024)) - /dev/sdX` |
 | Deploy a change | sign closure `--recursive`, then `nixos-rebuild switch --flake .#opi4pro --target-host …` |

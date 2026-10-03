@@ -17,6 +17,7 @@
   traefik-provider = ./traefik-provider.nix;
   gmktec1-docker = ./gmktec1-docker.nix;
   opi4pro-kernel-config = ./opi4pro-kernel-config.nix;
+  opi4pro-boot-menu = ./opi4pro-boot-menu.nix;
   clevis-unlock = ./clevis-unlock.nix;
   encrypted-state = ./encrypted-state.nix;
   encrypted-state-integrity = ./encrypted-state-integrity.nix;
