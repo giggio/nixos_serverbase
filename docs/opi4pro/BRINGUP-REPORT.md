@@ -1,8 +1,9 @@
 # Bringing NixOS Up on the Orange Pi 4 Pro (Allwinner A733): Full Technical Report
 
-*Third revision. The board boots NixOS from a self-built SD image, installs itself unattended onto an NVMe SSD, and runs
-with U-Boot, the Linux kernel, the initrd and the boot script all compiled from source. Three binary blobs remain
-(boot0, BL31, SCP firmware); none has public source anywhere.*
+*Fourth revision (October 2026). The board boots NixOS from a self-built SD image, installs itself unattended onto an
+NVMe SSD, runs with U-Boot, the Linux kernel, the initrd and the boot script all compiled from source, and boots through
+a U-Boot menu of its NixOS generations. Three binary blobs remain (boot0, BL31, SCP firmware); none has public source
+anywhere.*
 
 ---
 
@@ -38,11 +39,16 @@ an ID pin that this board does not have. Two device-tree properties fixed it.
 The system now runs from NVMe, is deployed over the network from a build machine, and recovers from a documented runbook
 ([`DISASTER-RECOVERY.md`](./DISASTER-RECOVERY.md)).
 
-**Part D — replacing the SD card (§7.4), added after the original bring-up.** Because the card is a permanent part of
+**Part D — replacing the SD card (§7), added after the original bring-up.** Because the card is a permanent part of
 the boot chain, a worn-out or undersized card was initially a reinstall. It is not: the card holds only a bootloader
-region and four files, so a **boot-only image** reproduces it in ~304 MiB without touching the NVMe. Making that
-verifiable turned up one more non-obvious detail — two different code paths generate `boot.scr`, and they disagreed by
-1084 bytes of comments and by the timestamp `mkimage` stamps into every legacy U-Boot header.
+region and one FAT partition, so a **boot-only card** reproduces it without touching the NVMe. Since Part E it is built
+from the running board's own generations, read over ssh.
+
+**Part E — a boot menu of generations (§7, *The boot menu*), added in October 2026.** Until then the board booted one
+generation, and rolling back meant mounting both disks on a PC. The vendor U-Boot turned out to have extlinux menu
+support built in, behind three traps of its own: no memory map in its default environment, a 127-character limit on
+every path in the menu, and a menu timeout that runs 24000 times too fast. Each one failed a real boot before it was
+understood.
 
 ---
 
@@ -93,8 +99,8 @@ boot.
 
 **Stage 4 — U-Boot.** The familiar open-source bootloader — except this is Allwinner's fork of U-Boot 2018.05, heavily
 modified, and built as a **32-bit ARM program** even though the CPU and kernel are 64-bit. This is deliberate vendor
-practice on recent Allwinner chips. U-Boot scans for a boot script, loads the kernel, initial ramdisk and device tree
-into RAM, and then hands over.
+practice on recent Allwinner chips. U-Boot scans for a boot script, which sets the memory map and shows the menu of
+generations (§7); it loads the chosen entry's kernel, initial ramdisk and device tree into RAM, and then hands over.
 
 **The 32→64-bit handoff.** A 32-bit program cannot jump into 64-bit code; the CPU must change execution state, and only
 EL3 can arrange that. So vendor U-Boot performs an SMC — a Secure Monitor Call, the ARM instruction that traps into EL3
@@ -179,7 +185,8 @@ The flashed image then failed differently:
 `systemd-fstab-generator: Failed to create unit file '/run/systemd/generator/sysroot.mount', as it already exists.`
 NixOS uses systemd inside the initrd ("systemd stage 1"), and the root filesystem was being declared twice — once by
 `root=` on the kernel command line and once by the initrd's own fstab. Deleting `root=` resolved it, and the board
-booted unattended into a login shell.
+booted unattended into a login shell. (The command line does carry `root=fstab` today: NixOS adds it for systemd stage 1,
+and it means "take the root from the initrd's fstab". What breaks is a `root=<device>` next to that fstab.)
 
 ### Phase 7 — de-blobbing, and the real U-Boot bug
 
@@ -278,10 +285,11 @@ boot chain but incompatible root filesystems:
 
 | File | Role |
 |---|---|
-| `config-physical-opi4pro-common.nix` | The entire boot chain: vendor U-Boot, vendor kernel, `boot.scr`, the bootloader install hook, `opi4pro-flash-uboot`. Imported by **both** the installer and the installed system. Deliberately does **not** import `sd-image.nix`. |
+| `config-physical-opi4pro-common.nix` | The entire boot chain: vendor U-Boot, vendor kernel, the bootloader install hook, `opi4pro-flash-uboot`. Imported by **both** the installer and the installed system. Deliberately does **not** import `sd-image.nix`. |
+| `opi4pro-boot-files.nix` | What the FAT partition holds and the tools that write it: the static `boot.scr`, the menu writer, the card assembler, `opi4pro-boot-card`. Added with the boot menu (§7); used by the hook, both images and the card script alike. |
 | `config-physical-opi4pro.nix` | The installed system: imports the common module plus disko, and declares the NVMe layout. |
 | `setup-opi4pro.nix` | `mkOpi4ProInstallerImage`: builds the installer SD image. Imports the common module plus `sd-image.nix`. |
-| `setup-opi4pro-boot-image.nix` | `mkOpi4ProBootImage`: builds the boot-only card image for replacing a card under an already-installed system (§7.4). Imports nothing — it assembles the final system's existing boot artifacts. |
+| `setup-opi4pro-boot-image.nix` | `mkOpi4ProBootImage` and `mkOpi4ProBootCard`: the boot-only card for replacing a card under an already-installed system (§7), from the flake or from the running board. Imports nothing — it assembles the final system's existing boot artifacts. |
 
 `sd-image.nix` had to be isolated to the installer because it hardcodes `fileSystems."/"` to the `NIXOS_SD` label, which
 collides with the disko-managed NVMe root.
@@ -317,8 +325,9 @@ or `nixos-install` will attempt to build the vendor kernel and U-Boot on the boa
 The mechanism that prevents an install loop is worth stating explicitly, because it is not obvious: `nixos-install` runs
 `switch-to-configuration boot` inside the chroot, which invokes the target system's `boot.loader.external.installHook`.
 The installer bind-mounts the SD's FAT partition at `/mnt/boot/firmware` beforehand, so that hook
-**overwrites the installer's own kernel, initrd, DTB and `boot.scr` with the installed system's**. The next boot goes
-straight into the installed system. No kexec is used — kexec on this vendor kernel is untested, and a plain reboot
+**rewrites the boot menu with the installed system as its default entry, and deletes the installer's files**. (Before
+the menu, it overwrote the installer's kernel, initrd, DTB and `boot.scr` with the installed system's.) The next boot
+goes straight into the installed system. No kexec is used — kexec on this vendor kernel is untested, and a plain reboot
 exercises exactly the path the system will use forever after.
 
 ### 5.5 Six installer bring-up failures
@@ -383,8 +392,8 @@ therefore *not* the acceptance test. The acceptance test is a first boot with th
 |---|---|
 | SD raw offset 8 KiB | `boot0_sdcard.fex` (DRAM init) |
 | SD raw offset 16400 KiB | `boot_package.fex` (U-Boot + BL31 + SCP) |
-| SD partition 1 — FAT, label `FIRMWARE`, starts 48 MiB, **bootable** | `Image`, `uInitrd`, `allwinner/sun60i-a733-orangepi-4-pro.dtb`, `boot.scr` (since October 2026: `boot.scr` and the boot menu, see §7, *What a `switch` does and does not update*) |
-| SD partition 2 — ext4, label `NIXOS_SD` | the installer's root; dead weight after installation, and omitted entirely by the boot-only image (§7.4) |
+| SD partition 1 — FAT, label `FIRMWARE`, starts 48 MiB, **bootable** | `boot.scr` and the boot menu: `menu/extlinux.conf`, with the kernels, initrds and DTBs it loads under `menu/nixos/` (§7). 3 GiB on a boot-only card, 256 MiB on the installer's. Before the menu: `Image`, `uInitrd`, `allwinner/sun60i-a733-orangepi-4-pro.dtb`, `boot.scr` |
+| SD partition 2 — ext4, label `NIXOS_SD` | the installer's root; dead weight after installation, and omitted entirely by the boot-only card (§7) |
 | NVMe `/dev/nvme0n1` — GPT, one ext4 partition, label `NIXOS_ROOT`, partlabel `disk-main-nixos` | `/`, `/nix`, everything else |
 
 No ESP (this board does not boot via UEFI), no swap (zram), no encryption — the board has no TPM and boots must be
@@ -467,31 +476,30 @@ nix path-info --recursive --sigs-required 1 \
   .#nixosConfigurations.opi4pro.config.system.build.toplevel > /dev/null && echo "closure fully signed"
 ```
 
+The other way, the one used for the boot menu's rollout: push the closure to the attic cache (`make cache_<machine>`),
+then run `nixos-rebuild switch` on the board, from its own clone of the configuration, which substitutes everything.
+
 ### What a `switch` does and does not update
 
-> **Superseded in October 2026.** The board now boots through a U-Boot menu of its generations. `boot.scr` is static
-> (it sets the memory map of Phase 4, then runs `sysboot` on `menu/extlinux.conf`), and the install hook writes the menu
-> into `menu/`, with the newest 20 generations. `uInitrd` is gone: the menu hands U-Boot the raw initrd. Two more vendor
-> U-Boot limits turned up on the way, and shape the conf: `pxe.c` refuses paths over 127 characters, so nixpkgs' extlinux
-> builder (whose file names are whole store names) could not be used, and the menu's timeout runs 24000 times too fast,
-> because the sunxi `get_tbclk()` returns `CONFIG_SYS_HZ` while `get_ticks()` returns the 24 MHz counter.
-> `modules/opi4pro-boot-files.nix` holds the layout and the reasons for it, and DISASTER-RECOVERY.md §5a how to use the
-> menu. The rest of this section, and the next, describe the layout before that.
-
-`nixos-rebuild switch` runs the install hook, which rewrites **four** things on the FAT partition: `Image`, `uInitrd`,
-the DTB and `boot.scr`. Watch for these lines; if they do not appear, the board will reboot into the old system:
-
-```text
-opi4pro: installing kernel, initrd, dtb to /boot/firmware
-opi4pro: regenerating boot.scr on the FAT partition for /nix/store/...
-```
-
-With the menu, the lines to watch for are:
+`nixos-rebuild switch` runs the install hook, which rewrites the **boot menu** on the FAT partition: it copies any kernel,
+initrd or DTB the menu does not have yet, writes `menu/extlinux.conf` with the new system as the default entry and the
+20 newest generations after it, installs the static `boot.scr`, and deletes the files no entry loads any more. Watch
+for these lines; if they do not appear, the board will reboot into the old system:
 
 ```text
 opi4pro: writing the boot menu to /boot/firmware/menu (default entry + up to 20 generations)
+opi4pro: 21 menu entries, 1 files copied
+opi4pro: bootloader on card is up to date
 opi4pro: bootloader install complete
 ```
+
+The order is the safety: the files are copied first, the conf is replaced in one rename, and only then is anything
+deleted, so a hook that fails part of the way (a full partition, say) leaves the previous menu complete. A switch that
+fails in the hook prints `Failed to install bootloader` and does not activate the new system, but nixos-rebuild has
+already set the profile, so a generation exists that never ran. It is harmless, and shows up in the menu like any other.
+
+On a FAT partition under 1 GiB (an installer card, or one made before the menu) the hook keeps only one older generation:
+that is what fits next to the old layout's files while it converts a card. A boot-only card (below) has room for 20.
 
 It does **not** touch the raw bootloader sectors. U-Boot lives outside every filesystem, so any change to the U-Boot
 derivation (defconfig, `KCFLAGS`, patches, bootdelay) has no effect until flashed separately:
@@ -506,57 +514,86 @@ This is safe on a running board: the bootloader region ends around 17.8 MiB and 
 mounted is being written. Flashing is deliberately *not* automatic on every switch — a bad U-Boot is the one failure
 that costs a card pull, so that step stays explicit.
 
-### Consoles
+### The boot menu (October 2026)
 
-The kernel sends messages to every `console=` argument, but **only the last one becomes `/dev/console`**, which is where
-userspace (systemd's `[ OK ]` lines, getty) writes. With serial as the primary console, `ForwardToConsole=yes` /
-`TTYPath=/dev/ttyS0` in `systemd.extraConfig` mirrors journald output to the serial port as well, so the boot narrative
-appears on both HDMI and serial. This is safe with no cable attached: `/dev/ttyS0` is created by the kernel's UART
-driver regardless of what is plugged in.
+Until October 2026 the hook wrote one `Image`, one `uInitrd`, one DTB and a `boot.scr` with that generation's
+`init=/nix/store/...` baked in. The card booted exactly one generation, and rolling back meant mounting both disks on a
+PC and rebuilding those four files by hand. The pi4 has a menu because its mainline U-Boot finds an `extlinux.conf`; the
+assumption had been that this vendor U-Boot could not.
 
-### Replacing the SD card, and what it took to make it verifiable
+It can. `sun60iw2p1_t736_defconfig` has `CONFIG_CMD_PXE` (which provides `sysboot` and selects `MENU`) and
+`CONFIG_DISTRO_DEFAULTS` (which selects raw-initrd support), and Allwinner had even patched `cmd/pxe.c` to pad the FDT by
+8 KiB after loading it. What it has besides are three traps, each found the hard way:
 
-The SD card is permanent, so it wears out, and the first card was larger than the design needs. Neither should require
-reinstalling — and on inspection, nothing about the installed system depends on the card beyond the boot chain:
+1. **No memory map.** The default environment sets no `fdt_high`/`initrd_high`, so an extlinux entry booted as-is
+   relocates the initrd across BL31 — Phase 4 again. And distro boot looks for `extlinux/extlinux.conf` under `/` and
+   `/boot/` *before* it looks for `boot.scr`, so a conf in either place would be booted without the map. So `boot.scr`
+   stays, now static: it sets the memory map (plus `pxefile_addr_r = 0x4a800000`, between the FDT and the initrd) and
+   runs `sysboot mmc 0:1 any ${pxefile_addr_r} /menu/extlinux.conf`, a path the scan never looks at. The `fdt resize
+   65536` of the old script went: measured on the board, U-Boot adds ~700 bytes to the DTB, against the vendor's 8 KiB.
+2. **A 127-character path limit.** The first test card listed every generation, then skipped every one of them with
+   `Base path too long`. `pxe.c` refuses any path longer than `MAX_TFTP_PATH_LEN` = 127, conf directory included, and
+   nixpkgs' extlinux builder names each file after its whole store path: the DTB's came to ~155 characters. So the menu
+   is written by our own `opi4pro-write-menu`, with absolute paths named by store hash — `/menu/nixos/<hash>-Image`,
+   `-initrd` and `-dtb`, about 50 characters. (That same card also showed that an entry which fails to load falls
+   through to the next one, which is a free fallback.)
+3. **A menu timeout that does not wait.** The same card printed `Enter choice:` and went straight on. `cli_readline`
+   waits until `endtick(seconds)` = `get_ticks() + seconds * get_tbclk()`, and Allwinner's
+   `arch/arm/cpu/armv7/sunxi/timer.c` returns the raw 24 MHz arch counter from `get_ticks()` but `CONFIG_SYS_HZ` (1000)
+   from `get_tbclk()`. One "second" lasts 1/24000 of a second, so the conventional `TIMEOUT 50` is 0.2 ms. The autoboot
+   countdown never showed it because it uses `get_timer()`, which divides properly. The fix is on the card, not in
+   U-Boot: `TIMEOUT 1200000`, which is 5 seconds here. The 24 MHz is measured (`clock-frequency = <0x16e3600>` on the
+   live timer node), and `tests/opi4pro-boot-menu.nix` greps the vendor source for the timer code and the path limit, so
+   a fixed U-Boot cannot meet the scaled timeout unnoticed — it would wait 33 hours at the menu after a power cut.
+
+The second test card booted. The rollout then failed once more, on the board's first switch with the new hook:
+`bash: command not found`, then `Failed to install bootloader`. `switch-to-configuration` runs the hook with a `PATH`
+that has none of the system's tools, and the hook ran a plain script with a bare `bash`. The build sandbox, where the
+check runs, has `bash` on `PATH`, so the check had passed. The hook now carries its own `bash` and `sed`, and the check
+runs it under `env -i`. Nothing reached the card in that failure, which is what the hook's ordering is for.
+
+Two things about the menu that are easy to get wrong at the console:
+
+- **The number to type is the entry's position in the list, not the generation number.** For generation 46, listed
+  after `Default`, 48 and 47, it is `4`; typing `46` answers `46 not found` and shows the menu again.
+- **Any keypress stops the countdown**, and the menu then waits for a choice; with no input it boots `Default`.
+
+`modules/opi4pro-boot-files.nix` holds the layout and these reasons next to the code, and
+[`DISASTER-RECOVERY.md`](./DISASTER-RECOVERY.md) §5 how to use the menu to roll back.
+
+### Replacing the SD card
+
+The SD card is permanent, so it wears out (about every two years here), and the first card was larger than the design
+needs. Neither should require reinstalling — and on inspection, nothing about the installed system depends on the card
+beyond the boot chain:
 
 ```text
-mmcblk1p1   256M  FIRMWARE   vfat   /boot/firmware   <- Image, uInitrd, DTB, boot.scr
-mmcblk1p2  59.2G  NIXOS_SD   ext4   (never mounted)  <- installer leftovers
+mmcblk1p1     3G  FIRMWARE   vfat   /boot/firmware   <- boot.scr and the menu
 nvme0n1p1 119.2G  NIXOS_ROOT ext4   /                <- the actual system
 ```
 
-Partition 2 is not referenced by anything in the installed configuration. So `mkOpi4ProBootImage`
-(`modules/setup-opi4pro-boot-image.nix`, exposed as `<machine>boot_img`) writes only what matters: the two raw
-bootloader regions, and one bootable FAT partition at the same 48 MiB offset carrying the same four files.
-**304 MiB uncompressed, ~51 MiB compressed**, versus several GB for the installer. Flashing it destroys nothing.
+A card written by the installer also has a partition 2 (`NIXOS_SD`, the installer's root), which nothing in the
+installed configuration references. So a **boot-only card** carries only what matters: the two raw bootloader regions,
+and one bootable FAT partition at the same 48 MiB offset, 3 GiB, with `boot.scr` and the menu. The image is ~3.05 GiB
+uncompressed, 50–150 MiB compressed, and fits a 4 GB card. Flashing it destroys nothing. There are two builders:
 
-The generation coupling is the thing to respect: `boot.scr` bakes an absolute `init=/nix/store/<toplevel>/init`, so a
-card is tied to one system generation and that path must already exist on the NVMe. The card must therefore be built
-from the revision the board is actually running — checked by comparing `nix eval` of the toplevel against the board's
-`/run/current-system` before flashing.
+- **`<machine>boot_card`** (`make boot_card_<machine> BOARD=<ssh target>`), the normal way. It reads the running board's
+  generations over ssh — read-only, no sudo — and writes the same menu the board's own hook would, with the same code,
+  checking every copied file against its sha256 on the board. Every entry is on the NVMe by construction.
+- **`<machine>boot_img`**, for when the board is down. A pure `nix build` from one flake revision, with one menu entry:
+  that revision's system, which must already be on the NVMe. Build it from the revision the board was last running.
 
-**Byte-identity, and why it was not free.** The natural way to verify a freshly flashed card is to hash its four files
-against a running system's `/boot/firmware`. `Image` and the DTB are plain copies and matched immediately. The other two
-did not, for two independent reasons:
+Both read the whole FAT partition back before compressing, and a flashed card is checked against its image with one
+`cmp` over the first 3120 MiB. `boot.scr` is the same on every card and every switch, so there is nothing per-card to
+compare beyond that. [`DISASTER-RECOVERY.md`](./DISASTER-RECOVERY.md) §7 has the commands.
 
-1. **Two generators, one script.** `boot.scr` is produced by `installOpi4ProBootloader` at switch time and by the
-   `bootScript` derivation at image-build time. The derivation's heredoc carried the explanatory comments about the
-   memory map, so they ended up *inside* the compiled script: 1872 bytes against the hook's 788, for an identical
-   command sequence. (Harmless — vendor U-Boot's hush parser treats `#` as a comment, and the installer had always
-   booted from the commented version — but it makes every comparison a false alarm.) The derivation now strips comment
-   and blank lines before `mkimage`; the comments stay in the Nix source, where they are actually useful.
-
-2. **`mkimage` stamps a timestamp.** The legacy U-Boot image header stores `ih_time`, which also feeds the header CRC.
-   Nix builds get `SOURCE_DATE_EPOCH`; a `nixos-rebuild switch` on the board does not, so it stamped the wall clock. The
-   files came out the same size with 8 bytes different — invisible to an `ls`, fatal to a hash comparison. This affected
-   `uInitrd` too, which is wrapped by the same tool. Both call sites now pin `SOURCE_DATE_EPOCH`; U-Boot never reads
-   `ih_time`.
-
-A trap worth recording: the first attempt to confirm #2 reported "identical", because the project's dev shell already
-exports `SOURCE_DATE_EPOCH`. The test only became meaningful under `env -u SOURCE_DATE_EPOCH`.
-
-With both fixed, all four files hash identically between card and board, which turns "did the flash work?" into one
-command.
+Before the menu, the boot-only image was 304 MiB carrying the four files, tied to one generation, and verified by
+hashing those four files against a running system's `/boot/firmware`. Getting them byte-identical took two fixes: the
+`boot.scr` derivation had to strip its own explanatory comments (it was 1872 bytes against the hook's 788, for the same
+commands), and both `mkimage` call sites had to pin `SOURCE_DATE_EPOCH`, because the legacy header's `ih_time` feeds its
+CRC (the first check of that passed falsely, because the dev shell exports `SOURCE_DATE_EPOCH`; it took
+`env -u SOURCE_DATE_EPOCH` to see the difference). The comment stripping survives in the static `boot.scr`; the hook no
+longer runs `mkimage` at all, so the timestamp question is gone with `uInitrd`.
 
 ### A known cosmetic issue
 
@@ -587,10 +624,11 @@ boot on this SoC only becomes possible if and when mainline TF-A and U-Boot gain
 | ATF / TF-A | ARM Trusted Firmware — reference secure-world firmware for ARMv8. BL31 is its runtime stage. |
 | BL31 | "Boot Loader stage 3-1" of TF-A; the secure monitor, resident at 0x48000000, servicing SMCs including the 32→64-bit kernel handoff. Called "monitor" by Allwinner. |
 | boot0 | Allwinner's proprietary first-stage loader; initializes DRAM; loaded by the BROM from SD offset 8 KiB. |
-| boot.scr | A compiled U-Boot command script (`mkimage -T script`) that U-Boot's distro-boot mechanism finds and executes. Lives on the FAT partition. |
+| boot menu | The U-Boot menu of NixOS generations shown on serial at every boot: `menu/extlinux.conf` on the FAT partition, run by `sysboot` from `boot.scr`. Default plus the 20 newest generations; keys are list positions. |
+| boot.scr | A compiled U-Boot command script (`mkimage -T script`) that U-Boot's distro-boot mechanism finds and executes. Lives on the FAT partition. Static since the boot menu: it sets the memory map and runs `sysboot`. |
 | bootable flag | The MBR partition attribute U-Boot's distro-boot uses to decide which partitions to scan for `boot.scr`. Must be on partition 1 here. |
 | booti / bootm | U-Boot commands: `booti` boots a raw AArch64 `Image`; `bootm` boots wrapped legacy `uImage` files and enforces their architecture tags. |
-| boot-only image | `<machine>boot_img` — an SD image carrying just the bootloader region and the FAT partition, for replacing a card without reinstalling. Contrast with the *installer* image, which wipes the NVMe. |
+| boot-only card | An SD card carrying just the bootloader region and the FAT partition, for replacing a card without reinstalling: `<machine>boot_card` builds it from the running board, `<machine>boot_img` from the flake. Contrast with the *installer* image, which wipes the NVMe. |
 | bootm pool / bootm_size | The RAM region U-Boot treats as free for boot-time staging; by default it relocates the initrd/FDT to its top. |
 | BROM | Boot ROM — immutable first-instructions code in the silicon. Reads only SD/eMMC/SPI-NOR; no PCIe, no USB. |
 | BSP | Board Support Package — a vendor's kernel/bootloader fork for its hardware. |
@@ -603,12 +641,14 @@ boot on this SoC only becomes possible if and when mainline TF-A and U-Boot gain
 | EDID | The data a display returns describing its capabilities. A corrupt read is what makes the vendor HDMI driver flap. |
 | EHCI / OHCI / xHCI | USB host controller types: EHCI = USB 2.0 (480M), OHCI = USB 1.1 (12M), xHCI = USB 3 (5/10G plus a 480M companion). |
 | EL0–EL3 | ARMv8 Exception Levels: EL0 user, EL1 kernel, EL2 hypervisor, EL3 secure monitor (highest). |
-| extlinux | A simple boot-configuration format NixOS uses by default on ARM. Since October 2026 it is the boot menu here, run by `sysboot` from `boot.scr` rather than found by distro boot, which would skip the memory map. |
+| extlinux | A simple boot-configuration format NixOS uses by default on ARM. Since October 2026 it is the boot menu here, run by `sysboot` from `boot.scr` rather than found by distro boot, which would skip the memory map. Written by `opi4pro-write-menu`, not nixpkgs' builder, whose paths are too long for this U-Boot. |
 | .fex | Allwinner's file extension for firmware-pipeline artifacts. |
 | frame pointer | A register (r7 in Thumb) holding the current stack frame's base. Its prologue pushes to the stack — fatal inside U-Boot's cache-teardown path, hence `-fomit-frame-pointer`. |
+| get_ticks / get_tbclk | U-Boot's timer pair. On this vendor tree they disagree (raw 24 MHz counter against 1000 Hz), which makes the menu's timeout 24000 times too short; the conf's `TIMEOUT 1200000` compensates. |
 | HPD | Hot-Plug Detect — the HDMI signal line indicating a display is attached. |
-| initrd / uInitrd | The early userspace filesystem the kernel mounts first; `uInitrd` is it wrapped in U-Boot's legacy image format. |
+| initrd / uInitrd | The early userspace filesystem the kernel mounts first; `uInitrd` is it wrapped in U-Boot's legacy image format, which the board used until the boot menu. The menu hands U-Boot the raw initrd. |
 | KCFLAGS | The make variable U-Boot appends to `KBUILD_CFLAGS` — the supported way to inject compiler flags into the target build. |
+| MAX_TFTP_PATH_LEN | `pxe.c`'s limit on a path in an extlinux conf: 127 characters, conf directory included. Over it, the entry is skipped with `Base path too long`. |
 | monitor_exist | A byte in U-Boot's Allwinner-specific image header (offset 0x4e9) telling it a secure monitor is resident, selecting the SMC handoff path. |
 | networkd / resolved | `systemd-networkd` and `systemd-resolved`. Used together, DHCP-learned DNS reaches the resolver; with scripted dhcpcd instead, it does not. |
 | OTG manager | Allwinner's `usbc0` driver, which decides whether a dual-role port acts as host or device, and gates the EHCI/OHCI controllers on that decision. |
@@ -617,7 +657,8 @@ boot on this SoC only becomes possible if and when mainline TF-A and U-Boot gain
 | SMC | Secure Monitor Call — the ARM instruction that traps into EL3. `ARM_SVC_RUNNSOS` is Allwinner's private SMC asking BL31 to start the OS. |
 | SoC | System on a Chip. The A733 (family sun60iw2) is the SoC on this board. |
 | sops-nix | The secrets mechanism used by this fleet. Its age key arrives on a USB stick at first boot and is never in the Nix store. |
-| SOURCE_DATE_EPOCH | The reproducible-builds environment variable `mkimage` honours for the `ih_time` field. Pinned at both boot-artifact call sites so a switch-generated file and a nix-built one come out byte-identical. |
+| SOURCE_DATE_EPOCH | The reproducible-builds environment variable `mkimage` honours for the `ih_time` field. Before the boot menu it was pinned at both boot-artifact call sites so a switch-generated file and a nix-built one came out byte-identical; now only the nix build runs `mkimage`. |
+| sysboot | U-Boot's command to load and run an extlinux/syslinux conf from a filesystem (from `CMD_PXE`). `boot.scr` ends with it. |
 | sys_config | An Allwinner board-description text compiled by the proprietary `script` tool and stamped into U-Boot's header by `update_uboot`. |
 | systemd stage 1 | NixOS's systemd-based initrd init, which generated a duplicate `sysroot.mount` when `root=` was passed redundantly. |
 | Thumb-2 | A compact ARM instruction encoding. This U-Boot is built in Thumb mode; its SMC trampoline is ARM, reached via interworking. |

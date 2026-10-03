@@ -19,7 +19,7 @@ nothing. It walks from "the board is dead" to "the board boots again", preferrin
 ## 0. What you need before you start
 
 - The board, with both its SD card and its NVMe SSD.
-- A PC with an SD card reader (any Linux machine; `nix` is needed only for §3b, §5b and §7).
+- A PC with an SD card reader (any Linux machine; `nix` is needed only for §3b, §5c and §7).
 - A checkout of this NixOS configuration repository. It pins every source by hash, so it rebuilds identically years
   later.
 - A **serial console** on the board's debug UART header at **115200 baud, 8N1**. This is not optional — until Linux is
@@ -69,7 +69,7 @@ Power the board with serial attached and read the output. Do not skip this — t
 |---|---|---|
 | **Nothing at all** | Replug the serial adapter; fully power-cycle the board (20 s unplugged). If still silent, see §2's checks — the raw bootloader may be missing. | **§2**, then **§3** |
 | `HELLO! BOOT0 is starting!` then it stops or loops | The bootloader region is damaged or wrong. | **§3** |
-| U-Boot banner (`U-Boot 2018.07-g…`) appears, then `undefined instruction`, or a hang right after `Starting kernel ...` | U-Boot itself is bad. | **§3** |
+| U-Boot banner (`U-Boot 2018.07-g…`) appears, then `undefined instruction`, or a hang right after `Starting kernel ...` | U-Boot itself is bad — or, for the hang, an entry was booted without `boot.scr`'s memory map (a conf at `/extlinux/` or `/boot/extlinux/`, or a hand boot that skipped the `setenv` lines of §5b). | **§3**, or **§4** |
 | U-Boot runs but cannot find `boot.scr`, shows no menu, or an entry fails with `Skipping … for failure retrieving` | Bootloader fine; the boot files or the bootable flag are wrong. | **§4**, then **§5b** |
 | Kernel banner appears, then stage 1 fails: cannot find root, drops to an initrd emergency shell | Boot files fine; the NVMe root is unreachable or the generation is broken. | **§5a** |
 | Boots, but the system is broken (services failing, bad config) | Roll back to a previous generation from the menu. | **§5a** |
@@ -256,7 +256,13 @@ Two things this U-Boot needs from the conf, both learned by booting it (2026-10-
 
 **A card from before the boot menu** has `Image`, `uInitrd`, `allwinner/…dtb` and a larger `boot.scr` at the root of the
 partition instead, and no `menu/`. That layout still boots, one generation only; the first `nixos-rebuild switch` of a
-configuration with the menu replaces it.
+configuration with the menu replaces it. Such a card has a 256 MiB partition, so its menu keeps only one older
+generation; build a 3 GiB card (§7a) for the full menu.
+
+**Harmless lines in every menu boot**, from the vendor U-Boot: `Loading Environment from EXT4... ** No device specified
+** Failed (-5)` (it keeps no saved environment, which is why `boot.scr` sets the memory map on every boot),
+`get value error`, `ext4size failed on 0:1` and `** Unrecognized filesystem type **` (the splash-screen loader looking
+for `boot.bmp`).
 
 ```bash
 sudo umount /mnt/fw
@@ -279,6 +285,7 @@ the menu appears:
 1:  NixOS - Default
 2:  NixOS - Configuration 48-default (2026-10-01 01:23 - 26.05.20260927.cf5e765)
 3:  NixOS - Configuration 47-default (2026-09-30 12:44 - 26.05.20260927.cf5e765)
+4:  NixOS - Configuration 46-default (2026-09-29 11:54 - 26.05.20260927.cf5e765)
 …
 Enter choice:
 ```
@@ -303,7 +310,16 @@ sudo nix-env -p /nix/var/nix/profiles/system --switch-generation 42    # the num
 sudo /nix/var/nix/profiles/system/bin/switch-to-configuration switch
 ```
 
-That runs the bootloader hook too, so the menu's `Default` becomes that generation.
+That runs **that generation's** bootloader hook, which matters for old generations:
+
+- A generation from **before the boot menu** (October 2026; 48 and older on the first board that got it) has the old
+  hook. It rewrites the card in the old single-generation layout: the board still boots, but without a menu, until a
+  later switch to a generation with the menu.
+- A generation whose hook is broken (49 on that board, never activated) fails the switch with
+  `Failed to install bootloader` and changes nothing on the card. Boot it from the menu if you need it; do not make it
+  the default.
+
+Otherwise the menu's `Default` becomes that generation.
 
 ### 5b. If the menu does not come up, but the U-Boot prompt does
 
@@ -327,9 +343,12 @@ most recently:
 => load mmc 0:1 ${kernel_addr_r} /menu/nixos/<hash>-Image
 => load mmc 0:1 ${fdt_addr_r} /menu/nixos/<hash>-dtb
 => load mmc 0:1 ${ramdisk_addr_r} /menu/nixos/<other hash>-initrd
-=> setenv bootargs "console=tty0 console=ttyS0,115200n8 earlyprintk=sunxi-uart,0x02500000 clk_ignore_unused init=/nix/var/nix/profiles/system-42-link/init"
+=> setenv bootargs "console=tty0 console=ttyS0,115200n8 earlyprintk=sunxi-uart,0x02500000 clk_ignore_unused root=fstab init=/nix/var/nix/profiles/system-42-link/init"
 => booti ${kernel_addr_r} ${ramdisk_addr_r}:${filesize} ${fdt_addr_r}
 ```
+
+These are enough to boot. The generation's full list is its `kernel-params` file, and the `APPEND` line of its entry in
+`menu/extlinux.conf`.
 
 `init=/nix/var/nix/profiles/system/init` boots whatever the current profile points at; `system-42-link` a specific
 generation. Any kernel and initrd on the card will do as long as they are recent enough for that generation's modules.
@@ -349,9 +368,10 @@ Notes on the memory map, so you can reason about it years from now:
   after `Starting kernel ...`. This is also why the menu is not at `/extlinux/extlinux.conf`: distro boot would find it
   there before `boot.scr` and boot it without these settings.
 - **Everything loads from `mmc 0:1`** — the FAT partition. The kernel finds the NVMe root later, from the initrd.
-- **There is deliberately no `root=` argument.** NixOS runs systemd inside the initrd and derives the root filesystem
-  from the initrd's own fstab (which disko generated pointing at the NVMe). Passing `root=` as well makes it generate
-  `sysroot.mount` twice and stage 1 aborts with *"Failed to create unit file … as it already exists"*.
+- **There is deliberately no `root=<device>` argument.** NixOS runs systemd inside the initrd and derives the root
+  filesystem from the initrd's own fstab (which disko generated pointing at the NVMe); the `root=fstab` NixOS adds says
+  exactly that. A `root=/dev/...` as well makes it generate `sysroot.mount` twice and stage 1 aborts with *"Failed to
+  create unit file … as it already exists"*.
 
 ### 5c. Rewrite the card from the PC
 
@@ -483,6 +503,10 @@ the clock, zero and partition the NVMe with disko, bind-mount the SD's FAT parti
 
 **If the installer aborts**, it restores the login prompts and autologs in as root on both consoles, so you can debug in
 place: `journalctl -u unattended-install`, `ip a`, `resolvectl status`, `lsblk -f`.
+
+**After the install**, the installer's card keeps booting the installed system, through a menu with only one older
+generation: its FAT partition is 256 MiB, because its ext4 root had to fit on the same card. Once the system is up,
+build a boot-only card with the full menu (§7a) and swap it in.
 
 ---
 
@@ -637,7 +661,7 @@ rejected.
 |---|---|
 | Serial console | 115200 baud, 8N1 |
 | U-Boot countdown | 5 seconds (any key aborts; holding `s` also drops to shell) |
-| Boot menu | after the countdown, 5 seconds; type the entry number and Enter. Default = newest generation, then up to 20 older |
+| Boot menu | after the countdown, 5 seconds; type the entry's **position** (not its generation number) and Enter. Default = newest generation, then up to 20 older |
 | boot0 raw offset | 8 KiB (`dd … bs=1k seek=8`) |
 | boot_package raw offset | 16400 KiB (`dd … bs=1k seek=16400`) |
 | SD partition 1 (`FIRMWARE`) | vfat, starts 48 MiB, 3 GiB (256 MiB on an installer card), **bootable**; holds `boot.scr` and `menu/` |
@@ -660,4 +684,5 @@ rejected.
 | Build a boot-only card from the running board (§7a, safe) | `make boot_card_opi4pro BOARD=<ssh target>` — 3.05 GiB image, fits a 4 GB card |
 | Build a boot-only card from the flake (§7b, safe) | `nix build .#opi4proboot_img` — one entry, which must already be on the NVMe |
 | Card is verifiable | `zstdcat <image> \| sudo cmp -n $((3120 * 1024 * 1024)) - /dev/sdX` |
-| Deploy a change | sign closure `--recursive`, then `nixos-rebuild switch --flake .#opi4pro --target-host …` |
+| Deploy a change | sign closure `--recursive`, then `nixos-rebuild switch --flake .#opi4pro --target-host …`; or `make cache_<machine>`, then `nixos-rebuild switch` on the board |
+| A switch prints | `opi4pro: writing the boot menu to /boot/firmware/menu …` and `opi4pro: bootloader install complete`; `Failed to install bootloader` means the new system was not activated |

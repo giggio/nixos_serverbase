@@ -5,7 +5,7 @@
 #
 # The SD card is a PERMANENT requirement: the SoC's immutable boot ROM can only fetch the first-stage loader from SD/eMMC raw
 # sectors, never from PCIe/NVMe. After installation the card carries only boot artifacts (raw bootloader sectors plus the FAT
-# FIRMWARE partition holding Image, uInitrd, the DTB and boot.scr); everything else lives on the NVMe.
+# FIRMWARE partition holding boot.scr and the generation menu, see opi4pro-boot-files.nix); everything else lives on the NVMe.
 #
 # The `disko.devices` layout below is used twice:
 #   - at INSTALL time, the installer image (see setup-opi4pro.nix) runs this configuration's
