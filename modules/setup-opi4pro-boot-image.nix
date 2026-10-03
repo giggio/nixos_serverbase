@@ -42,7 +42,6 @@
       cfg = finalSystem.config;
       bootFiles = import ./opi4pro-boot-files.nix {
         inherit pkgs;
-        inherit (pkgs) lib;
         dtbName = cfg.hardware.deviceTree.name;
       };
       assembler = bootFiles.mkCardAssembler {
@@ -70,7 +69,6 @@
       cfg = finalSystem.config;
       bootFiles = import ./opi4pro-boot-files.nix {
         inherit pkgs;
-        inherit (pkgs) lib;
         dtbName = cfg.hardware.deviceTree.name;
       };
     in

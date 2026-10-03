@@ -28,7 +28,6 @@
 #   - The menu's TIMEOUT does not wait. See menuTimeout below.
 {
   pkgs,
-  lib,
   # The DTB the menu entries load, relative to the generation's dtbs/ directory. Comes from hardware.deviceTree.name; the
   # default only serves the test.
   dtbName ? "allwinner/sun60i-a733-orangepi-4-pro.dtb",
@@ -261,7 +260,12 @@ rec {
   # exactly what it booted before.
   populateFirmware = pkgs.writeShellApplication {
     name = "opi4pro-populate-firmware";
-    runtimeInputs = with pkgs; [ coreutils ];
+    # Everything listGenerations runs, too: the hook runs under switch-to-configuration, whose PATH has none of it.
+    runtimeInputs = with pkgs; [
+      bash
+      coreutils
+      gnused
+    ];
     text = ''
       if [ "$#" -lt 3 ] || [ "$#" -gt 4 ]; then
         echo "usage: opi4pro-populate-firmware <firmware dir> <toplevel> <generations> [profiles dir]" >&2

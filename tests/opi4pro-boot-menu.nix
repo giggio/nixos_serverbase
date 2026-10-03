@@ -1,6 +1,5 @@
 {
   pkgs,
-  lib,
   nixosConfigurations,
   ...
 }:
@@ -27,7 +26,7 @@
 let
   opi4pro = nixosConfigurations.opi4pro.config;
   dtbName = opi4pro.hardware.deviceTree.name;
-  bootFiles = import ../modules/opi4pro-boot-files.nix { inherit pkgs lib dtbName; };
+  bootFiles = import ../modules/opi4pro-boot-files.nix { inherit pkgs dtbName; };
   ubootSource = opi4pro.system.build.opi4proUboot.src;
 
   fakeKernel =
@@ -107,7 +106,9 @@ pkgs.runCommand "opi4pro-boot-menu"
 
     echo "== the hook writes the menu"
     mkdir hook
-    ${populate} hook ${system3} ${toString bootFiles.menuGenerations} "$PWD/profiles"
+    # With an empty environment, as switch-to-configuration runs the hook. The build sandbox has bash, sed and coreutils on
+    # PATH, the switch does not: a populate that called a bare `bash` passed here and failed every switch on the board.
+    env -i ${populate} hook ${system3} ${toString bootFiles.menuGenerations} "$PWD/profiles"
     cat hook/$conf
     [ "$(grep -c '^LABEL' hook/$conf)" = 4 ] || fail "expected the default entry plus three generations"
     [ "$(find hook/${bootFiles.menuDir}/nixos -name '*-Image' | wc -l)" = 2 ] \

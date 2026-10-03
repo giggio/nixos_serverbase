@@ -107,7 +107,7 @@ let
   };
 
   bootFiles = import ./opi4pro-boot-files.nix {
-    inherit pkgs lib;
+    inherit pkgs;
     dtbName = config.hardware.deviceTree.name;
   };
 
