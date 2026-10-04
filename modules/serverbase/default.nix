@@ -9,6 +9,7 @@
   imports = [
     ../../cachix.nix # ugly loading from the root folder, can we do something about it?
     ./clone-config.nix
+    ./hardware
     ./home/home.nix
     ./secrets.nix
     ./sudo.nix

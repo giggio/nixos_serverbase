@@ -46,6 +46,15 @@
     ./serverbase/services/secureboot/secureboot.nix
   ];
 
+  # THE INTEL iGPU, for hardware video transcoding - see serverbase/hardware/intel-gpu.nix for what it installs and
+  # what breaks without it. Guarded to the real board because config-virtual-boot.nix pulls THIS file into the
+  # virtualboot VM, where the media/compute runtimes and the `linux-firmware` closure would never load.
+  #
+  # Vulkan on this chip (Alder Lake-N) needs the experimental `xe` driver on top; OpenCL, which is what applies the
+  # Dolby Vision reshape, does not. If `tonemap_opencl` turns out to be insufficient, add
+  # `setup.intelGpu = { forceXe = true; xePciId = "46d4"; }` - the id is the `8086:46d4` from `lspci -nn`.
+  setup.intelGpu.enable = !config.setup.isVM;
+
   boot.loader.systemd-boot = {
     enable = true; # using UEFI and not GRUB
 
