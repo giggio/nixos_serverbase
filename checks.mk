@@ -222,15 +222,6 @@ lint-md:
 lint-fix:
 	@rumdl fmt
 
-# smoke.yaml runs on the docker label and names its own image, so exec needs no label mapping. --use-gitignore=false
-# keeps .git, which the superproject's submodule checkout needs.
-# Not from inside the superproject's nixos_serverbase directory: there .git is a file pointing at
-# ../.git/modules/nixos_serverbase, the runner copies only this directory, and nix then cannot open the repository.
-# Run it from the superproject, or from a standalone clone of this repository.
-## Runs the smoke workflow locally on the working tree in Docker
-ci:
-	nix run nixpkgs#forgejo-runner -- exec --event push --workflows .forgejo/workflows/smoke.yaml --use-gitignore=false
-
 ## Lists the checks this flake defines
 list_checks:
 	@$(check_names_cmd); echo

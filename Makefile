@@ -545,6 +545,7 @@ $(delete_old_vms_machines): delete_old_vms_%:
 	fi;
 
 include $(serverbase_dir)checks.mk
+include $(serverbase_dir)ci.mk
 
 ### Information
 ## List machines
