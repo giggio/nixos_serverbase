@@ -7,7 +7,6 @@
 
 let
   clone_script = import ./clone-script.nix { inherit pkgs; };
-  home = "/home/${config.setup.username}";
   # Retrying is what lets the clone survive a server that boots before its network is up. A test sandbox has nothing to
   # wait for, and retrying for ten minutes there would only keep a genuine failure out of `systemctl --failed` for as
   # long as the test runs, so in a test the unit fails immediately and visibly instead.
@@ -34,8 +33,8 @@ in
       };
       cloneDir = mkOption {
         type = types.str;
-        default = "${home}/.config/nixos";
-        example = literalExpression ''{ cloneDir = "/home/giggio/.config/nixos"; }'';
+        default = "/etc/nixos";
+        example = literalExpression ''{ cloneDir = "/etc/nixos"; }'';
       };
       customRepoUrl = mkOption {
         type = types.nullOr types.str;
@@ -79,15 +78,16 @@ in
           in
           {
             enable = config.setup.nixosConfig.enable;
-            description = "Clone NixOS config ~/.config/nixos if missing";
+            description = "Clone NixOS config to ${clone_dir} if missing";
             wantedBy = [ "multi-user.target" ];
             path = [ pkgs.coreutils ];
 
             unitConfig = {
-              ConditionPathExists = "!${clone_dir}";
+              # .git, not the directory: /etc/nixos exists on every NixOS machine, and git clones into an empty one
+              ConditionPathExists = "!${clone_dir}/.git";
               After = [ "network-online.target" ];
               Wants = [ "network-online.target" ];
-              RequiresMountsFor = [ home ];
+              RequiresMountsFor = [ clone_dir ];
               StartLimitIntervalSec = 600;
               StartLimitBurst = 10;
             };

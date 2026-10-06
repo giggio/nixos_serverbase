@@ -12,7 +12,7 @@ let
   user = "giggio";
   home = "/home/${user}";
   # where the out-of-store symlinks point; the clone does not exist in a test, and the link is expected to dangle
-  repoConfig = "${home}/.config/nixos/nixos_serverbase/modules/serverbase/home-manager";
+  repoConfig = "/etc/nixos/nixos_serverbase/modules/serverbase/home-manager";
 in
 {
   name = "home-manager";

@@ -38,7 +38,7 @@ if printf '%s' "$status" | grep -q DEGRADED; then
   editor:
 
       set bindState = true in this machine's encrypted_state.nix
-      sudo nixos-rebuild switch --flake ~/.config/nixos
+      sudo nixos-rebuild switch --flake /etc/nixos
 
   Keep that edit inside the VM. The committed value is deliberately false
   for VMs, so that a fresh one can be created at all.

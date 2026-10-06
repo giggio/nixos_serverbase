@@ -1,6 +1,6 @@
 { testNodes, ... }:
 
-# Covers modules/serverbase/clone-config.nix and modules/serverbase/clone-script.nix: the unit that seeds ~/.config/nixos
+# Covers modules/serverbase/clone-config.nix and modules/serverbase/clone-script.nix: the unit that seeds /etc/nixos
 # on a fresh server. Everything the script does - clone with the submodules, switch the origin to the private URL, hand
 # the result to the user - works over a `file://` URL, so the whole flow runs without network by pointing the unit at
 # bare repositories built in the store.
@@ -140,7 +140,7 @@ in
             };
             # makes ConditionPathExists false before the unit ever runs, which is what keeps this unreachable codeberg
             # URL from being fetched
-            systemd.tmpfiles.rules = [ "d /var/lib/already-cloned 0755 root root -" ];
+            systemd.tmpfiles.rules = [ "d /var/lib/already-cloned/.git 0755 root root -" ];
           }
         ];
       };
@@ -173,19 +173,17 @@ in
     with subtest("a private repository is cloned with its nested submodules and reassigned to its ssh origin"):
         wait_for_clone(private, "clone-nixos-config.service")
 
-        private.succeed("test -f ${home}/.config/nixos/flake.nix")
-        private.succeed("test -f ${home}/.config/nixos/home/home.nix")
-        private.succeed("test -f ${home}/.config/nixos/home/vim/init.vim")
-        # /etc/nixos/flake.nix is a symlink into the clone, so it only resolves once the clone has happened
         private.succeed("test -f /etc/nixos/flake.nix")
+        private.succeed("test -f /etc/nixos/home/home.nix")
+        private.succeed("test -f /etc/nixos/home/vim/init.vim")
 
-        owner = private.succeed("stat -c '%U' ${home}/.config/nixos/home/vim/init.vim").strip()
+        owner = private.succeed("stat -c '%U' /etc/nixos/home/vim/init.vim").strip()
         assert owner == "${user}", f"the nested clone belongs to '{owner}', expected '${user}'"
 
         # every level resolves its relative URL against the private origin, which only happens when the sync recurses
-        for directory, expected in [("${home}/.config/nixos", "git@example.invalid:giggio/nixos.git"),
-                                    ("${home}/.config/nixos/home", "git@example.invalid:giggio/home-repo"),
-                                    ("${home}/.config/nixos/home/vim", "git@example.invalid:giggio/vim-repo")]:
+        for directory, expected in [("/etc/nixos", "git@example.invalid:giggio/nixos.git"),
+                                    ("/etc/nixos/home", "git@example.invalid:giggio/home-repo"),
+                                    ("/etc/nixos/home/vim", "git@example.invalid:giggio/vim-repo")]:
             origin = origin_of(private, directory)
             assert origin == expected, f"{directory} origin is '{origin}', expected '{expected}'"
 
@@ -206,13 +204,13 @@ in
         origin = origin_of(public, "${home}/custom-nixos")
         assert origin == "file:///etc/test/nixos-repo", \
             f"the origin was rewritten to '{origin}' even though usePrivateRepo is off"
-        public.fail("test -e ${home}/.config/nixos")
+        public.fail("test -e /etc/nixos/flake.nix")
 
     with subtest("a disabled clone is masked, so it can never run"):
         # NixOS renders a disabled service as a symlink to /dev/null rather than omitting the file
         state = disabled.succeed("systemctl show -p LoadState --value clone-nixos-config.service").strip()
         assert state == "masked", f"the disabled clone is '{state}', expected 'masked'"
-        disabled.fail("test -e ${home}/.config/nixos")
+        disabled.fail("test -e /etc/nixos/flake.nix")
 
     with subtest("without custom URLs the codeberg URLs are derived from the repo name"):
         # the URLs end up in the unit's generated start script, which systemctl only references by path

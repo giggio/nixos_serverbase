@@ -143,7 +143,7 @@ check_out_dir := $(out_dir)/checks
 # the old code and passes, silently, which is the worst possible outcome for a test suite. The documented way round
 # it is `--override-input`, and without a hook like this there is no way to give that to the suite:
 #
-#     make checks nix_flags='--override-input serverbase path:/home/giggio/.config/nixos/nixos_serverbase'
+#     make checks nix_flags="--override-input serverbase git+file:$PWD/nixos_serverbase"
 #
 # A variable rather than anything cleverer, because this repository has to keep working standalone, where there is no
 # superproject and no input to override.

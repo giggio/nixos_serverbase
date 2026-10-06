@@ -210,7 +210,6 @@
         text = "true";
         enable = config.setup.isTest;
       };
-      "nixos/flake.nix".source = "/home/giggio/.config/nixos/flake.nix";
     };
     extraInit = ''
       # read extra profile files in /etc/profile.d/

@@ -86,13 +86,9 @@
               value = login_shell_variable(variable)
               assert value == "en_US.UTF-8", f"{variable} is '{value}', expected 'en_US.UTF-8'"
 
-      with subtest("the system flake is looked up in the cloned configuration"):
-          # -m, not -f: the target is inside the clone, which a test never has, and -f gives up on a dangling link.
-          # /etc entries are themselves symlinks through /etc/static, so the link has to be followed all the way.
-          target = machine.succeed("readlink -m /etc/nixos/flake.nix").strip()
-          # a symlink into the user's clone, not a copy in the store: `nixos-rebuild` has to see the working tree
-          assert target == "/home/giggio/.config/nixos/flake.nix", \
-              f"/etc/nixos/flake.nix points at '{target}'"
+      with subtest("the configuration is cloned to /etc/nixos, not linked there"):
+          # the clone unit owns /etc/nixos, so no /etc entry may claim it: a managed link would make the clone a no-op
+          machine.fail("test -L /etc/nixos/flake.nix")
 
       (_, failed) = machine.systemctl("--failed --quiet")
       machine.log(f"systemctl --failed output: {failed}")
