@@ -13,6 +13,11 @@
 # The jobs are named on the command line because the runner picks them by the workflow's trigger, and a scheduled or
 # manually dispatched workflow has no `push` job to pick.
 #
+# The checks are nixosTest VMs. The workflows ask for a runner with a real /dev/kvm, which exec does not provide: the
+# container gets no devices, qemu says `Could not access KVM kernel module` and falls back to software emulation, which
+# runs the checks 3 to 20 times slower (measured: pi4-speedtest 158s against 7s) and makes some of them fail on timing
+# alone. So the host's /dev/kvm is handed to the container when this user can open it, and the run is otherwise the same.
+#
 # Only the two attic secrets are set. A step that needs another one (the one that opens the pull request) fails, which
 # is what a local run should do.
 
@@ -47,9 +52,12 @@ $(ci_targets): ci_%: $(ci_workflows_dir)/%.yaml
 	snapshot="$$(mktemp -d --tmpdir ci-snapshot.XXXXXXXXXX)"; \
 	trap 'rm -rf --one-file-system "$$snapshot"' EXIT; \
 	rsync -a --exclude=/$(out_dir) --exclude=/result ./ "$$snapshot/"; \
+	kvm=(); \
+	if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then kvm=(--container-opts=--device=/dev/kvm); \
+	else >&2 echo "No usable /dev/kvm here, the VM checks will run under software emulation"; fi; \
 	jobs=(); \
 	while IFS= read -r job; do jobs+=(--job "$$job"); done < <(yq '.jobs | keys | .[]' "$(ci_workflows_dir)/$*.yaml"); \
 	cd "$$snapshot"; \
 	nix run nixpkgs#forgejo-runner -- exec --workflows "$(ci_workflows_dir)/$*.yaml" "$${jobs[@]}" \
-		--use-gitignore=false -C "$$snapshot" \
+		--use-gitignore=false -C "$$snapshot" "$${kvm[@]}" \
 		--secret ATTIC_ENDPOINT="$$attic_endpoint" --secret ATTIC_TOKEN
