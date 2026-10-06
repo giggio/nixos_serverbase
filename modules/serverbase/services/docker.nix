@@ -110,7 +110,7 @@
       kataMemorySize = lib.lists.foldl' (sum: daemon: sum + daemon.kata-runtime.memory) 0 kataDaemons;
     in
     {
-      virtualisation.docker.enable = true;
+      virtualisation.docker.enable = lib.mkDefault true;
       # A mount unit rather than `fileSystems`, which the test VMs replace wholesale. The kata containerds require it.
       systemd.mounts = lib.lists.optional (kataDaemons != [ ]) {
         what = "tmpfs";
