@@ -104,10 +104,26 @@ let
             };
           };
       };
-    lib = import ./lib.nix {
-      serverbaseModules = myModules;
-      inherit lib inputs;
-    };
+    # The helpers (mkNixosConfigurations, mkChecks, ...) hand `inputs` to every machine module and check node. A
+    # repository that has inputs of its own, and modules that need them, builds the helpers through this instead of
+    # using `lib`, so its inputs show up in `inputs` beside serverbase's. The consumer's win on a clash, so passing its
+    # whole `inputs` works: it is how a consumer's own `nixpkgs` (which follows serverbase's) and `self` get here.
+    #
+    # The helpers call each other through `serverbaseModules.lib` (mkNixosConfigurations reaches mkNixosModulesCombinations
+    # that way, and that is where `specialArgs` is built), so the lib being built is also the `lib` they see.
+    mkLib =
+      extraInputs:
+      let
+        extendedLib = import ./lib.nix {
+          serverbaseModules = myModules // {
+            lib = extendedLib;
+          };
+          inherit lib;
+          inputs = inputs // extraInputs;
+        };
+      in
+      extendedLib;
+    lib = myModules.mkLib { };
     default = [
       inputs.sops-nix.nixosModules.sops
       ./serverbase/default.nix
