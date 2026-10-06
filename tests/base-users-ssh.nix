@@ -38,8 +38,10 @@ in
 
     with subtest("the user is a normal account in the groups that grant it privileges"):
         groups = set(machine.succeed("id -nG ${user}").split())
-        for group in ["users", "wheel", "docker"]:
+        for group in ["users", "wheel"]:
             assert group in groups, f"${user} is not in the '{group}' group, only in {sorted(groups)}"
+        # docker group membership is root-equivalent, so the account must reach docker through sudo only
+        assert "docker" not in groups, "${user} is in the docker group, which is root-equivalent"
         # NetworkManager is force-disabled, so this group must not appear either - if it ever does, the account silently
         # gained the right to reconfigure the network
         assert "networkmanager" not in groups, \
