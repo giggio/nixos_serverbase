@@ -21,6 +21,36 @@
           RestartSec = lib.mkForce 20;
           RestartSteps = lib.mkForce 3;
         };
+    # The least-privilege baseline for a unit this configuration provides. A unit merges it (`// hardened`) and adds
+    # only its exceptions: a path to write in `ReadWritePaths`, the address families it talks over, a capability it
+    # cannot do without, `MemoryDenyWriteExecute = false` for a JIT. A property is switched off by naming it again,
+    # never by leaving the baseline out. Tested per unit with `systemd-analyze security --threshold`.
+    hardened = {
+      NoNewPrivileges = true;
+      ProtectSystem = "strict";
+      ProtectHome = true;
+      PrivateTmp = true;
+      PrivateDevices = true;
+      ProtectKernelTunables = true;
+      ProtectKernelModules = true;
+      ProtectKernelLogs = true;
+      ProtectControlGroups = true;
+      ProtectClock = true;
+      ProtectHostname = true;
+      ProtectProc = "invisible";
+      RestrictNamespaces = true;
+      RestrictRealtime = true;
+      RestrictSUIDSGID = true;
+      LockPersonality = true;
+      MemoryDenyWriteExecute = true;
+      SystemCallArchitectures = "native";
+      SystemCallFilter = [
+        "@system-service"
+        "~@privileged"
+      ];
+      CapabilityBoundingSet = [ "" ];
+      UMask = "0077";
+    };
     checkMountScript =
       mounts:
       lib.strings.concatStrings (
