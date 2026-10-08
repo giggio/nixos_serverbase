@@ -1,6 +1,6 @@
 { lib, ... }:
 {
-  systemd = {
+  systemd = rec {
     notifyUnitConfig = {
       OnFailure = "notify_telegram@%N.service";
     };
@@ -51,6 +51,26 @@
       CapabilityBoundingSet = [ "" ];
       UMask = "0077";
     };
+    # `hardened` for a job that reads backups from the shares and uploads them: no account of its own to keep (the
+    # shares are mounted with a forced owner, so the groups are what grant access), the network for tang and the
+    # bucket, and nothing it writes outlives the run. The unit has to set `RuntimeDirectory = "%N"`: rclone wants a home
+    # and a cache directory and gets that one.
+    hardenedUpload =
+      groups:
+      hardened
+      // {
+        DynamicUser = true;
+        SupplementaryGroups = groups;
+        RestrictAddressFamilies = [
+          "AF_UNIX"
+          "AF_INET"
+          "AF_INET6"
+        ];
+        Environment = [
+          "HOME=%t/%N"
+          "XDG_CACHE_HOME=%t/%N"
+        ];
+      };
     checkMountScript =
       mounts:
       lib.strings.concatStrings (
