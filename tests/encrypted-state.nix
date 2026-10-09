@@ -169,6 +169,23 @@ let
         };
       };
 
+      # A configuration whose only difference is a unit named in `paths`: the table the scripts carry changes, so
+      # the unlock unit's scripts change, which is what a rename of a container's unit does on gmktec1. The last
+      # subtest switches to it with the container open.
+      specialisation.respec.configuration = {
+        setup.encryptedState.paths."${statePath}" = lib.mkForce [
+          "testapp.service"
+          "renamed.service"
+        ];
+        systemd.services.renamed = {
+          serviceConfig = {
+            Type = "oneshot";
+            RemainAfterExit = true;
+            ExecStart = "${pkgs.coreutils}/bin/true";
+          };
+        };
+      };
+
       # The healing retry timer is deliberately out of scope. Left on, a tick landing between two steps of this
       # script would start encrypted-state.target at a moment the test has arranged for it to be down, which is
       # precisely when it is checking that it is. The units are still built and still evaluated, and the subtests
@@ -781,5 +798,28 @@ in
 
           client.wait_for_unit("testapp.service")
           client.wait_for_unit("fake-wedged.service")
+
+      with subtest("a switch that changes the table of paths leaves the container open"):
+          # The unlock unit's scripts carry the table of paths and the units that read them, so renaming a unit in
+          # `paths` changes the unit, and a restart of it runs encrypted-state-close: the container closes and every
+          # service in it stops with it. The unit must be left alone by a switch.
+          client.succeed("systemctl start encrypted-state.target")
+          client.wait_for_unit("testapp.service")
+          invocation = "systemctl show -p InvocationID --value encrypted-state-unlock.service"
+          exec_start = "systemctl show -p ExecStart --value encrypted-state-unlock.service"
+          invocation_before = client.succeed(invocation).strip()
+          exec_start_before = client.succeed(exec_start).strip()
+          source_before = client.succeed("findmnt -no SOURCE --target ${statePath}").strip()
+          # `execute`: the node has no sops key, so the specialisation's secrets activation reports a failure and the
+          # script exits 2, after the units were dealt with. What is under test is what it did to them.
+          status, out = client.execute("/run/current-system/specialisation/respec/bin/switch-to-configuration test 2>&1")
+          client.log(f"switch-to-configuration exited {status}:\n{out}")
+          assert "stopping the following units" not in out or "encrypted-state-unlock" not in out.split("stopping the following units")[1].split("\n")[0], out
+          # without this the subtest passes against a switch that changed nothing
+          assert client.succeed(exec_start).strip() != exec_start_before, "the switch did not change the unlock unit"
+          assert client.succeed(invocation).strip() == invocation_before, "the switch restarted the unlock unit"
+          assert client.succeed("findmnt -no SOURCE --target ${statePath}").strip() == source_before
+          client.require_unit_state("testapp.service", "active")
+          assert "ORIGINAL-DATA" in client.succeed("cat ${statePath}/data")
     '';
 }

@@ -355,6 +355,16 @@ path comes up bound to a new, empty directory inside the container and the servi
 closing banner it prints on every run, about originals parked at `*.premigrated` and services being down, does not
 apply to it. Before `bindState` is on, `migrate` creates the directory empty inside the container instead.
 
+### Changing `paths` does not restart the container
+
+The scripts of the unlock unit carry the table of paths and the units that read them, so adding, renaming or removing a
+unit in `paths` changes the unit. A switch leaves it alone (`restartIfChanged = false`), because a restart runs
+`encrypted-state-close`: the container closes, and every service that lives in it stops with it until the unlock gets
+through the key server again. The new table reaches the scripts at the next boot, and the retry timer starts the
+unit rather than restarting it. A switch that changes `image` or `mountPoint` is the exception to plan for: use `boot`
+and a reboot, as the first deployment does. `tests/encrypted-state.nix` switches to a configuration that renames a
+unit in `paths` and asserts the unlock unit keeps its invocation and the state stays mounted.
+
 ## What must not go in the container
 
 Two shapes will break the boot if you put them in, and neither breaks it loudly. Both were found by the checks, not

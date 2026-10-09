@@ -656,6 +656,13 @@ in
       {
         encrypted-state-unlock = {
           description = "Unlock the application state container";
+          # A switch must not restart this unit. Its scripts embed the table of paths and the units that read them
+          # (STATE_SPEC), so any change to a unit name in `paths` changes the scripts, and a restart runs the ExecStop
+          # (`encrypted-state-close`): the container closes, /encrypted and every bind mount over it go away, and
+          # every service that lives in the container stops with them, until the unlock gets through the key server
+          # again. Nothing a switch can change about this unit matters to a container that is already open: the new
+          # scripts are used at the next boot, and by the retry timer, which starts the unit rather than restarting it.
+          restartIfChanged = false;
           # network-online rather than network.target: a network pin needs to actually reach a box on the LAN, not
           # merely to have had interfaces configured.
           wants = [ "network-online.target" ];
