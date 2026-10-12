@@ -43,12 +43,18 @@
       # assembled under a `.partial` name and moved into place only once it is complete and non-empty, so a
       # half-written config can never be handed to rclone - which would fail in a confusing way, or worse, succeed
       # against the wrong remote.
+      let
+        # A path inside a flake is a file of the flake's whole source in the store, and `toString` keeps that path,
+        # so a unit naming it changes with every commit and restarts at every deploy. Interpolating the path copies
+        # the one file to a store path of its own, which changes only with the JWE.
+        jweFile = if builtins.isPath jwe then "${jwe}" else jwe;
+      in
       /* bash */ ''
         umask 077
         rm -f "${out}" "${out}.partial"
 
         for attempt in $(seq 1 ${toString attempts}); do
-          if clevis decrypt < ${lib.escapeShellArg jwe} > "${out}.partial" && [ -s "${out}.partial" ]; then
+          if clevis decrypt < ${lib.escapeShellArg jweFile} > "${out}.partial" && [ -s "${out}.partial" ]; then
             mv "${out}.partial" "${out}"
             break
           fi
@@ -60,7 +66,7 @@
         done
 
         if [ ! -s "${out}" ]; then
-          echo "FATAL: could not decrypt ${jwe} after ${toString attempts} attempts." >&2
+          echo "FATAL: could not decrypt ${jweFile} after ${toString attempts} attempts." >&2
           echo "The tang server is unreachable. This job cannot run without it; the sops copy of this secret is the" >&2
           echo "offline recovery path and is encrypted to the YubiKey." >&2
           exit 1
