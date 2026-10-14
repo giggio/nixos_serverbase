@@ -159,6 +159,10 @@
               patch_key default_vcpus ${toString daemon.kata-runtime.cpus}
               patch_key default_memory ${toString daemon.kata-runtime.memory}
               patch_key file_mem_backend '"${kataMemoryDir}"'
+              # The shipped list lets a container's annotations set virtio_fs_extra_args, the arguments of the virtiofsd
+              # that runs as root on the host, and kernel_params. Nothing here needs either, and a container is whoever
+              # wrote the job.
+              patch_key enable_annotations '[]'
               mv configuration.toml $out
             '';
           in

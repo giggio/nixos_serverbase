@@ -6,14 +6,11 @@
 # typechecking, a machine the tests no longer match - which is most of what actually breaks here - and catches none
 # of what only shows up once a service is running. That half waits until 02:00.
 #
-# Unlike build.yaml this runs on the ORDINARY runner, not the privileged one, because it needs neither /dev/kvm nor
-# anything else that runner exists to provide. Two things follow, both wanted. It runs under kata, so an evaluation
-# is confined to a real VM rather than to a container with the host's KVM device passed in. And it stops competing
-# with build.yaml for the privileged runner, whose capacity is one: pushing while the weekly update is running used
-# to mean waiting hours for a job that takes minutes.
+# Asks for `docker` rather than nix-kvm because it needs no /dev/kvm. On the private instance both labels are the
+# same runner, with a capacity of one, so a push made while build.yaml is running waits for it.
 #
 # The consequence to know about: `docker` is the default label on every runner, including the one registered against
-# the public mirror, whereas `nix-kvm` exists only on the private instance. So this file no longer fails to find a
+# the public mirror, whereas `nix-kvm` exists only on the private instance. So this file does not fail to find a
 # runner if the mirror's Actions unit is ever enabled - it would instead land on that instance's restricted kata
 # runner, the one whose daemon has LAN access blocked, which is exactly what that runner is for. The control remains
 # the same as in build.yaml: the mirror's Actions unit is off.

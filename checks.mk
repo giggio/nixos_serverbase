@@ -37,13 +37,25 @@ check_jobs ?= 4
 #
 # Bounded by $(check_reserve) as well as by the fraction, because a fraction alone does not bound what it leaves
 # behind - see below.
-check_memory ?= $(shell awk -v reserve=$(check_reserve) '/^MemAvailable:/ { available = $$2 } \
+#
+# And bounded by every memory-limited cgroup from this process up, because a container's /proc/meminfo is the host's:
+# a CI job held to 9G on a host with 11G available would plan for 8G and be killed by its own limit. What a cgroup has
+# left is its limit less what it uses, its inactive page cache counted as free the way MemAvailable counts it. Where
+# no cgroup is limited (a workstation shell, a kata guest) only MemAvailable is left.
+check_memory ?= $(shell { cat /proc/meminfo; \
+  dir=/sys/fs/cgroup$$(sed -n 's/^0:://p' /proc/self/cgroup); \
+  while [ -r "$$dir/memory.max" ]; do \
+    echo "CgroupFree: $$(cat "$$dir/memory.max") $$(cat "$$dir/memory.current") $$(awk '/^inactive_file /{ print $$2 }' "$$dir/memory.stat")"; \
+    dir=$${dir%/*}; \
+  done; } 2>/dev/null | awk -v reserve=$(check_reserve) '/^MemAvailable:/ { available = $$2 } \
+  /^CgroupFree:/ && $$2 != "max" { left = ($$2 - $$3 + $$4) / 1024; if (!limited || left < cgroup) cgroup = left; limited = 1 } \
   END { \
     if (!available) { print 8192; exit } \
+    if (limited && cgroup < available) available = cgroup; \
     mib = available / 1024; fraction = mib * 0.7; floor = mib - reserve; \
     budget = (fraction < floor ? fraction : floor); \
     printf "%d", (budget < 1 ? 1 : budget) \
-  }' /proc/meminfo)
+  }')
 
 # Memory, in MiB, that $(check_memory) leaves unclaimed no matter how little the host has - an ABSOLUTE floor under
 # the 0.7 fraction above, which is a relative one. Whichever of the two is tighter wins.

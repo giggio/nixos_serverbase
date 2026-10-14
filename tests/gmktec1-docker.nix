@@ -94,6 +94,10 @@
         memory = machine.succeed("sed -n 's/^default_memory = //p' /etc/docker-kata-kata/configuration.toml").strip()
         assert size == f"{int(memory) // 1024}G", f"/run/kata-memory is {size}, expected one {memory}M guest"
 
+    with subtest("a container's annotations cannot reach the host-side virtiofsd or the guest kernel"):
+        enabled = machine.succeed("grep '^enable_annotations = ' /etc/docker-kata-kata/configuration.toml").strip()
+        assert enabled == "enable_annotations = []", f"kata lets containers' annotations through: {enabled}"
+
     (_, failed) = machine.systemctl("--failed --quiet")
     machine.log(f"systemctl --failed output: {failed}")
     assert "" == failed, "Expected no failed units and got: " + failed

@@ -1,7 +1,7 @@
 # The full build: every machine, the whole check suite, both pushed to the private attic cache. Runs overnight rather
 # than on every push, because it costs around half an hour when the inputs move and the runner it needs has a capacity
-# of one - a push during the day would hold the only privileged runner for that long. Fast feedback on a push is
-# smoke.yaml's job; this is the half that needs to boot things.
+# of one - a push during the day would hold the private instance's only runner for that long. Fast feedback on a push
+# is smoke.yaml's job; this is the half that needs to boot things.
 #
 # Unlike the superproject's build.yaml, this one is NOT guarded by a marker tag and builds whether or not anything
 # changed. Two reasons. A night over an unchanged tree costs a download and not a build - everything below is already
@@ -17,7 +17,8 @@
 # registered against the public forge for this repository at all, and that its Actions unit is off. Runners register
 # against one forge with one token and only ever receive jobs from it, so `nix-kvm` below is unreachable from there.
 #
-# The `nix-kvm` runner is the privileged one: no kata, with /dev/kvm passed in. It is safe to build this repository on
+# The `nix-kvm` label is the private instance's runner, which is not under kata and passes /dev/kvm in. It is rootless,
+# but a job there still runs beside the host's kernel, with no VM between them. It is safe to build this repository on
 # it only because the private instance has registration disabled and a single account. That invariant is asserted in
 # the superproject's gmktec1-forgejo check - if registration is ever enabled, that check fails and says why.
 #
