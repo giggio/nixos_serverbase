@@ -8,6 +8,16 @@
 {
   options = {
     setup.docker = with lib; {
+      mainDaemon.enable = mkOption {
+        type = types.bool;
+        default = true;
+        description = ''
+          Whether to run the stock docker daemon (docker.service and docker.socket on /run/docker.sock). Off, the
+          docker module stays enabled, since the extra daemons are built from it: its package, daemon.settings and
+          extraOptions, the `docker` group their sockets default to, and the forwarding sysctls and kernel modules their
+          bridges need. Only the default daemon's units go.
+        '';
+      };
       extra-daemons = mkOption {
         type = types.attrsOf (
           types.submodule (
@@ -110,6 +120,10 @@
       kataMemorySize = lib.lists.foldl' (sum: daemon: sum + daemon.kata-runtime.memory) 0 kataDaemons;
     in
     {
+      # Stays on even where no stock daemon runs (setup.docker.mainDaemon.enable = false): the extra daemons below are made of
+      # this module - its package, daemon.settings and extraOptions, the `docker` group their sockets default to, the
+      # forwarding sysctls and kernel modules their bridges need. Turning it off takes all of that away from them; to
+      # stop only the default daemon, turn mainDaemon off instead, which removes docker.service and docker.socket.
       virtualisation.docker.enable = lib.mkDefault true;
       # A mount unit rather than `fileSystems`, which the test VMs replace wholesale. The kata containerds require it.
       systemd.mounts = lib.lists.optional (kataDaemons != [ ]) {
@@ -126,6 +140,10 @@
             in
             (builtins.length (lib.lists.unique octets)) == (builtins.length octets);
           message = "setup.docker.extra-daemons: each daemon's network.subnetOctet must be unique, otherwise the dockerd bridges would share a subnet and collide.";
+        }
+        {
+          assertion = config.setup.docker.mainDaemon.enable || !(cfg.enable && cfg.autoPrune.enable);
+          message = "setup.docker.mainDaemon.enable is off but virtualisation.docker.autoPrune is on: docker-prune prunes only the default daemon, which is not there to answer.";
         }
       ];
       environment.etc = lib.foldr (a: b: a // b) { } (
@@ -171,7 +189,10 @@
           }
         ) daemons
       );
-      systemd.services = lib.foldr (a: b: a // b) { } (
+      systemd.services = {
+        docker.enable = config.setup.docker.mainDaemon.enable;
+      }
+      // lib.foldr (a: b: a // b) { } (
         builtins.map (
           daemon:
           let
@@ -322,7 +343,10 @@
         ) daemons
       );
 
-      systemd.sockets = lib.foldr (a: b: a // b) { } (
+      systemd.sockets = {
+        docker.enable = config.setup.docker.mainDaemon.enable;
+      }
+      // lib.foldr (a: b: a // b) { } (
         builtins.map (
           daemon:
           let
