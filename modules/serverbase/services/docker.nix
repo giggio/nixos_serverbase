@@ -189,196 +189,200 @@
           }
         ) daemons
       );
-      systemd.services = {
-        docker.enable = config.setup.docker.mainDaemon.enable;
-      }
-      // lib.foldr (a: b: a // b) { } (
-        builtins.map (
-          daemon:
-          let
-            suffix = "-${daemon.name}";
-            dockerService = "docker${suffix}";
-            containerdService = "containerd${suffix}";
-            containerdSocket = "${exec-root}/containerd/containerd.sock";
-            data-root = "/var/lib/${dockerService}";
-            exec-root = "/var/run/${dockerService}";
-            daemonSettingsFile = settingsFormatJson.generate "daemon${suffix}.json" (
-              cfg.daemon.settings
-              // {
-                # see: https://docs.docker.com/reference/cli/dockerd/#run-multiple-daemons
-                inherit data-root exec-root;
-                bridge = daemon.network.interfaceName;
-                pidfile = "${exec-root}.pid";
-                containerd = containerdSocket;
-                iptables = false;
-                ip6tables = false;
-                ip-masq = false;
-                default-runtime = if daemon.kata-runtime.enable then "kata" else "runc";
-                features.time-namespaces = false; # todo: remove when kata-runtime releases this (greater than 3.31.0): https://github.com/kata-containers/kata-containers/issues/13080#issuecomment-4501602114
-                runtimes = lib.attrsets.optionalAttrs daemon.kata-runtime.enable {
-                  kata = {
-                    runtimeType = "${pkgs.kata-runtime}/bin/containerd-shim-kata-v2";
-                    options.ConfigPath = "/etc/docker-kata${suffix}/configuration.toml";
+      # Said only when the daemon is off: `docker.enable = true` would define a unit of its own where virtualisation.docker is off.
+      systemd.services =
+        lib.optionalAttrs (!config.setup.docker.mainDaemon.enable) {
+          docker.enable = false;
+        }
+        // lib.foldr (a: b: a // b) { } (
+          builtins.map (
+            daemon:
+            let
+              suffix = "-${daemon.name}";
+              dockerService = "docker${suffix}";
+              containerdService = "containerd${suffix}";
+              containerdSocket = "${exec-root}/containerd/containerd.sock";
+              data-root = "/var/lib/${dockerService}";
+              exec-root = "/var/run/${dockerService}";
+              daemonSettingsFile = settingsFormatJson.generate "daemon${suffix}.json" (
+                cfg.daemon.settings
+                // {
+                  # see: https://docs.docker.com/reference/cli/dockerd/#run-multiple-daemons
+                  inherit data-root exec-root;
+                  bridge = daemon.network.interfaceName;
+                  pidfile = "${exec-root}.pid";
+                  containerd = containerdSocket;
+                  iptables = false;
+                  ip6tables = false;
+                  ip-masq = false;
+                  default-runtime = if daemon.kata-runtime.enable then "kata" else "runc";
+                  features.time-namespaces = false; # todo: remove when kata-runtime releases this (greater than 3.31.0): https://github.com/kata-containers/kata-containers/issues/13080#issuecomment-4501602114
+                  runtimes = lib.attrsets.optionalAttrs daemon.kata-runtime.enable {
+                    kata = {
+                      runtimeType = "${pkgs.kata-runtime}/bin/containerd-shim-kata-v2";
+                      options.ConfigPath = "/etc/docker-kata${suffix}/configuration.toml";
+                    };
                   };
-                };
-              }
-              // daemon.configuration
-            );
-            subnet = "172.${toString daemon.network.subnetOctet}.0.0/16";
-            # dockerd derives (and then persists) the default bridge subnet from the
-            # bridge interface's IP. If the configured subnet changes, the persisted
-            # value would keep winning across restarts and reboots, so wipe the
-            # libnetwork store when it no longer matches and let dockerd re-derive it.
-            resetLibnetworkStore = pkgs.writeShellApplication {
-              name = "docker${suffix}-reset-libnetwork-store";
-              runtimeInputs = [ pkgs.coreutils ];
-              text = ''
-                stamp="${data-root}/.nixos-bridge-subnet"
-                want="${subnet}"
-                db="${data-root}/network/files/local-kv.db"
-                if [ ! -f "$stamp" ] || [ "$(cat "$stamp")" != "$want" ]; then
-                  echo "docker${suffix}: bridge subnet is now $want; resetting libnetwork store so dockerd re-derives it" >&2
-                  rm -f "$db"
-                  mkdir -p "$(dirname "$stamp")"
-                  printf '%s' "$want" > "$stamp"
-                fi
-              '';
-            };
-          in
-          {
-            "${dockerService}" = {
-              # this is an adaptation of the original docker servide at https://github.com/NixOS/nixpkgs/blob/1267bb4/nixos/modules/virtualisation/docker.nix#L265
-              wantedBy = [ "multi-user.target" ];
-              after = [
-                "network.target"
-                "${dockerService}.socket"
-                "${containerdService}.service"
-              ];
-              requires = [
-                "${dockerService}.socket"
-                "${containerdService}.service"
-              ];
-              serviceConfig = {
-                Type = "notify";
-                ExecStartPre = [ (lib.getExe resetLibnetworkStore) ];
-                ExecStart = [
-                  "${cfg.package}/bin/dockerd --config-file=${daemonSettingsFile} ${cfg.extraOptions}"
+                }
+                // daemon.configuration
+              );
+              subnet = "172.${toString daemon.network.subnetOctet}.0.0/16";
+              # dockerd derives (and then persists) the default bridge subnet from the
+              # bridge interface's IP. If the configured subnet changes, the persisted
+              # value would keep winning across restarts and reboots, so wipe the
+              # libnetwork store when it no longer matches and let dockerd re-derive it.
+              resetLibnetworkStore = pkgs.writeShellApplication {
+                name = "docker${suffix}-reset-libnetwork-store";
+                runtimeInputs = [ pkgs.coreutils ];
+                text = ''
+                  stamp="${data-root}/.nixos-bridge-subnet"
+                  want="${subnet}"
+                  db="${data-root}/network/files/local-kv.db"
+                  if [ ! -f "$stamp" ] || [ "$(cat "$stamp")" != "$want" ]; then
+                    echo "docker${suffix}: bridge subnet is now $want; resetting libnetwork store so dockerd re-derives it" >&2
+                    rm -f "$db"
+                    mkdir -p "$(dirname "$stamp")"
+                    printf '%s' "$want" > "$stamp"
+                  fi
+                '';
+              };
+            in
+            {
+              "${dockerService}" = {
+                # this is an adaptation of the original docker servide at https://github.com/NixOS/nixpkgs/blob/1267bb4/nixos/modules/virtualisation/docker.nix#L265
+                wantedBy = [ "multi-user.target" ];
+                after = [
+                  "network.target"
+                  "${dockerService}.socket"
+                  "${containerdService}.service"
                 ];
-                ExecReload = [ "${pkgs.procps}/bin/kill -s HUP $MAINPID" ];
-              };
-              environment = config.networking.proxy.envVars;
-              path = [ pkgs.kmod ];
-            };
-
-            "${containerdService}" = {
-              # this is an adaptation of the containerd service https://github.com/NixOS/nixpkgs/blob/1267bb4/nixos/modules/virtualisation/containerd.nix
-              # The default docker daemon starts its own containerd, extra daemons need to create their own containerd service
-              description = "containerd - container runtime (${daemon.name})";
-              wantedBy = [ "multi-user.target" ];
-              after = [
-                "network.target"
-                "local-fs.target"
-                "dbus.service"
-              ];
-              path = with pkgs; [
-                containerd
-                runc
-                iptables
-              ];
-              unitConfig = {
-                StartLimitBurst = "16";
-                StartLimitIntervalSec = "120s";
-              }
-              // lib.attrsets.optionalAttrs daemon.kata-runtime.enable {
-                # The kata shims it starts put their guests' memory there.
-                RequiresMountsFor = kataMemoryDir;
-              };
-              serviceConfig =
-                let
-                  configFile = settingsFormatToml.generate "containerd.toml" {
-                    disabled_plugins = [ "io.containerd.grpc.v1.cri" ];
-                    imports = [ ];
-                    oom_score = 0;
-                    required_plugins = [ ];
-                    root = "${data-root}/containerd/daemon";
-                    state = "${exec-root}/containerd/daemon";
-                    temp = "";
-                    version = 2;
-                    cgroup = {
-                      path = "";
-                    };
-                    debug = {
-                      address = "${exec-root}/containerd/containerd-debug.sock";
-                      format = "text";
-                      gid = 0;
-                      level = "";
-                      uid = 0;
-                    };
-                    grpc = {
-                      address = containerdSocket;
-                      gid = 0;
-                      max_recv_message_size = 16777216;
-                      max_send_message_size = 16777216;
-                    };
-                  };
-                in
-                {
-                  ExecStart = "${pkgs.containerd}/bin/containerd --config ${configFile}";
-                  Delegate = "yes";
-                  KillMode = "process";
+                requires = [
+                  "${dockerService}.socket"
+                  "${containerdService}.service"
+                ];
+                serviceConfig = {
                   Type = "notify";
-                  Restart = "always";
-                  RestartSec = "10";
-                  LimitNPROC = "infinity";
-                  LimitCORE = "infinity";
-                  TasksMax = "infinity";
-                  OOMScoreAdjust = "-999";
-                  StateDirectory = "containerd";
-                  RuntimeDirectory = "containerd";
-                  RuntimeDirectoryPreserve = "yes";
+                  ExecStartPre = [ (lib.getExe resetLibnetworkStore) ];
+                  ExecStart = [
+                    "${cfg.package}/bin/dockerd --config-file=${daemonSettingsFile} ${cfg.extraOptions}"
+                  ];
+                  ExecReload = [ "${pkgs.procps}/bin/kill -s HUP $MAINPID" ];
                 };
-            };
-
-          }
-        ) daemons
-      );
-
-      systemd.sockets = {
-        docker.enable = config.setup.docker.mainDaemon.enable;
-      }
-      // lib.foldr (a: b: a // b) { } (
-        builtins.map (
-          daemon:
-          let
-            suffix = "-${daemon.name}";
-            dockerSocket = "docker${suffix}";
-            containerdSocket = "containerd${suffix}";
-            exec-root = "/var/run/${dockerSocket}";
-          in
-          {
-            "${dockerSocket}" = {
-              description = "Docker Socket for the API (${suffix})";
-              wantedBy = [ "sockets.target" ];
-              socketConfig = {
-                ListenStream = [ "/run/${dockerSocket}.sock" ];
-                SocketMode = "0660";
-                SocketUser = daemon.socket.user;
-                SocketGroup = daemon.socket.group;
+                environment = config.networking.proxy.envVars;
+                path = [ pkgs.kmod ];
               };
-            };
-            "${containerdSocket}" = {
-              description = "Containerd Socket for the Docker (${suffix})";
-              wantedBy = [ "sockets.target" ];
-              socketConfig = {
-                ListenStream = [ "${exec-root}/containerd/containerd.sock" ];
-                SocketMode = "0660";
-                SocketUser = "root";
-                SocketGroup = "root";
+
+              "${containerdService}" = {
+                # this is an adaptation of the containerd service https://github.com/NixOS/nixpkgs/blob/1267bb4/nixos/modules/virtualisation/containerd.nix
+                # The default docker daemon starts its own containerd, extra daemons need to create their own containerd service
+                description = "containerd - container runtime (${daemon.name})";
+                wantedBy = [ "multi-user.target" ];
+                after = [
+                  "network.target"
+                  "local-fs.target"
+                  "dbus.service"
+                ];
+                path = with pkgs; [
+                  containerd
+                  runc
+                  iptables
+                ];
+                unitConfig = {
+                  StartLimitBurst = "16";
+                  StartLimitIntervalSec = "120s";
+                }
+                // lib.attrsets.optionalAttrs daemon.kata-runtime.enable {
+                  # The kata shims it starts put their guests' memory there.
+                  RequiresMountsFor = kataMemoryDir;
+                };
+                serviceConfig =
+                  let
+                    configFile = settingsFormatToml.generate "containerd.toml" {
+                      disabled_plugins = [ "io.containerd.grpc.v1.cri" ];
+                      imports = [ ];
+                      oom_score = 0;
+                      required_plugins = [ ];
+                      root = "${data-root}/containerd/daemon";
+                      state = "${exec-root}/containerd/daemon";
+                      temp = "";
+                      version = 2;
+                      cgroup = {
+                        path = "";
+                      };
+                      debug = {
+                        address = "${exec-root}/containerd/containerd-debug.sock";
+                        format = "text";
+                        gid = 0;
+                        level = "";
+                        uid = 0;
+                      };
+                      grpc = {
+                        address = containerdSocket;
+                        gid = 0;
+                        max_recv_message_size = 16777216;
+                        max_send_message_size = 16777216;
+                      };
+                    };
+                  in
+                  {
+                    ExecStart = "${pkgs.containerd}/bin/containerd --config ${configFile}";
+                    Delegate = "yes";
+                    KillMode = "process";
+                    Type = "notify";
+                    Restart = "always";
+                    RestartSec = "10";
+                    LimitNPROC = "infinity";
+                    LimitCORE = "infinity";
+                    TasksMax = "infinity";
+                    OOMScoreAdjust = "-999";
+                    StateDirectory = "containerd";
+                    RuntimeDirectory = "containerd";
+                    RuntimeDirectoryPreserve = "yes";
+                  };
               };
-            };
-          }
-        ) daemons
-      );
+
+            }
+          ) daemons
+        );
+
+      # Said only when the daemon is off: `docker.enable = true` would define a unit of its own where virtualisation.docker is off.
+      systemd.sockets =
+        lib.optionalAttrs (!config.setup.docker.mainDaemon.enable) {
+          docker.enable = false;
+        }
+        // lib.foldr (a: b: a // b) { } (
+          builtins.map (
+            daemon:
+            let
+              suffix = "-${daemon.name}";
+              dockerSocket = "docker${suffix}";
+              containerdSocket = "containerd${suffix}";
+              exec-root = "/var/run/${dockerSocket}";
+            in
+            {
+              "${dockerSocket}" = {
+                description = "Docker Socket for the API (${suffix})";
+                wantedBy = [ "sockets.target" ];
+                socketConfig = {
+                  ListenStream = [ "/run/${dockerSocket}.sock" ];
+                  SocketMode = "0660";
+                  SocketUser = daemon.socket.user;
+                  SocketGroup = daemon.socket.group;
+                };
+              };
+              "${containerdSocket}" = {
+                description = "Containerd Socket for the Docker (${suffix})";
+                wantedBy = [ "sockets.target" ];
+                socketConfig = {
+                  ListenStream = [ "${exec-root}/containerd/containerd.sock" ];
+                  SocketMode = "0660";
+                  SocketUser = "root";
+                  SocketGroup = "root";
+                };
+              };
+            }
+          ) daemons
+        );
 
       # New interface and bridge are required, with NAT, so network works as expected
       systemd.network.networks = lib.foldr (a: b: a // b) { } (
