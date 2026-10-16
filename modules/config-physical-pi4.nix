@@ -85,6 +85,9 @@ in
       "console=ttyAMA0,115200n8"
       "loglevel=7"
       "lsm=landlock,yama,bpf"
+      # This kernel has CONFIG_PSI=y but also CONFIG_PSI_DEFAULT_DISABLED=y, so /proc/pressure/memory does not exist without it
+      # and systemd-oomd's unit is skipped by its ConditionPathExists.
+      "psi=1"
     ];
     initrd = {
       availableKernelModules = {

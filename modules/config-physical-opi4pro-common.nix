@@ -512,6 +512,10 @@ let
     # The ARMv8 Crypto Extensions SHA-2 path. The A733 advertises `sha2`, and integrity hashes every sector on
     # every read - the generic C implementation would make the tag check the bottleneck rather than the disk.
     "CRYPTO_SHA2_ARM64_CE"
+    # Pressure stall information: /proc/pressure/*, which systemd-oomd's unit is conditioned on (ConditionPathExists=
+    # /proc/pressure/memory). The vendor config has it off, so oomd was skipped at every boot. PSI_DEFAULT_DISABLED is hidden
+    # while PSI is off, so it defaults to n and the accounting is on without a psi=1 on the command line.
+    "PSI"
   ];
   # Where the kernel's own outputs put the modules tree. Named once because kernelConfigAssertions has to find the
   # post-oldconfig .config under exactly this path.
@@ -682,6 +686,13 @@ let
             echo "  CONFIG_$s -> $(grep -E "^(# )?CONFIG_$s( is not set|=)" "$cfg" || echo 'absent entirely')" >&2
           done
           echo "Their Kconfig dependencies are not met. Enabling a symbol requires enabling what it depends on." >&2
+          exit 1
+        fi
+
+        # PSI is only useful here if it is on at boot. PSI_DEFAULT_DISABLED is hidden while PSI is off in the vendor config, so
+        # oldconfig is expected to leave it at its default (n); if it ever comes out =y, /proc/pressure stays absent without psi=1.
+        if grep -q "^CONFIG_PSI_DEFAULT_DISABLED=y\$" "$cfg"; then
+          echo "FATAL: CONFIG_PSI_DEFAULT_DISABLED=y in the built kernel: PSI would need psi=1 on the command line." >&2
           exit 1
         fi
 
