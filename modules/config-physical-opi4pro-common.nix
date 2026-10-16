@@ -548,7 +548,13 @@ let
       src = bootchainPkgs.fetchFromGitHub {
         owner = "orangepi-xunlong";
         repo = "linux-orangepi";
-        rev = "orange-pi-6.6-sun60iw2"; # the vendor branch carrying A733/sun60iw2 support
+        # Pinned to a commit of the vendor branch orange-pi-6.6-sun60iw2, which carries the A733/sun60iw2 support. This used to
+        # be the branch name itself, and when upstream pushed new commits to it the hash stopped matching and the build failed.
+        # 8a9be72 (2026-04-07) is what the NAS runs. To move on, take the branch head, set rev to its full SHA and update hash
+        # (nix-prefetch-url --unpack on its github archive), then check the PCIe root complex compatible in sun60iw2p1.dtsi
+        # still matches the driver this config builds (CONFIG_AW_PCIE_RC=y, "allwinner,sunxi-pcie-v300-rc"). The commits of
+        # July 2026 (e5f2886, 1ecd47b) switched it to the dw-sunxi driver, which this config does not build.
+        rev = "8a9be72c9006a87f786736b3aa4e2dfd971c1429";
         hash = "sha256-MfUDFi6Uu3NbZ06cfpzvo+vQfTWJGoZIdoRSlUnxz74=";
       };
 
