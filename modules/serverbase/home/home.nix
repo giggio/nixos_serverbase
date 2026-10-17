@@ -97,6 +97,11 @@ in
     "d %h/.cache/git/credential 0700 - - -"
   ];
 
-  # The zellij configuration loads its plugins from /run/current-system/sw/share/zellij, so they are a system package
-  environment.systemPackages = [ hmPkgs.zellij_plugins ];
+  # The zellij configuration loads its plugins from /run/current-system/sw/share/zellij, so they are a system package.
+  # A server links only the directories in environment.pathsToLink into the system path (no desktop adds all of /share),
+  # so without this one the package builds and the directory never appears.
+  environment = {
+    systemPackages = [ hmPkgs.zellij_plugins ];
+    pathsToLink = [ "/share/zellij" ];
+  };
 }
