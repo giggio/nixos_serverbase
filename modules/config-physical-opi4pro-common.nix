@@ -259,7 +259,9 @@ let
     src = bootchainPkgs.fetchFromGitHub {
       owner = "orangepi-xunlong";
       repo = "u-boot-orangepi";
-      rev = "v2018.05-sun60iw2";
+      # The head of the branch v2018.05-sun60iw2, the same commit Armbian pins. A commit, not the branch name: a branch moves
+      # and the hash stops matching.
+      rev = "b791be842935b27268ae3d00e943a9075495f30a";
       hash = "sha256-mR7u0eXr78lsL5G8JxgKYLNb5iTlfnoMj0aTrT8R01g=";
     };
 
@@ -517,6 +519,13 @@ let
     # while PSI is off, so it defaults to n and the accounting is on without a psi=1 on the command line.
     "PSI"
   ];
+  # Symbols turned off. IPsec ESP: Armbian forces these off for this vendor kernel ("Dirty Frag / Fragnesia: this vendor
+  # kernel has no fix", custom_kernel_config__sun60iw2_dirty_frag in config/sources/families/sun60iw2.conf, after the
+  # trunk.343 config this one is based on). Nothing here uses IPsec. XFRM_ESP goes with them, since only they select it.
+  kernelDisabledSymbols = [
+    "INET_ESP"
+    "INET6_ESP"
+  ];
   # Where the kernel's own outputs put the modules tree. Named once because kernelConfigAssertions has to find the
   # post-oldconfig .config under exactly this path.
   kernelModDirVersion = "6.6.98";
@@ -526,12 +535,17 @@ let
       {
         base = "${armbianBuild}/config/kernel/linux-sun60iw2-vendor.config";
         symbols = kernelExtraEnabledSymbols;
+        disabledSymbols = kernelDisabledSymbols;
       }
       ''
         cat "$base" > "$out"
         for s in $symbols; do
           sed -i "/^# CONFIG_$s is not set\$/d" "$out"
           echo "CONFIG_$s=y" >> "$out"
+        done
+        for s in $disabledSymbols; do
+          sed -i "/^CONFIG_$s=[ym]\$/d" "$out"
+          echo "# CONFIG_$s is not set" >> "$out"
         done
       '';
 
@@ -550,12 +564,13 @@ let
         repo = "linux-orangepi";
         # Pinned to a commit of the vendor branch orange-pi-6.6-sun60iw2, which carries the A733/sun60iw2 support. This used to
         # be the branch name itself, and when upstream pushed new commits to it the hash stopped matching and the build failed.
-        # 8a9be72 (2026-04-07) is what the NAS runs. To move on, take the branch head, set rev to its full SHA and update hash
-        # (nix-prefetch-url --unpack on its github archive), then check the PCIe root complex compatible in sun60iw2p1.dtsi
-        # still matches the driver this config builds (CONFIG_AW_PCIE_RC=y, "allwinner,sunxi-pcie-v300-rc"). The commits of
-        # July 2026 (e5f2886, 1ecd47b) switched it to the dw-sunxi driver, which this config does not build.
-        rev = "8a9be72c9006a87f786736b3aa4e2dfd971c1429";
-        hash = "sha256-MfUDFi6Uu3NbZ06cfpzvo+vQfTWJGoZIdoRSlUnxz74=";
+        # 2ac08e8 (2026-09-17) is the branch head after the aiot-linux v1.4.9 and v1.5.0 syncs. To move on, take the branch head,
+        # set rev to its full SHA and update hash (nix-prefetch-url --unpack on its github archive), then check the PCIe root
+        # complex compatible in sun60iw2p1.dtsi still matches the driver this config builds (CONFIG_AW_PCIE_RC=y,
+        # "allwinner,sunxi-pcie-v300-rc"). The syncs alone (e5f2886, 1ecd47b) switched it to the dw-sunxi driver, which this
+        # config does not build, so the NVMe root would not appear; 2ac08e8 switched it back.
+        rev = "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f";
+        hash = "sha256-oPsxtTdGO80KevjX+YOrLrOtJy/CBIrTWRQ7KtSc0KY=";
       };
 
       # Armbian's kernel config for this board - itself a verbatim copy of Orange Pi's own. Using a full config file (rather
@@ -676,6 +691,7 @@ let
       {
         kernelDev = orangepiVendorKernel.dev;
         symbols = kernelExtraEnabledSymbols;
+        disabledSymbols = kernelDisabledSymbols;
       }
       ''
         cfg="$kernelDev/lib/modules/${kernelModDirVersion}/build/.config"
@@ -701,6 +717,14 @@ let
           echo "FATAL: CONFIG_PSI_DEFAULT_DISABLED=y in the built kernel: PSI would need psi=1 on the command line." >&2
           exit 1
         fi
+
+        # A symbol something else selects comes back on in oldconfig, whatever the configfile says.
+        for s in $disabledSymbols; do
+          if grep -qE "^CONFIG_$s=[ym]\$" "$cfg"; then
+            echo "FATAL: CONFIG_$s is on in the built kernel, though kernelDisabledSymbols turns it off: something selects it." >&2
+            exit 1
+          fi
+        done
 
         echo "all $(echo $symbols | wc -w) requested symbols are =y in the built kernel"
         touch $out
