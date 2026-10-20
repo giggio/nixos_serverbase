@@ -518,13 +518,37 @@ let
     # /proc/pressure/memory). The vendor config has it off, so oomd was skipped at every boot. PSI_DEFAULT_DISABLED is hidden
     # while PSI is off, so it defaults to n and the accounting is on without a psi=1 on the command line.
     "PSI"
+    # Tracing, for perf and bpftrace: function and syscall tracers, kprobe/uprobe events and BPF programs attached to them.
+    # Taken from Armbian's later sun60iw2 config. Dynamic ftrace patches the call sites only while a tracer is attached, so
+    # the cost when idle is a larger kernel, not CPU. BTF gives bpftrace the kernel's types without kernel headers; it needs
+    # pahole at build time, which nixpkgs' kernel build already has.
+    "FTRACE"
+    "FUNCTION_TRACER"
+    "FUNCTION_GRAPH_TRACER"
+    "DYNAMIC_FTRACE"
+    "FTRACE_SYSCALLS"
+    "KPROBES"
+    "KPROBE_EVENTS"
+    "UPROBE_EVENTS"
+    "BPF_EVENTS"
+    "DEBUG_INFO_BTF"
+  ];
+  # Symbols set to a value rather than =y. The vendor config reads and writes the clock through rtc1, which does not exist on
+  # this board: the only RTC is the HYM8563 on I2C, registered as rtc0. With rtc1 nothing sets the clock at boot, and the
+  # kernel log is dated in March until NTP answers. Armbian's later config moved both to rtc0.
+  kernelConfigValues = [
+    ''RTC_HCTOSYS_DEVICE="rtc0"''
+    ''RTC_SYSTOHC_DEVICE="rtc0"''
   ];
   # Symbols turned off. IPsec ESP: Armbian forces these off for this vendor kernel ("Dirty Frag / Fragnesia: this vendor
   # kernel has no fix", custom_kernel_config__sun60iw2_dirty_frag in config/sources/families/sun60iw2.conf, after the
   # trunk.343 config this one is based on). Nothing here uses IPsec. XFRM_ESP goes with them, since only they select it.
+  # The Goodix touchscreen: the board's device tree declares one at i2c-5 0x14 for Orange Pi's LCD kit, which the NAS does not
+  # have, so the module was loaded at every boot to fail its probe and log I2C bus errors.
   kernelDisabledSymbols = [
     "INET_ESP"
     "INET6_ESP"
+    "TOUCHSCREEN_GOODIX"
   ];
   # Where the kernel's own outputs put the modules tree. Named once because kernelConfigAssertions has to find the
   # post-oldconfig .config under exactly this path.
@@ -536,9 +560,15 @@ let
         base = "${armbianBuild}/config/kernel/linux-sun60iw2-vendor.config";
         symbols = kernelExtraEnabledSymbols;
         disabledSymbols = kernelDisabledSymbols;
+        configValues = kernelConfigValues;
       }
       ''
         cat "$base" > "$out"
+        for kv in $configValues; do
+          name="''${kv%%=*}"
+          sed -i "/^CONFIG_$name=/d; /^# CONFIG_$name is not set\$/d" "$out"
+          echo "CONFIG_$kv" >> "$out"
+        done
         for s in $symbols; do
           sed -i "/^# CONFIG_$s is not set\$/d" "$out"
           echo "CONFIG_$s=y" >> "$out"
@@ -692,6 +722,7 @@ let
         kernelDev = orangepiVendorKernel.dev;
         symbols = kernelExtraEnabledSymbols;
         disabledSymbols = kernelDisabledSymbols;
+        configValues = kernelConfigValues;
       }
       ''
         cfg="$kernelDev/lib/modules/${kernelModDirVersion}/build/.config"
@@ -717,6 +748,13 @@ let
           echo "FATAL: CONFIG_PSI_DEFAULT_DISABLED=y in the built kernel: PSI would need psi=1 on the command line." >&2
           exit 1
         fi
+
+        for kv in $configValues; do
+          if ! grep -qFx "CONFIG_$kv" "$cfg"; then
+            echo "FATAL: CONFIG_$kv was asked for, the built kernel has: $(grep -E "^(# )?CONFIG_''${kv%%=*}( is not set|=)" "$cfg" || echo 'absent entirely')" >&2
+            exit 1
+          fi
+        done
 
         # A symbol something else selects comes back on in oldconfig, whatever the configfile says.
         for s in $disabledSymbols; do
