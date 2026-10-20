@@ -652,7 +652,7 @@ boot on this SoC only becomes possible if and when mainline TF-A and U-Boot gain
 | monitor_exist | A byte in U-Boot's Allwinner-specific image header (offset 0x4e9) telling it a secure monitor is resident, selecting the SMC handoff path. |
 | networkd / resolved | `systemd-networkd` and `systemd-resolved`. Used together, DHCP-learned DNS reaches the resolver; with scripted dhcpcd instead, it does not. |
 | OTG manager | Allwinner's `usbc0` driver, which decides whether a dual-role port acts as host or device, and gates the EHCI/OHCI controllers on that decision. |
-| RTC | Real-Time Clock. This board has no battery-backed RTC, so it boots with an incorrect clock until NTP corrects it. |
+| RTC | Real-Time Clock. The board's RTC is a HYM8563 on I2C (`rtc0`) with no battery behind it: it keeps the time across a reboot, but after a power cut the board boots with an incorrect clock until NTP corrects it. |
 | SCP | System Control Processor — auxiliary power-management core; firmware is `scp.fex`. |
 | SMC | Secure Monitor Call — the ARM instruction that traps into EL3. `ARM_SVC_RUNNSOS` is Allwinner's private SMC asking BL31 to start the OS. |
 | SoC | System on a Chip. The A733 (family sun60iw2) is the SoC on this board. |

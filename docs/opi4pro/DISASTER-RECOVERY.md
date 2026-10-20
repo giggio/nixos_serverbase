@@ -71,7 +71,7 @@ Power the board with serial attached and read the output. Do not skip this — t
 | `HELLO! BOOT0 is starting!` then it stops or loops | The bootloader region is damaged or wrong. | **§3** |
 | U-Boot banner (`U-Boot 2018.07-g…`) appears, then `undefined instruction`, or a hang right after `Starting kernel ...` | U-Boot itself is bad — or, for the hang, an entry was booted without `boot.scr`'s memory map (a conf at `/extlinux/` or `/boot/extlinux/`, or a hand boot that skipped the `setenv` lines of §5b). | **§3**, or **§4** |
 | U-Boot runs but cannot find `boot.scr`, shows no menu, or an entry fails with `Skipping … for failure retrieving` | Bootloader fine; the boot files or the bootable flag are wrong. | **§4**, then **§5b** |
-| Kernel banner appears, then stage 1 fails: cannot find root, drops to an initrd emergency shell | Boot files fine; the NVMe root is unreachable or the generation is broken. | **§5a** |
+| Kernel banner appears, then stage 1 fails: cannot find root, drops to an initrd emergency shell | Boot files fine; the NVMe root is unreachable or the generation is broken. Right after a vendor kernel bump, suspect the PCIe controller first: the NVMe is behind it, and the device tree's `pcie_rc` compatible must match the driver the config builds. | **§5a** |
 | Boots, but the system is broken (services failing, bad config) | Roll back to a previous generation from the menu. | **§5a** |
 
 **The key insight for this board:** `/nix/store` on the NVMe almost always survives, and it still contains
@@ -631,6 +631,11 @@ Do not chase these; they appear in working boots.
 | `supply hci not found, using dummy regulator` | Vendor USB driver noise. |
 | `sunxi_usbc: get id is fail` / `usb detect mode isn't supported` | The USB-C OTG ID pin does not exist on this board. See §10. |
 | `runtime_suspend disable clock` warnings from `sunxi_pd_test` | Vendor power-domain driver noise. |
+| A `NOTICE NOTICE … regulator-virtual-consumer is only for testing and debugging` banner | The vendor device tree instantiates test regulator consumers; it has been in every boot of this kernel. |
+| `_opp_supported_by_regulators: OPP minuV: 0 maxuV: 0, not supported by regulator` (dozens) | Vendor DVFS tables with entries for other chip bins. |
+| `sunxi_mmc_host-4022000.sdmmc … smc 0 p2 err, cmd 1, RTO !!` (about 30) | The vendor driver probing an MMC host with nothing behind it. The SD card is on `4020000`. |
+| `rtc-hym8563 … no valid clock/calendar values`, `hctosys: unable to read the hardware clock` | The RTC has no battery, so it loses the time whenever power is cut. A warm reboot keeps it; NTP sets it again otherwise. |
+| Kernel messages dated weeks or months in the past | The clock before the RTC or NTP sets it. They belong to this boot. |
 
 ---
 
@@ -668,7 +673,7 @@ rejected.
 | The menu | `menu/extlinux.conf`; deliberately not `/extlinux/`, which distro boot would boot without `boot.scr`. Paths in it at most 127 characters; `TIMEOUT 1200000` is 5 seconds on this U-Boot |
 | SD partition 2 (`NIXOS_SD`) | ext4; leftover installer root, unused. Absent on a boot-only card |
 | NVMe root | `/dev/nvme0n1p1`, ext4, label `NIXOS_ROOT`; holds `/nix/store` and all generations |
-| Kernel load address | `0x41000000` (below BL31) |
+| Kernel load address | `0x41000000` (below BL31), so the kernel's `image_size` (le64 at offset 16 of the `Image` header) must stay under 112 MiB; 37.6 MiB in October 2026. Past that, the board hangs after `Starting kernel ...` |
 | DTB load address | `0x4a000000` (above BL31) |
 | Menu file load address | `0x4a800000` (`pxefile_addr_r`, above BL31) |
 | Initrd load address | `0x4b000000` (above BL31) |
@@ -684,5 +689,5 @@ rejected.
 | Build a boot-only card from the running board (§7a, safe) | `make boot_card_opi4pro BOARD=<ssh target>` — 3.05 GiB image, fits a 4 GB card |
 | Build a boot-only card from the flake (§7b, safe) | `nix build .#opi4proboot_img` — one entry, which must already be on the NVMe |
 | Card is verifiable | `zstdcat <image> \| sudo cmp -n $((3120 * 1024 * 1024)) - /dev/sdX` |
-| Deploy a change | sign closure `--recursive`, then `nixos-rebuild switch --flake .#opi4pro --target-host …`; or `make cache_<machine>`, then `nixos-rebuild switch` on the board |
+| Deploy a change | sign closure `--recursive`, then `nixos-rebuild switch --flake .#opi4pro --target-host …`; or `make cache_<machine>`, then `nixos-rebuild switch` on the board. Push to the cache before the board's first attempt: a path it already found missing stays missing for an hour (`narinfo-cache-negative-ttl`), and the board tries to build the x86_64 boot chain |
 | A switch prints | `opi4pro: writing the boot menu to /boot/firmware/menu …` and `opi4pro: bootloader install complete`; `Failed to install bootloader` means the new system was not activated |
