@@ -126,6 +126,10 @@
     usePredictableInterfaceNames = false; # use eth0 instead of topology based name (like enp3s0), as I only have one network interface
     firewall.enable = true;
     firewall.allowPing = true;
+    # The firewall is loaded as one nftables ruleset, all or nothing, instead of a script of iptables calls that can stop
+    # half way. Rules of a module's own go in a table of its own (`networking.nftables.tables`); `extraCommands` is
+    # refused by the nftables firewall.
+    nftables.enable = true;
     hostName = config.setup.derivedHostName;
     wireless.enable = false; # enables/disables wireless support via wpa_supplicant.
     useNetworkd = true;

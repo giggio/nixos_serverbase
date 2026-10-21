@@ -1,4 +1,4 @@
-{ testNodes, ... }:
+{ testNodes, pkgs, ... }:
 
 # Covers the networking block of modules/serverbase/default.nix. The firewall is the part worth proving from outside, so
 # a second plain node sits on the same network and probes the server: a firewall that is merely "active" tells you
@@ -65,12 +65,16 @@
     server_address = vlan_address(server)
 
     with subtest("the firewall is up and answers pings"):
-        server.wait_for_unit("firewall.service")
+        server.wait_for_unit("nftables.service")
         peer.succeed(f"ping -c 1 -W 5 {server_address}")
 
     with subtest("the firewall lets ssh in and keeps everything else out"):
         peer.succeed(f"timeout 5 bash -c 'echo > /dev/tcp/{server_address}/22'")
+        # something listens on the closed port, or a refused connection would pass this with no firewall at all
+        server.succeed("systemd-run --unit closed-port-listener ${pkgs.netcat-openbsd}/bin/nc -lk 4444")
+        server.wait_for_open_port(4444)
         peer.fail(f"timeout 5 bash -c 'echo > /dev/tcp/{server_address}/4444'")
+        server.succeed("systemctl stop closed-port-listener")
 
     for machine in [server, peer]:
         (_, failed) = machine.systemctl("--failed --quiet")

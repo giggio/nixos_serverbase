@@ -112,6 +112,7 @@
       settingsFormatJson = pkgs.formats.json { };
       daemons = lib.attrsets.attrValues config.setup.docker.extra-daemons;
       kataDaemons = builtins.filter (daemon: daemon.kata-runtime.enable) daemons;
+      isolated = builtins.filter (daemon: daemon.network.disableICC.enable) daemons;
       # With virtio-fs, kata backs the whole guest RAM with a deleted file in `file_mem_backend`, /dev/shm when unset.
       # A 4G guest in gmktec1's /dev/shm, 3.8G when that box had 8G of RAM, filled it as the guest touched its memory,
       # and every Postgres query that needed dynamic shared memory failed until the job ended. This tmpfs keeps guests out of /dev/shm, and is
@@ -420,31 +421,29 @@
           externalInterface = "eth0";
           internalInterfaces = builtins.map (daemon: daemon.network.interfaceName) daemons;
         };
-        firewall =
-          let
-            extraCommands = builtins.concatStringsSep "\n" (
-              builtins.map (
-                daemon:
-                let
-                  dockerHostNetInterfaceName = daemon.network.interfaceName;
-                in
-                (builtins.concatStringsSep "\n" (
-                  builtins.map (port: ''
-                    # allowing port ${toString port} for docker daemon ${daemon.name} containers
-                    iptables -I INPUT -i ${dockerHostNetInterfaceName} -p tcp --dport ${toString port} -j ACCEPT
-                  '') daemon.network.disableICC.portExceptions
-                ))
-                + ''
-                  # Disabling ICC (inter container communication) for docker daemon ${daemon.name} containers
-                  iptables -A FORWARD -i ${dockerHostNetInterfaceName} -o ${dockerHostNetInterfaceName} -j DROP
-                ''
-              ) (builtins.filter (daemon: daemon.network.disableICC.enable) daemons)
-            );
-          in
-          {
-            inherit extraCommands;
-            extraStopCommands = builtins.replaceStrings [ " -I " " -A " ] [ " -D " " -D " ] extraCommands;
-          };
+        # A daemon with ICC off: its containers reach the host only on the port exceptions, through the firewall's own
+        # input chain, and never each other. The daemons run with `iptables = false`, so these rules are the only ones on
+        # their bridges. Traffic between two ports of one bridge reaches the forward hook through br_netfilter, which
+        # dockerd loads.
+        firewall.extraInputRules = lib.concatMapStrings (
+          daemon:
+          lib.optionalString (daemon.network.disableICC.portExceptions != [ ]) ''
+            iifname "${daemon.network.interfaceName}" tcp dport { ${
+              lib.concatMapStringsSep ", " toString daemon.network.disableICC.portExceptions
+            } } accept comment "port exceptions of docker daemon ${daemon.name}"
+          ''
+        ) isolated;
+        nftables.tables.docker-icc = lib.mkIf (isolated != [ ]) {
+          family = "inet";
+          content = ''
+            chain forward {
+              type filter hook forward priority filter; policy accept;
+              ${lib.concatMapStrings (daemon: ''
+                iifname "${daemon.network.interfaceName}" oifname "${daemon.network.interfaceName}" drop comment "no inter-container traffic on docker daemon ${daemon.name}"
+              '') isolated}
+            }
+          '';
+        };
       };
     };
 }

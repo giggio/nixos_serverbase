@@ -489,7 +489,7 @@ in
         boot, and NixOS keeps `/etc/systemd/system` in the store, so there is nowhere to persist one by hand.
 
         Lift it without a rebuild to watch `encrypted-state-retry` heal the machine on its own:
-        `iptables -D OUTPUT -d <address> -j DROP`.
+        `nft delete table inet encrypted-state-outage`.
 
         VMs and test nodes only, asserted. On a real machine this is an outage.
 
@@ -537,13 +537,18 @@ in
       }
       {
         # The only guard between a rehearsal and an outage. Everything else about this option is recoverable by
-        # deleting one iptables rule; enabling it on a real machine takes its databases down until someone notices.
+        # deleting one nftables table; enabling it on a real machine takes its databases down until someone notices.
         assertion = !cfg.simulateKeyServerOutage || config.setup.isVM || config.setup.isTest;
         message = "setup.encryptedState.simulateKeyServerOutage cuts the machine off from its key server. It is for VMs and test nodes only.";
       }
       {
-        assertion = !cfg.simulateKeyServerOutage || !config.networking.nftables.enable;
-        message = "setup.encryptedState.simulateKeyServerOutage installs an iptables rule, which networking.nftables.enable ignores.";
+        # nft takes an address here: a host name would be resolved once, when the rules load, or fail the build's
+        # ruleset check, which has no DNS
+        assertion =
+          !cfg.simulateKeyServerOutage
+          || keyServerAddress == null
+          || builtins.match "[0-9.]+" keyServerAddress != null;
+        message = "setup.encryptedState.simulateKeyServerOutage needs the key server in clevisConfig's `url` as an IPv4 address.";
       }
       {
         # Silently blocking nothing is the failure that would matter here: the rehearsal reaches the key server,
@@ -598,11 +603,16 @@ in
       }
     ];
 
-    # OUTPUT rather than INPUT: the point is that this machine cannot reach the key server, not that some packet
-    # cannot reach this machine. The stop command keeps `systemctl restart firewall` from stacking duplicates.
-    networking.firewall = lib.mkIf cfg.simulateKeyServerOutage {
-      extraCommands = "iptables -I OUTPUT -d ${keyServerAddress} -j DROP";
-      extraStopCommands = "iptables -D OUTPUT -d ${keyServerAddress} -j DROP || true";
+    # The output hook rather than the input one: the point is that this machine cannot reach the key server, not that
+    # some packet cannot reach this machine. A table of its own, so lifting it is deleting the table.
+    networking.nftables.tables.encrypted-state-outage = lib.mkIf cfg.simulateKeyServerOutage {
+      family = "inet";
+      content = ''
+        chain output {
+          type filter hook output priority filter; policy accept;
+          ip daddr ${keyServerAddress} drop comment "setup.encryptedState.simulateKeyServerOutage"
+        }
+      '';
     };
 
     environment.systemPackages = [

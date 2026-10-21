@@ -6,6 +6,7 @@
   base-initrd-ssh = ./base-initrd-ssh.nix;
   secureboot = ./secureboot.nix;
   base-networking = ./base-networking.nix;
+  firewall-fallback = ./firewall-fallback.nix;
   base-nix-env = ./base-nix-env.nix;
   clone-config = ./clone-config.nix;
   secrets-sops = ./secrets-sops.nix;

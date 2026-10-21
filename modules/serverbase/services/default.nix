@@ -4,5 +4,6 @@
     ./docker.nix
     ./encrypted-state/encrypted-state.nix
     ./initrd-ssh.nix
+    ./firewall-fallback.nix
   ];
 }

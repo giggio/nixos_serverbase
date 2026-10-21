@@ -240,8 +240,9 @@ key server away. `setup.encryptedState.simulateKeyServerOutage = true` does that
 setup.encryptedState.simulateKeyServerOutage = true;   # VMs only, asserted
 ```
 
-It installs one `iptables -I OUTPUT -d <key server> -j DROP` rule, with the address parsed out of `clevisConfig`
-so the rehearsal cannot end up blocking a box the machine does not actually unlock against.
+It installs one nftables table, `inet encrypted-state-outage`, whose only rule drops what this machine sends to the
+key server, with the address parsed out of `clevisConfig` so the rehearsal cannot end up blocking a box the machine
+does not actually unlock against.
 
 Two choices in that sentence are the whole point:
 
@@ -267,7 +268,7 @@ underneath, which is the accident the whole design is against — `encrypted-sta
 Then lift it **without a rebuild** and watch the machine heal on its own:
 
 ```bash
-sudo iptables -D OUTPUT -d <key server> -j DROP
+sudo nft delete table inet encrypted-state-outage
 ```
 
 Within `retryIntervalSeconds` the container should unlock and the services start with nothing else typed. That is
