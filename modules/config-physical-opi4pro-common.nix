@@ -555,9 +555,16 @@ let
   #   RTC_*_DEVICE: the only RTC on this board is the HYM8563 on I2C, registered as rtc0; there is no rtc1, which the vendor
   #     config used to name, and then nothing set the clock at boot. rtc0 is also the Kconfig default Armbian's config now
   #     relies on; listed so the assertion holds it.
+  #   NFT_FIB_*: the nftables firewall's reverse path filter is a `fib` rule in an inet table, so it needs nft_fib_inet,
+  #     which depends on the IPv4 and IPv6 ones. On a kernel without them `nft -f` refuses the whole ruleset, and the board
+  #     boots with no firewall at all. Modules, as Armbian builds them: NF_TABLES is a module here, so they cannot be =y
+  #     without building nf_tables in, and nft loads them on demand. Armbian's config had them off until 2026-10-20.
   kernelConfigValues = [
     ''RTC_HCTOSYS_DEVICE="rtc0"''
     ''RTC_SYSTOHC_DEVICE="rtc0"''
+    "NFT_FIB_INET=m"
+    "NFT_FIB_IPV4=m"
+    "NFT_FIB_IPV6=m"
   ];
   # Symbols turned off. IPsec ESP: Armbian forces these off for this vendor kernel ("Dirty Frag / Fragnesia: this vendor
   # kernel has no fix", custom_kernel_config__sun60iw2_dirty_frag in config/sources/families/sun60iw2.conf). That is a hook of
