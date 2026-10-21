@@ -163,11 +163,14 @@ let
   #   - the board-specific boot0 blob       (packages/blobs/sunxi/sun60iw2/boot0_sdcard_orangepi4pro.fex)
   #   - the board-specific sys_config blob  (packages/blobs/sunxi/sun60iw2/sys_config_orangepi.fex)
   # The last two are per-board (DRAM timing, pin muxing); Armbian's board file states there is no valid generic default.
+  # Moving this tag moves Armbian's kernel config choices with it: diff the reconciled .config before and after (olddefconfig
+  # on both), not the two files, since the file only lists what differs from the Kconfig defaults. The blobs and the patches
+  # were byte-identical between v26.8.0-trunk.343 and v26.11.0-trunk.102, apart from a corrected hunk header in 0002.
   armbianBuild = bootchainPkgs.fetchFromGitHub {
     owner = "armbian";
     repo = "build";
-    rev = "v26.8.0-trunk.343";
-    hash = "sha256-/3Jl3xTsLiDmUWCBwPORB1pRkLFKz83/8MaEEtRbYXA=";
+    rev = "v26.11.0-trunk.102";
+    hash = "sha256-KqeBQxfFNiI3bxb7ugM9+P3dwo/qRpbQLBTgAPT64O4=";
   };
 
   # Orange Pi's own build repo. We use it only for the proprietary x86 packing tools (external/packages/pack-uboot/tools/*) and
@@ -519,9 +522,9 @@ let
     # while PSI is off, so it defaults to n and the accounting is on without a psi=1 on the command line.
     "PSI"
     # Tracing, for perf and bpftrace: function and syscall tracers, kprobe/uprobe events and BPF programs attached to them.
-    # Taken from Armbian's later sun60iw2 config. Dynamic ftrace patches the call sites only while a tracer is attached, so
-    # the cost when idle is a larger kernel, not CPU. BTF gives bpftrace the kernel's types without kernel headers; it needs
-    # pahole at build time, which nixpkgs' kernel build already has.
+    # Armbian's config turns these on too; they are listed so the assertion keeps them if Armbian ever drops one. Dynamic ftrace
+    # patches the call sites only while a tracer is attached, so the cost when idle is a larger kernel, not CPU. BTF gives
+    # bpftrace the kernel's types without kernel headers; it needs pahole at build time, which nixpkgs' kernel build has.
     "FTRACE"
     "FUNCTION_TRACER"
     "FUNCTION_GRAPH_TRACER"
@@ -532,51 +535,114 @@ let
     "UPROBE_EVENTS"
     "BPF_EVENTS"
     "DEBUG_INFO_BTF"
+    # Hardening. Yama and Landlock are named in the lsm= the kernel command line already carries, and in CONFIG_LSM, but
+    # were not built, so only capability and bpf were active. RANDOMIZE_KSTACK_OFFSET is built and off by default; this turns
+    # it on without a randomize_kstack_offset=on parameter. RANDOMIZE_BASE (KASLR) needs a seed from the bootloader in
+    # /chosen/kaslr-seed; whether the vendor U-Boot provides one shows in dmesg ("KASLR disabled due to lack of seed").
+    "SECURITY_YAMA"
+    "SECURITY_LANDLOCK"
+    "RANDOMIZE_KSTACK_OFFSET_DEFAULT"
+    "RANDOMIZE_BASE"
+    # The NVMe root is behind the PCIe controller. As modules they would not be in the initrd and stage 1 would never find the
+    # root; listed so the assertion catches it, as almost happened when Armbian's config became a defconfig.
+    "AW_PCIE_RC"
+    "BLK_DEV_NVME"
+    # zram is the only swap on this board, and Armbian's config builds it as a module. Built in, the swap does not depend on
+    # the module being loaded before zram-generator and the udev rule that sets its mem_limit.
+    "ZRAM"
   ];
-  # Symbols set to a value rather than =y. The vendor config reads and writes the clock through rtc1, which does not exist on
-  # this board: the only RTC is the HYM8563 on I2C, registered as rtc0. With rtc1 nothing sets the clock at boot, and the
-  # kernel log is dated in March until NTP answers. Armbian's later config moved both to rtc0.
+  # Symbols set to a value rather than =y.
+  #   RTC_*_DEVICE: the only RTC on this board is the HYM8563 on I2C, registered as rtc0; there is no rtc1, which the vendor
+  #     config used to name, and then nothing set the clock at boot. rtc0 is also the Kconfig default Armbian's config now
+  #     relies on; listed so the assertion holds it.
   kernelConfigValues = [
     ''RTC_HCTOSYS_DEVICE="rtc0"''
     ''RTC_SYSTOHC_DEVICE="rtc0"''
   ];
   # Symbols turned off. IPsec ESP: Armbian forces these off for this vendor kernel ("Dirty Frag / Fragnesia: this vendor
-  # kernel has no fix", custom_kernel_config__sun60iw2_dirty_frag in config/sources/families/sun60iw2.conf, after the
-  # trunk.343 config this one is based on). Nothing here uses IPsec. XFRM_ESP goes with them, since only they select it.
+  # kernel has no fix", custom_kernel_config__sun60iw2_dirty_frag in config/sources/families/sun60iw2.conf). That is a hook of
+  # Armbian's build, not a line of the config file, so it has to be repeated here. Nothing here uses IPsec. XFRM_ESP goes
+  # with them, since only they select it.
   # The Goodix touchscreen: the board's device tree declares one at i2c-5 0x14 for Orange Pi's LCD kit, which the NAS does not
   # have, so the module was loaded at every boot to fail its probe and log I2C bus errors.
+  # RT_GROUP_SCHED: with it, cgroup v2 refuses to enable the cpu controller in a cgroup holding a realtime process, so
+  # systemd's CPUWeight/CPUQuota would silently stop applying to that unit. systemd recommends it off; Armbian's config has it
+  # on.
   kernelDisabledSymbols = [
     "INET_ESP"
     "INET6_ESP"
     "TOUCHSCREEN_GOODIX"
+    "RT_GROUP_SCHED"
   ];
   # Where the kernel's own outputs put the modules tree. Named once because kernelConfigAssertions has to find the
   # post-oldconfig .config under exactly this path.
   kernelModDirVersion = "6.6.98";
 
+  # Pinned to a commit of the vendor branch orange-pi-6.6-sun60iw2, which carries the A733/sun60iw2 support. This used to be
+  # the branch name itself, and when upstream pushed new commits to it the hash stopped matching and the build failed.
+  # 2ac08e8 (2026-09-17) is the branch head after the aiot-linux v1.4.9 and v1.5.0 syncs. To move on, take the branch head, set
+  # rev to its full SHA and update hash (nix-prefetch-url --unpack on its github archive), then check the PCIe root complex
+  # compatible in sun60iw2p1.dtsi still matches the driver this config builds (CONFIG_AW_PCIE_RC=y,
+  # "allwinner,sunxi-pcie-v300-rc"). The syncs alone (e5f2886, 1ecd47b) switched it to the dw-sunxi driver, which this config
+  # does not build, so the NVMe root would not appear; 2ac08e8 switched it back.
+  vendorKernelSrc = bootchainPkgs.fetchFromGitHub {
+    owner = "orangepi-xunlong";
+    repo = "linux-orangepi";
+    rev = "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f";
+    hash = "sha256-oPsxtTdGO80KevjX+YOrLrOtJy/CBIrTWRQ7KtSc0KY=";
+  };
+
+  # Armbian's file with our lists applied, expanded into a complete .config by this tree's own Kconfig.
+  #
+  # Armbian keeps the file in savedefconfig form, which lists only what differs from the Kconfig defaults, and nixpkgs runs
+  # `make oldconfig` on it with stdin at EOF. Those two do not mix: a choice counts as answered only when every one of its
+  # visible members has a line in the file, so a defconfig that says CONFIG_AW_PCIE_RC=y and omits the other members leaves
+  # the choice NEW, oldconfig asks "[M/y/?]", reads EOF and takes M - the PCIe controller the NVMe root is behind becomes a
+  # module that is not in the initrd. olddefconfig resolves the same file to y. So it runs here, with the cross compiler,
+  # pahole and make the kernel build uses (Kconfig asks the toolchain what it supports, and DEBUG_INFO_BTF depends on the
+  # pahole version), and the kernel's postConfigure below checks that nixpkgs' oldconfig then changes nothing.
+  # A complete file is also what nixpkgs' sysctl module expects: it greps CONFIG_ARCH_MMAP_RND_BITS_MAX from this configfile.
   vendorKernelConfig =
-    bootchainPkgs.runCommand "linux-sun60iw2-vendor-md-nfsd.config"
+    bootchainPkgs.runCommandCC "linux-sun60iw2-vendor-md-nfsd.config"
       {
         base = "${armbianBuild}/config/kernel/linux-sun60iw2-vendor.config";
         symbols = kernelExtraEnabledSymbols;
         disabledSymbols = kernelDisabledSymbols;
         configValues = kernelConfigValues;
+        depsBuildBuild = [ bootchainPkgs.buildPackages.stdenv.cc ];
+        nativeBuildInputs = with bootchainPkgs; [
+          gnumake42
+          flex
+          bison
+          bc
+          perl
+          pahole
+        ];
       }
       ''
-        cat "$base" > "$out"
+        cat "$base" > defconfig
         for kv in $configValues; do
           name="''${kv%%=*}"
-          sed -i "/^CONFIG_$name=/d; /^# CONFIG_$name is not set\$/d" "$out"
-          echo "CONFIG_$kv" >> "$out"
+          sed -i "/^CONFIG_$name=/d; /^# CONFIG_$name is not set\$/d" defconfig
+          echo "CONFIG_$kv" >> defconfig
         done
         for s in $symbols; do
-          sed -i "/^# CONFIG_$s is not set\$/d" "$out"
-          echo "CONFIG_$s=y" >> "$out"
+          sed -i "/^# CONFIG_$s is not set\$/d" defconfig
+          echo "CONFIG_$s=y" >> defconfig
         done
         for s in $disabledSymbols; do
-          sed -i "/^CONFIG_$s=[ym]\$/d" "$out"
-          echo "# CONFIG_$s is not set" >> "$out"
+          sed -i "/^CONFIG_$s=[ym]\$/d" defconfig
+          echo "# CONFIG_$s is not set" >> defconfig
         done
+
+        # The kernel derivation's own make flags (O=$(buildRoot), the unwrapped CC and LD, HOSTCC, ARCH, CROSS_COMPILE), so
+        # Kconfig probes exactly the toolchain the build will. With the cc wrapper instead, CC_CAN_LINK came out y here and n
+        # in the build, and the postConfigure check failed on it.
+        export buildRoot="$PWD/build"
+        mkdir "$buildRoot"
+        cp defconfig "$buildRoot/.config"
+        make -C ${vendorKernelSrc} ${lib.escapeShellArgs orangepiVendorKernel.makeFlags} olddefconfig
+        cp "$buildRoot/.config" "$out"
       '';
 
   # ---------------------------------------------------------------------------------------------------------------------------
@@ -589,22 +655,10 @@ let
       version = "6.6.98-sun60iw2";
       modDirVersion = kernelModDirVersion;
 
-      src = bootchainPkgs.fetchFromGitHub {
-        owner = "orangepi-xunlong";
-        repo = "linux-orangepi";
-        # Pinned to a commit of the vendor branch orange-pi-6.6-sun60iw2, which carries the A733/sun60iw2 support. This used to
-        # be the branch name itself, and when upstream pushed new commits to it the hash stopped matching and the build failed.
-        # 2ac08e8 (2026-09-17) is the branch head after the aiot-linux v1.4.9 and v1.5.0 syncs. To move on, take the branch head,
-        # set rev to its full SHA and update hash (nix-prefetch-url --unpack on its github archive), then check the PCIe root
-        # complex compatible in sun60iw2p1.dtsi still matches the driver this config builds (CONFIG_AW_PCIE_RC=y,
-        # "allwinner,sunxi-pcie-v300-rc"). The syncs alone (e5f2886, 1ecd47b) switched it to the dw-sunxi driver, which this
-        # config does not build, so the NVMe root would not appear; 2ac08e8 switched it back.
-        rev = "2ac08e8c7cdc28abbdc5c9a9dd812f887ae9c79f";
-        hash = "sha256-oPsxtTdGO80KevjX+YOrLrOtJy/CBIrTWRQ7KtSc0KY=";
-      };
+      src = vendorKernelSrc;
 
-      # Armbian's kernel config for this board - itself a verbatim copy of Orange Pi's own. Using a full config file (rather
-      # than a `defconfig` make target) is what makes this tree build and boot; the in-tree defconfigs do not match the board.
+      # Armbian's kernel config for this board, which started as a copy of Orange Pi's own, expanded above. The in-tree
+      # defconfig make targets do not match the board, which is why this file is used and not one of them.
       configfile = vendorKernelConfig;
 
       # Declared rather than parsed out of the .config, which is what `allowImportFromDerivation = true` used to do here.
@@ -645,6 +699,15 @@ let
     }).overrideAttrs
       (old: {
         enableParallelBuilding = true;
+
+        # nixpkgs' oldconfig answers every question with the default, from stdin at EOF. With the complete file
+        # vendorKernelConfig writes there should be none, so any difference here is a question nobody saw being answered.
+        postConfigure = (old.postConfigure or "") + /* bash */ ''
+          if ! diff <(grep -E '^(# )?CONFIG_' ${vendorKernelConfig} | sort) <(grep -E '^(# )?CONFIG_' "$buildRoot/.config" | sort); then
+            echo "FATAL: make oldconfig changed the complete config vendorKernelConfig produced (the lines above)." >&2
+            exit 1
+          fi
+        '';
 
         postPatch = (old.postPatch or "") + /* bash */ ''
           # The vendor's out-of-tree bsp/ directory uses `include $(src)/...`, which only resolves when building in-tree.
