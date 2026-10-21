@@ -1,4 +1,4 @@
-{ testNodes, ... }:
+{ testNodes, pkgs, ... }:
 
 # gmktec1 runs the stock docker daemon plus the extra daemons declared in modules/config-gmktec.nix (`kata` on subnet octet
 # 39, `other` on 40). This checks that all of them come up, that each one really landed on its configured bridge subnet -
@@ -75,6 +75,31 @@
         assert "inet 172.40." in address, \
             f"container did not get an address on 172.40.0.0/16: {address}"
         machine.succeed(f"{other} run --rm nettest:latest ping -c 1 -W 5 172.40.0.1")
+
+    with subtest("containers on a daemon with ICC disabled cannot reach each other, and on one without it they can"):
+        # Two network namespaces plugged into each daemon's bridge stand in for two containers: a kata guest cannot
+        # start here, and what decides whether one container reaches another is the host's firewall on the bridge, not
+        # the guest. `other` keeps ICC, so it is the control that proves the probe itself works.
+        nc = "${pkgs.netcat-openbsd}/bin/nc"
+
+        def plug(name, bridge, address, gateway):
+            machine.succeed(f"ip netns add {name}")
+            machine.succeed(f"ip link add {name}-h type veth peer name eth0 netns {name}")
+            machine.succeed(f"ip link set {name}-h master {bridge} up")
+            ns = f"ip netns exec {name} "
+            machine.succeed(f"{ns}ip link set lo up && {ns}ip link set eth0 up")
+            machine.succeed(f"{ns}ip addr add {address}/16 dev eth0 && {ns}ip route add default via {gateway}")
+            return ns
+
+        for name, octet, isolated in [("kata", 39, True), ("other", 40, False)]:
+            client = plug(f"icc-{name}-a", f"container-{name}", f"172.{octet}.0.50", f"172.{octet}.0.1")
+            server = plug(f"icc-{name}-b", f"container-{name}", f"172.{octet}.0.51", f"172.{octet}.0.1")
+            machine.succeed(f"systemd-run --unit icc-{name} -- {server}{nc} -lk 8090")
+            machine.wait_until_succeeds(f"{server}ss -ltnH | grep -q ':8090 '")
+            reached = machine.execute(f"{client}{nc} -z -w 3 172.{octet}.0.51 8090")[0] == 0
+            assert reached != isolated, f"on docker-{name}, one container {'reaches' if reached else 'cannot reach'} another"
+            machine.succeed(f"systemctl stop icc-{name}")
+            machine.succeed(f"ip netns del icc-{name}-a && ip netns del icc-{name}-b")
 
     with subtest("the kata daemon registers kata as its default runtime"):
         kata = "docker -H unix:///run/docker-kata.sock"
