@@ -275,6 +275,9 @@ let
     # DTB separately via hardware.deviceTree.
     defconfig = "sun60iw2p1_t736_defconfig";
 
+    # Ours, each saying in its header why it is needed.
+    extraPatches = [ ./opi4pro-uboot-patches/sunxi-seed-kernel-rng-from-trng.patch ];
+
     # The build's real outputs are not u-boot.bin but the two Allwinner images produced by postBuild's packing step.
     filesToInstall = [
       "boot0_sdcard.fex"
@@ -338,7 +341,16 @@ let
         sed -i '/CONFIG_BOOTDELAY/d' .config
         echo "CONFIG_BOOTDELAY=5" >> .config
       fi
+
+      # The Crypto Engine driver, for the TRNG that opi4pro-uboot-patches/sunxi-seed-kernel-rng-from-trng.patch seeds the
+      # kernel's KASLR and RNG from. The defconfig's SUNXI_CE_30=y sits inside a choice that only exists with the driver on,
+      # so olddefconfig would drop it and pick the first version, CE 1.0, which is not this SoC's: both are set, and checked.
+      sed -i '/CONFIG_SUNXI_CE_/d' .config
+      printf '%s\n' CONFIG_SUNXI_CE_DRIVER=y CONFIG_SUNXI_CE_30=y >> .config
       make olddefconfig
+      for option in CONFIG_SUNXI_CE_DRIVER CONFIG_SUNXI_CE_30 CONFIG_OF_BOARD_SETUP; do
+        grep -qx "$option=y" .config || { echo "FATAL: $option is not =y after olddefconfig"; exit 1; }
+      done
 
       # The vendor tree COMMITS a prebuilt x86-only binary at scripts/dtc/dtc. On any non-x86 builder it cannot execute, and
       # Kbuild needs a working dtc to compile the control device tree that gets appended to u-boot.bin. Rebuild it from the

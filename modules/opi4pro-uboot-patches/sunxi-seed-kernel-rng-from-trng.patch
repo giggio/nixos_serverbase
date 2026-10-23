@@ -1,0 +1,91 @@
+Seeds /chosen/kaslr-seed (8 bytes) and /chosen/rng-seed (32 bytes) from the Crypto Engine's TRNG in ft_board_setup, which
+image_setup_libfdt runs on the DTB that booti hands the kernel. The vendor's own options (SUNXI_KASLR_SEED,
+SUNXI_RNG_SEED) write into U-Boot's working_fdt from sunxi_update_fdt_para_for_kernel, which this defconfig never calls
+(OF_SEPARATE, no FDT replacement), and which the extlinux menu's DTB would replace anyway. They also ignore a failed TRNG
+read, which would leave a zero rng-seed for the kernel to credit; this writes only blocks the TRNG produced.
+Needs CONFIG_SUNXI_CE_DRIVER with CONFIG_SUNXI_CE_30.
+
+--- a/board/sunxi/board.c
++++ b/board/sunxi/board.c
+@@ -505,6 +505,70 @@
+ 	return 0;
+ }
+ 
++#ifdef CONFIG_SUNXI_CE_DRIVER
++#include <asm/arch/ce.h>
++#include <fdt_support.h>
++
++/* The CE 3.0 TRNG always writes 32 bytes. */
++#define TRNG_BLOCK 32
++
++/*
++ * sunxi_trng_gen does not report a timed-out task, and leaves its zeroed
++ * buffer behind, so an all-zero block is a failure too.
++ */
++static int trng_read(u8 *block)
++{
++	int i;
++
++	if (sunxi_trng_gen(block, TRNG_BLOCK))
++		return -1;
++	for (i = 0; i < TRNG_BLOCK; i++)
++		if (block[i])
++			return 0;
++	return -1;
++}
++
++/*
++ * The vendor's seed writers in board_helper.c fill working_fdt, which the
++ * extlinux menu replaces with the DTB it loads, and they write whatever the
++ * TRNG left, so a failure would become a zero rng-seed that the kernel
++ * credits as entropy. This seeds the DTB being booted, and only from a TRNG
++ * read that worked. A missing seed is a warning, not a failed boot.
++ */
++static void seed_kernel_rng(void *blob)
++{
++	u8 block[TRNG_BLOCK];
++	u64 kaslr_seed;
++	int chosen;
++
++	chosen = fdt_find_or_add_subnode(blob, 0, "chosen");
++	if (chosen < 0) {
++		printf("WARNING: no /chosen, no kaslr-seed or rng-seed\n");
++		return;
++	}
++	sunxi_ss_open();
++
++	if (trng_read(block)) {
++		printf("WARNING: TRNG failed, no kaslr-seed\n");
++	} else {
++		memcpy(&kaslr_seed, block, sizeof(kaslr_seed));
++		if (fdt_setprop_u64(blob, chosen, "kaslr-seed", kaslr_seed))
++			printf("WARNING: could not set kaslr-seed\n");
++		else
++			printf("kaslr-seed set from the TRNG\n");
++	}
++
++	if (trng_read(block)) {
++		printf("WARNING: TRNG failed, no rng-seed\n");
++	} else {
++		if (fdt_setprop(blob, chosen, "rng-seed", block, TRNG_BLOCK))
++			printf("WARNING: could not set rng-seed\n");
++		else
++			printf("rng-seed set from the TRNG\n");
++	}
++}
++#endif
++
+ int ft_board_setup(void *blob, bd_t *bd)
+ {
+ 	int __maybe_unused r;
+@@ -515,6 +579,10 @@
+ 	 */
+ 	setup_environment(blob);
+ 
++#ifdef CONFIG_SUNXI_CE_DRIVER
++	seed_kernel_rng(blob);
++#endif
++
+ #ifdef CONFIG_VIDEO_DT_SIMPLEFB
+ 	r = sunxi_simplefb_setup(blob);
+ 	if (r)

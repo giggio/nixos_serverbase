@@ -258,6 +258,23 @@ mechanism.
 usable if you spam a key; and holding `s` — the vendor reads up to three `s`/`S` presses — drops to the shell and sets
 "boot debug mode".)
 
+### Phase 9 — a KASLR seed for the DTB that is actually booted (October 2026)
+
+The kernel is built with `RANDOMIZE_BASE=y` and logged `KASLR disabled due to lack of seed` at every boot. On arm64,
+without EFI, the seed can only come from `/chosen/kaslr-seed`, and the A733's ARMv8.2 cores have no `RNDR` to fall back
+on. The vendor tree has options for it, `SUNXI_KASLR_SEED` and `SUNXI_RNG_SEED`, but they do nothing here: their writers
+run from `sunxi_update_fdt_para_for_kernel`, which this defconfig never calls (`OF_SEPARATE`, and neither FDT-replacement
+option), they write into U-Boot's own `working_fdt` rather than the DTB the extlinux menu loads, and they ignore a failed
+TRNG read, which would hand the kernel a zero `rng-seed` to credit as entropy. The defconfig's `SUNXI_CE_30=y` was dead
+as well: it is a choice under `SUNXI_CE_DRIVER`, which was off.
+
+So the Crypto Engine driver is turned on (`SUNXI_CE_DRIVER` and `SUNXI_CE_30`, checked after `olddefconfig`, since
+leaving the version out would pick CE 1.0), and
+[`sunxi-seed-kernel-rng-from-trng.patch`](../../modules/opi4pro-uboot-patches/sunxi-seed-kernel-rng-from-trng.patch)
+seeds both properties in `ft_board_setup`, which `image_setup_libfdt` runs on the DTB `booti` hands the kernel. A TRNG
+read that fails or comes back all zeros writes nothing and prints a `WARNING:` on the serial console; it never stops the
+boot. Only `boot_package.fex` changes; `boot0_sdcard.fex` is byte-identical.
+
 ---
 
 ## 5. Part B — the unattended installer and the move to NVMe
