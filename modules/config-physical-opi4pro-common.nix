@@ -969,6 +969,15 @@ let
       CHECK_ONLY=0
       [ "''${1:-}" = "--check" ] && CHECK_ONLY=1
 
+      # --check too: reading the raw card needs root, and an unreadable card must not pass for an out-of-date one.
+      if [ "$(id -u)" != 0 ]; then
+        echo "ERROR: opi4pro-flash-uboot reads and writes the card's raw sectors, run it as root: sudo opi4pro-flash-uboot''${1:+ $1}" >&2
+        exit 1
+      fi
+
+      ON_CARD="$(mktemp)"
+      trap 'rm -f "$ON_CARD"' EXIT
+
       # Find the disk that holds our FAT firmware partition. This is the card we booted from, whatever it is called
       # (/dev/mmcblk1 on this board, but do not hardcode it).
       FWPART="$(readlink -f /dev/disk/by-label/FIRMWARE)"
@@ -978,12 +987,17 @@ let
       [ -b "$DISK" ] || { echo "ERROR: $DISK is not a block device" >&2; exit 1; }
       [ -f "$BOOT0" ] && [ -f "$PKG" ] || { echo "ERROR: bootloader artifacts missing from the store" >&2; exit 1; }
 
-      # Returns 0 if the on-card bytes differ from the file (i.e. a write is needed).
+      # Returns 0 if the on-card bytes differ from the file (i.e. a write is needed). A read that fails exits instead of
+      # counting as a difference, so a card that cannot be read is never reported out of date or written blind.
       differs() {
         local file="$1" off_kib="$2" size count
         size="$(stat -c %s "$file")"
         count=$(( (size + 1023) / 1024 ))
-        ! dd if="$DISK" bs=1k skip="$off_kib" count="$count" status=none | head -c "$size" | cmp -s - "$file"
+        if ! dd if="$DISK" of="$ON_CARD" bs=1k skip="$off_kib" count="$count" status=none; then
+          echo "ERROR: cannot read $DISK at ''${off_kib}KiB" >&2
+          exit 1
+        fi
+        ! cmp -s -n "$size" "$ON_CARD" "$file"
       }
 
       write_region() {
