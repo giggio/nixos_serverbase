@@ -1,0 +1,28 @@
+The vendor's sunxi pinctrl driver calls pinctrl_gpio_direction_input/output with the gpio_chip and offset only from
+6.12.17 on, the release where upstream changed those signatures. The 6.6 stable line took the same change in 6.6.148
+(stable commit f53dd26462b8, a dependency of a tegra GPIO fix), so with the stable fixes applied the old call no longer
+compiles.
+todo: remove when the vendor tree checks for the new signature on 6.6 itself.
+
+--- a/bsp/drivers/pinctrl/pinctrl-sunxi.c
++++ b/bsp/drivers/pinctrl/pinctrl-sunxi.c
+@@ -2004,7 +2004,8 @@
+ static int sunxi_pinctrl_gpio_direction_input(struct gpio_chip *chip,
+ 					unsigned offset)
+ {
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 17))
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 17)) || \
++	(LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 148) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0))
+ 	return pinctrl_gpio_direction_input(chip, offset);
+ #else
+ 	return pinctrl_gpio_direction_input(chip->base + offset);
+@@ -2102,7 +2103,8 @@
+ 					unsigned offset, int value)
+ {
+ 	sunxi_pinctrl_gpio_set(chip, offset, value);
+-#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 17))
++#if (LINUX_VERSION_CODE >= KERNEL_VERSION(6, 12, 17)) || \
++	(LINUX_VERSION_CODE >= KERNEL_VERSION(6, 6, 148) && LINUX_VERSION_CODE < KERNEL_VERSION(6, 7, 0))
+ 	return pinctrl_gpio_direction_output(chip, offset);
+ #else
+ 	return pinctrl_gpio_direction_output(chip->base + offset);

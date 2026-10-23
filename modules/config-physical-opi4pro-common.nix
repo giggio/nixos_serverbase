@@ -14,7 +14,7 @@
 #   5. U-Boot    - Allwinner's fork of U-Boot 2018.05, built as a 32-bit ARM binary even though the CPU/kernel are 64-bit.
 #                  Built from source here. Runs boot.scr, which shows the generation menu; the chosen entry's kernel,
 #                  initrd and DTB are loaded, then it hands off.
-#   6. Linux     - the vendor 6.6.98 aarch64 kernel, built from source here.
+#   6. Linux     - the vendor 6.6.98 aarch64 kernel with kernel.org's 6.6 stable fixes on top, built from source here.
 #
 # The 32->64-bit handoff: a 32-bit program cannot enter a 64-bit kernel by itself; only EL3 can switch the CPU's execution
 # state. So vendor U-Boot issues an SMC (ARM_SVC_RUNNSOS) to the still-resident BL31, which performs the switch and jumps to
@@ -583,7 +583,83 @@ let
   ];
   # Where the kernel's own outputs put the modules tree. Named once because kernelConfigAssertions has to find the
   # post-oldconfig .config under exactly this path.
-  kernelModDirVersion = "6.6.98";
+  kernelModDirVersion = kernelStableVersion;
+
+  # The vendor tree is kernel.org's 6.6.98 plus Allwinner's additions (bsp/, the A733 device trees, Motorcomm's PHY driver,
+  # build plumbing), and nobody publishes the 6.6 stable fixes for it. So they are applied here: the diff between two
+  # kernel.org releases, taken from the tarballs kernel.org signs (sha256sums.asc, by the checksum autosigner
+  # B8868C80BA62A1FFFAF5FDA9632D3A06589DA6B1). It is an explicit pin, not nixpkgs' linux_6_6, for the same reason the boot
+  # chain is pinned: a flake update must never rebuild this kernel, and every new one is a reboot only the board can test.
+  # To move on, set kernelStableVersion and its hash from https://cdn.kernel.org/pub/linux/kernel/v6.x/sha256sums.asc
+  # (`nix hash convert --hash-algo sha256 --to sri <hex>`). kernelStableBase only moves with the vendor tree's SUBLEVEL.
+  kernelStableBase = "6.6.98";
+  kernelStableVersion = "6.6.160";
+  kernelOrgTarball =
+    version: hash:
+    bootchainPkgs.fetchurl {
+      url = "mirror://kernel/linux/kernel/v6.x/linux-${version}.tar.xz";
+      inherit hash;
+    };
+
+  # What the diff leaves out: tools/ and Documentation/ are not built; drivers/net/phy/motorcomm.c is the vendor's own driver
+  # (the one the board's YT8531 PHY binds to), a replacement of upstream's, so stable's hunks for it cannot apply - and the
+  # stable change to that file up to 6.6.160 is a conversion from of_property_* to device_property_*, not a fix.
+  # --no-dereference keeps diff from following the symlinks under scripts/dtc/include-prefixes, which would put every
+  # device-tree hunk in twice. Anything diff cannot express as a hunk (a binary file, a symlink that changed, a file that
+  # became a directory) fails the build here, instead of being dropped in silence.
+  kernelStablePatch =
+    bootchainPkgs.buildPackages.runCommand "linux-${kernelStableBase}-to-${kernelStableVersion}.patch"
+      {
+        base = kernelOrgTarball kernelStableBase "sha256-KWo0xQCrwixDS5Z9Rx11VoiR8GqY8R/DHF55sDf0XeU=";
+        target = kernelOrgTarball kernelStableVersion "sha256-skxAqeIYhpWAM1hWft2lHECAF2QkpX2+/KReWsROwiU=";
+        nativeBuildInputs = [ bootchainPkgs.buildPackages.patchutils ];
+      }
+      ''
+        tar xf "$base"
+        tar xf "$target"
+        status=0
+        diff -ruN --no-dereference linux-${kernelStableBase} linux-${kernelStableVersion} > full.patch || status=$?
+        # diff exits 1 when the trees differ, which is the point; 2 is trouble.
+        [ "$status" -le 1 ] || exit "$status"
+        excluded='^(tools|Documentation)/|^drivers/net/phy/motorcomm\.c$'
+        if grep -E '^(Binary files|Symbolic links|File) ' full.patch \
+            | sed -E 's|^[A-Za-z ]+ linux-${kernelStableBase}/([^ ]+) .*|\1|' \
+            | grep -Ev "$excluded"; then
+          echo "FATAL: the paths above changed in a way a patch cannot carry" >&2
+          exit 1
+        fi
+        filterdiff -p1 -x 'tools/*' -x 'Documentation/*' -x 'drivers/net/phy/motorcomm.c' full.patch > "$out"
+      '';
+
+  # The vendor source with the stable fixes in, which both the config expansion and the kernel build use, so Kconfig sees the
+  # same tree in both. The base check is what keeps a vendor bump that rebases from applying a diff meant for another
+  # release: the diff would mostly apply, and the result would be neither release.
+  kernelSrc = bootchainPkgs.applyPatches {
+    name = "linux-${kernelStableVersion}-sun60iw2-source";
+    src = vendorKernelSrc;
+    patches = [ kernelStablePatch ];
+    # A file stable deletes comes out of `diff -N` as one that is emptied, and patch keeps it at 0 bytes unless told to
+    # remove it. The vendor's changes to the top Makefile shift the stable hunks there, and patch would keep a .orig of it.
+    patchFlags = [
+      "-p1"
+      "--remove-empty-files"
+      "--no-backup-if-mismatch"
+    ];
+    prePatch = ''
+      base="$(sed -nE 's/^(VERSION|PATCHLEVEL|SUBLEVEL) = //p' Makefile | paste -sd.)"
+      if [ "$base" != "${kernelStableBase}" ]; then
+        echo "FATAL: the vendor tree is $base, the stable diff starts at ${kernelStableBase}" >&2
+        exit 1
+      fi
+    '';
+    postPatch = ''
+      version="$(sed -nE 's/^(VERSION|PATCHLEVEL|SUBLEVEL) = //p' Makefile | paste -sd.)"
+      if [ "$version" != "${kernelStableVersion}" ]; then
+        echo "FATAL: the patched tree is $version, expected ${kernelStableVersion}" >&2
+        exit 1
+      fi
+    '';
+  };
 
   # Pinned to a commit of the vendor branch orange-pi-6.6-sun60iw2, which carries the A733/sun60iw2 support. This used to be
   # the branch name itself, and when upstream pushed new commits to it the hash stopped matching and the build failed.
@@ -591,7 +667,9 @@ let
   # rev to its full SHA and update hash (nix-prefetch-url --unpack on its github archive), then check the PCIe root complex
   # compatible in sun60iw2p1.dtsi still matches the driver this config builds (CONFIG_AW_PCIE_RC=y,
   # "allwinner,sunxi-pcie-v300-rc"). The syncs alone (e5f2886, 1ecd47b) switched it to the dw-sunxi driver, which this config
-  # does not build, so the NVMe root would not appear; 2ac08e8 switched it back.
+  # does not build, so the NVMe root would not appear; 2ac08e8 switched it back. A head that rebases onto another 6.6 release
+  # also moves kernelStableBase, and the stable diff has to be checked against the vendor's changes again (kernelSrc fails
+  # the build when the two disagree, but not when a new vendor change collides with a stable one).
   vendorKernelSrc = bootchainPkgs.fetchFromGitHub {
     owner = "orangepi-xunlong";
     repo = "linux-orangepi";
@@ -648,21 +726,21 @@ let
         export buildRoot="$PWD/build"
         mkdir "$buildRoot"
         cp defconfig "$buildRoot/.config"
-        make -C ${vendorKernelSrc} ${lib.escapeShellArgs orangepiVendorKernel.makeFlags} olddefconfig
+        make -C ${kernelSrc} ${lib.escapeShellArgs orangepiVendorKernel.makeFlags} olddefconfig
         cp "$buildRoot/.config" "$out"
       '';
 
   # ---------------------------------------------------------------------------------------------------------------------------
-  # Vendor Linux kernel (aarch64, 6.6.98).
+  # Vendor Linux kernel (aarch64, 6.6 with the stable fixes above).
   # ---------------------------------------------------------------------------------------------------------------------------
   orangepiVendorKernel =
     (bootchainPkgs.linuxManualConfig {
       inherit (bootchainPkgs) stdenv;
 
-      version = "6.6.98-sun60iw2";
+      version = "${kernelStableVersion}-sun60iw2";
       modDirVersion = kernelModDirVersion;
 
-      src = vendorKernelSrc;
+      src = kernelSrc;
 
       # Armbian's kernel config for this board, which started as a copy of Orange Pi's own, expanded above. The in-tree
       # defconfig make targets do not match the board, which is why this file is used and not one of them.
@@ -690,6 +768,9 @@ let
       # The four device-tree fixups Armbian carries on top of the vendor tree for this specific board: correct model string,
       # disable the unpopulated UFS controller, disable the absent AXP515 battery-management chip, and disable the unpopulated
       # AC101 audio codec. Without these the kernel probes hardware that is not on the board.
+      #
+      # Then ours, in opi4pro-kernel-patches/: what the vendor's bsp/ needs to build against the 6.6 stable fixes, each one
+      # saying in its header which stable change it follows and when it can go.
       kernelPatches =
         map
           (n: {
@@ -701,7 +782,21 @@ let
             "0002-orangepi4pro-disable-unused-ufs.patch"
             "0003-orangepi4pro-disable-axp515-bmu.patch"
             "0004-orangepi4pro-disable-unpopulated-ac101-audio.patch"
-          ];
+          ]
+        ++ [
+          {
+            name = "bsp-pinctrl-gpio-direction-api-6.6.148";
+            patch = ./opi4pro-kernel-patches/bsp-pinctrl-gpio-direction-api-6.6.148.patch;
+          }
+          {
+            name = "bsp-dwc3-xhci-debug-port-registers-6.6.158";
+            patch = ./opi4pro-kernel-patches/bsp-dwc3-xhci-debug-port-registers-6.6.158.patch;
+          }
+          {
+            name = "bsp-cpufreq-exit-returns-void-6.6.160";
+            patch = ./opi4pro-kernel-patches/bsp-cpufreq-exit-returns-void-6.6.160.patch;
+          }
+        ];
       extraMeta.branch = "6.6";
     }).overrideAttrs
       (old: {

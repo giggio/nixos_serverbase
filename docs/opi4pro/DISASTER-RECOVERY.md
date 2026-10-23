@@ -71,8 +71,8 @@ Power the board with serial attached and read the output. Do not skip this — t
 | `HELLO! BOOT0 is starting!` then it stops or loops | The bootloader region is damaged or wrong. | **§3** |
 | U-Boot banner (`U-Boot 2018.07-g…`) appears, then `undefined instruction`, or a hang right after `Starting kernel ...` | U-Boot itself is bad — or, for the hang, an entry was booted without `boot.scr`'s memory map (a conf at `/extlinux/` or `/boot/extlinux/`, or a hand boot that skipped the `setenv` lines of §5b). | **§3**, or **§4** |
 | U-Boot runs but cannot find `boot.scr`, shows no menu, or an entry fails with `Skipping … for failure retrieving` | Bootloader fine; the boot files or the bootable flag are wrong. | **§4**, then **§5b** |
-| Kernel banner appears, then stage 1 fails: cannot find root, drops to an initrd emergency shell | Boot files fine; the NVMe root is unreachable or the generation is broken. Right after a vendor kernel bump, suspect the PCIe controller first: the NVMe is behind it, and the device tree's `pcie_rc` compatible must match the driver the config builds. | **§5a** |
-| Boots, but the system is broken (services failing, bad config) | Roll back to a previous generation from the menu. | **§5a** |
+| Kernel banner appears, then stage 1 fails: cannot find root, drops to an initrd emergency shell | Boot files fine; the NVMe root is unreachable or the generation is broken. Right after a vendor kernel bump, suspect the PCIe controller first: the NVMe is behind it, and the device tree's `pcie_rc` compatible must match the driver the config builds. After a stable bump (`kernelStableVersion`), the previous generation is the fix; the bump is what to investigate. | **§5a** |
+| Boots, but the system is broken (services failing, bad config) | Roll back to a previous generation from the menu. Right after a kernel bump with no network, the serial console is the only way in: the Ethernet glue (`bsp/drivers/stmmac`) builds against upstream stmmac's internals, which stable releases change. | **§5a** |
 
 **The key insight for this board:** `/nix/store` on the NVMe almost always survives, and it still contains
 **every previous generation**, and the boot menu lists the newest of them. So recovery is nearly always "pick a
@@ -582,7 +582,8 @@ spare with §7a now and then.
 ## 8. Why source-only recovery works here, and its one limit
 
 Everything in this project rebuilds from pinned sources: the Nix modules fix exact revisions and content hashes for the
-vendor U-Boot, the vendor Linux kernel, Armbian's build repo and Orange Pi's build repo. Combined with the flake lock,
+vendor U-Boot, the vendor Linux kernel, the two kernel.org release tarballs whose difference brings the 6.6 stable
+fixes onto it, Armbian's build repo and Orange Pi's build repo. Combined with the flake lock,
 any commit of this repository reproduces the same bootloader and the same system, indefinitely. So the recovery of first
 resort is: **check out a commit you know booted, rebuild, reflash.** You do not need a rescue distribution.
 

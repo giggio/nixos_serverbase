@@ -1,0 +1,19 @@
+The vendor's cpufreq-dt driver gives cpufreq_driver an exit callback that returns int. Upstream made that callback
+return void ("cpufreq: Make cpufreq_driver->exit() return void", 6.11), and the 6.6 stable line took it in 6.6.160,
+together with the same change to its own drivers/cpufreq/cpufreq-dt.c, which this follows.
+todo: remove when the vendor tree is based on 6.6.160 or later and carries this itself.
+
+--- a/bsp/drivers/cpufreq/cpufreq-linux-6.6/cpufreq-dt.c
++++ b/bsp/drivers/cpufreq/cpufreq-linux-6.6/cpufreq-dt.c
+@@ -221,10 +221,9 @@
+ 	return 0;
+ }
+ 
+-static int cpufreq_exit(struct cpufreq_policy *policy)
++static void cpufreq_exit(struct cpufreq_policy *policy)
+ {
+ 	clk_put(policy->clk);
+-	return 0;
+ }
+ 
+ static int __maybe_unused sunxi_get_power(struct device *dev, unsigned long *uW,

@@ -561,6 +561,34 @@ Two things about the menu that are easy to get wrong at the console:
 `modules/opi4pro-boot-files.nix` holds the layout and these reasons next to the code, and
 [`DISASTER-RECOVERY.md`](./DISASTER-RECOVERY.md) §5 how to use the menu to roll back.
 
+### Updating the kernel (October 2026)
+
+The kernel has two pins in `config-physical-opi4pro-common.nix`, and they move separately:
+
+- **The vendor tree** (`vendorKernelSrc`, a commit of `orange-pi-6.6-sun60iw2`). It is kernel.org's 6.6.98 plus
+  Allwinner's additions: `bsp/`, the A733 device trees, Motorcomm's PHY driver and some build plumbing. When it moves,
+  check the PCIe root complex compatible (its comment says how), and set `kernelStableBase` to its new `SUBLEVEL`.
+- **The 6.6 stable fixes** (`kernelStableVersion` and its hash, from kernel.org's signed `sha256sums.asc`). Nobody
+  publishes them for this SoC, so the build applies the difference between two kernel.org release tarballs to the
+  vendor source (`kernelStablePatch`, `kernelSrc`). It fails when the vendor tree is not the base the difference
+  starts from.
+
+The cost of a stable bump is `bsp/`: it compiles against kernel internals that stable releases sometimes change, and
+each such change is a patch of ours in `modules/opi4pro-kernel-patches/`, following what upstream did to its own copy
+of the same code. Going from 6.6.98 to 6.6.160 took three. To see every compile error in one build rather than one per
+build, build the kernel once with `make -k`:
+
+```bash
+nix build --impure --no-link -L --expr 'let f = builtins.getFlake "git+file://'"$PWD"'"; k = f.nixosConfigurations.opi4pro.config.boot.kernelPackages.kernel; in k.overrideAttrs (o: { makeFlags = o.makeFlags ++ [ "-k" ]; })'
+```
+
+A new patch file has to be `git add`ed before a `git+file:` build sees it. Before deploying, check that U-Boot's
+output path did not move, compare the board's DTB with `/run/current-system/dtbs/allwinner/sun60i-a733-orangepi-4-pro.dtb`
+and the kernel config with the board's `/proc/config.gz`. No VM runs this kernel (qemu has no A733), so the boot is
+the test: push the closure to the cache, `nixos-rebuild boot`, reboot with the serial console attached, and keep the
+previous generation in the menu. After it: `uname -r`, `ip -br link show eth0`, `cat /proc/mdstat`,
+`systemctl --failed`.
+
 ### Replacing the SD card
 
 The SD card is permanent, so it wears out (about every two years here), and the first card was larger than the design
