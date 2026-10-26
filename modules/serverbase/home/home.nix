@@ -21,11 +21,24 @@ let
   #   zellij     the one on PATH is the system's anyway, and .bashrc should call the same binary
   #   todos      a script around python3 and ripgrep, both of which the system has
   #   nix-direnv otherwise brings a whole second nix, with boost and icu
-  systemCopies = final: prev: {
-    inherit (pkgs) mylua zellij;
-    inherit (hmOverlay pkgs pkgs) todos;
-    nix-direnv = prev.nix-direnv.override { nix = config.nix.package; };
-  };
+  systemCopies =
+    final: prev:
+    {
+      inherit (pkgs) mylua zellij;
+      inherit (hmOverlay pkgs pkgs) todos;
+      nix-direnv = prev.nix-direnv.override { nix = config.nix.package; };
+    }
+    # todo: remove when atuin builds on aarch64 again: https://hydra.nixos.org/job/nixpkgs/unstable/atuin.aarch64-linux
+    # 18.24.x fails its e2e_ai_sessions tests there (timeouts), so the cache has no aarch64 build and every pi compiles it,
+    # then fails the same tests. 02c087f is home-manager-config's previous nixpkgs pin, and its aarch64 atuin is cached.
+    // lib.optionalAttrs pkgs.stdenv.hostPlatform.isAarch64 {
+      inherit
+        ((builtins.getFlake "github:nixos/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D")
+        .legacyPackages.${pkgs.stdenv.hostPlatform.system}
+        )
+        atuin
+        ;
+    };
   hmPkgs = import hmInputs.nixpkgs.outPath {
     inherit (pkgs.stdenv.hostPlatform) system;
     # Not the config the PC gives its whole system: `rocmSupport` there would change the hash of every package and turn
