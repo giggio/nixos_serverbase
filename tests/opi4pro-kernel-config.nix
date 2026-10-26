@@ -13,8 +13,9 @@
 # Build time is the only place left.
 #
 # A derivation rather than a nixosTest, like flake-matrix: there is nothing to boot, and the assertion is a grep over a
-# file the kernel build already produced. The cost is the kernel itself, which CI builds and caches before the checks
-# run, so this adds seconds rather than a cross-compile.
+# file the kernel build already produced. It reads `$out/config`, not the copy nixpkgs leaves in `$dev`: `$out` is in the
+# system closure CI pushes to the cache, `$dev` is not, and Nix cannot build one output alone, so reading `$dev` cost a
+# full kernel cross-compile even with the system kernel already cached.
 #
 # This IS the assertion derivation rather than a wrapper around it, so there is no second copy of the symbol list and no
 # redundant rebuild: adding an entry to kernelExtraEnabledSymbols extends this check automatically. It is built by

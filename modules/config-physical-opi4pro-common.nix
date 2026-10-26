@@ -823,6 +823,13 @@ let
           fi
         '';
 
+        # nixpkgs copies the reconciled .config only into $dev, which no system closure carries, so the cache never has it.
+        # In $out it ships with the kernel: readable on the board next to the Image, and kernelConfigAssertions can check it
+        # from the cached system kernel instead of cross-compiling the whole kernel again just to produce $dev.
+        postInstall = (old.postInstall or "") + /* bash */ ''
+          install -Dm444 "$buildRoot/.config" "$out/config"
+        '';
+
         postPatch = (old.postPatch or "") + /* bash */ ''
           # The vendor's out-of-tree bsp/ directory uses `include $(src)/...`, which only resolves when building in-tree.
           # Rewrite to $(srctree)/$(src)/ so it also works from a separate build directory (which Nix always uses).
@@ -896,13 +903,13 @@ let
   kernelConfigAssertions =
     bootchainPkgs.buildPackages.runCommand "opi4pro-kernel-config-assertions"
       {
-        kernelDev = orangepiVendorKernel.dev;
+        kernel = orangepiVendorKernel;
         symbols = kernelExtraEnabledSymbols;
         disabledSymbols = kernelDisabledSymbols;
         configValues = kernelConfigValues;
       }
       ''
-        cfg="$kernelDev/lib/modules/${kernelModDirVersion}/build/.config"
+        cfg="$kernel/config"
         [ -f "$cfg" ] || { echo "FATAL: no reconciled .config at $cfg" >&2; exit 1; }
 
         missing=""
@@ -1137,8 +1144,8 @@ in
     # The card's files and the tools that write them, built for the board. The installer image populates its own FAT
     # partition with these; the card images build their own instance for the PC.
     opi4proBootFiles = bootFiles;
-    # Exposed so tests/opi4pro-kernel-config.nix can pull it into `make checks`. Building it builds the kernel, which CI has
-    # already done and cached by the time the checks run.
+    # Exposed so tests/opi4pro-kernel-config.nix can pull it into `make checks`. It reads only the kernel's $out, which the
+    # system closure carries, so once the system is in the cache it costs a substitution, not a kernel build.
     opi4proKernelConfigAssertions = kernelConfigAssertions;
   };
 
