@@ -46,19 +46,32 @@ let
   # overwrites that argument with its own set (NR_CPUS, CMA_SIZE_MBYTES, the preempt model, ...). Wrapping intercepts the exact
   # attribute set it hands to buildLinux, so their settings survive verbatim and a change on their side is picked up instead of
   # being silently replaced by a stale copy.
-  kernel = crossPkgs.callPackage "${inputs.nixos-hardware}/raspberry-pi/common/kernel.nix" {
-    rpiVersion = 4;
-    buildLinux =
-      attrs:
-      crossPkgs.buildLinux (
-        attrs
-        // {
-          structuredExtraConfig = (attrs.structuredExtraConfig or { }) // {
-            RUST = lib.mkForce lib.kernel.no;
-          };
-        }
-      );
-  };
+  #
+  # The reconciled .config is copied into $out for the same reason as the opi4pro kernel's (see its postInstall): nixpkgs
+  # leaves it only in $dev, which no closure carries, so the servers' firewall-kernel check reading $dev cross-compiled this
+  # whole kernel again even with the system kernel in the cache.
+  kernel =
+    (crossPkgs.callPackage "${inputs.nixos-hardware}/raspberry-pi/common/kernel.nix" {
+      rpiVersion = 4;
+      buildLinux =
+        attrs:
+        crossPkgs.buildLinux (
+          attrs
+          // {
+            structuredExtraConfig = (attrs.structuredExtraConfig or { }) // {
+              RUST = lib.mkForce lib.kernel.no;
+            };
+          }
+        );
+    }).overrideAttrs
+      (old: {
+        postInstall = (old.postInstall or "") + /* bash */ ''
+          install -Dm444 "$buildRoot/.config" "$out/config"
+        '';
+        passthru = (old.passthru or { }) // {
+          configInOut = true;
+        };
+      });
 in
 {
   imports = [

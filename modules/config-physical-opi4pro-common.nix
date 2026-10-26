@@ -829,6 +829,10 @@ let
         postInstall = (old.postInstall or "") + /* bash */ ''
           install -Dm444 "$buildRoot/.config" "$out/config"
         '';
+        # tells the servers' firewall-kernel check to read $out/config instead of $dev
+        passthru = (old.passthru or { }) // {
+          configInOut = true;
+        };
 
         postPatch = (old.postPatch or "") + /* bash */ ''
           # The vendor's out-of-tree bsp/ directory uses `include $(src)/...`, which only resolves when building in-tree.
