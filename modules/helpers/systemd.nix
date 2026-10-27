@@ -31,6 +31,9 @@
       ProtectHome = true;
       PrivateTmp = true;
       PrivateDevices = true;
+      # Removes what the unit's User and Group own, not what the unit made, once the last unit running as either stops.
+      # Switch it off on a unit whose User or Group is shared with processes that no unit runs as that User or Group.
+      RemoveIPC = true;
       ProtectKernelTunables = true;
       ProtectKernelModules = true;
       ProtectKernelLogs = true;
