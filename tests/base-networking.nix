@@ -55,6 +55,14 @@
             assert "Unmanaged=yes" in definition, \
                 f"{name}.network does not mark its links unmanaged: {definition}"
 
+    with subtest("no link has IPv6, not even once networkd has configured them"):
+        # the test network's eth1 comes from `networking.interfaces`, the kind of unit networkd re-enables IPv6 on
+        server.wait_until_succeeds("networkctl status eth1 | grep -q 'State: routable (configured)'")
+        disabled = server.succeed("cat /proc/sys/net/ipv6/conf/*/disable_ipv6").split()
+        assert set(disabled) == {"1"}, f"IPv6 is still on for some link: {disabled}"
+        addresses = server.succeed("ip -6 -o addr show").strip()
+        assert addresses == "", f"links still carry IPv6 addresses: {addresses}"
+
     with subtest("the host calls itself by its derived name"):
         hostname = server.succeed("hostname").strip()
         # a test build is also a dev build, so the derived name carries the dev suffix

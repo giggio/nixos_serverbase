@@ -11,6 +11,7 @@
     ./clone-config.nix
     ./hardware
     ./home/home.nix
+    ./ipv6.nix
     ./secrets.nix
     ./sudo.nix
     ./services
