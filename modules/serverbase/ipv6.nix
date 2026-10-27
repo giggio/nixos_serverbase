@@ -27,8 +27,10 @@ in
     # kernel keeps the protocol, so services listening on `[::]` still accept IPv4; `ipv6.disable=1` would make every
     # AF_INET6 socket fail instead.
     networking.enableIPv6 = false;
-    systemd.network.networks."99-ethernet-default-dhcp".DHCP = lib.mkIf (
-      config.networking.useDHCP && config.networking.useNetworkd
-    ) (lib.mkForce "ipv4");
+    systemd.network.networks =
+      lib.genAttrs [ "99-ethernet-default-dhcp" "99-wireless-client-dhcp" ]
+        (_: {
+          DHCP = lib.mkIf (config.networking.useDHCP && config.networking.useNetworkd) (lib.mkForce "ipv4");
+        });
   };
 }
