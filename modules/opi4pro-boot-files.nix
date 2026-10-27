@@ -103,11 +103,13 @@ rec {
   '';
 
   # Lists the generations that go in the menu, one per line, tab-separated:
-  #   tag, toplevel, kernel, initrd, DTB, date, nixos-version, kernel-params
+  #   tag, toplevel, kernel, initrd, DTB, date, nixos-version, kernel version, kernel-params
   #   bash list-generations.sh <profiles dir> <generations> [default toplevel]
   # The default entry is the toplevel given (the one being installed), or the profile's current system. Then the newest
   # <generations> generations, as nixpkgs' extlinux builder picks them. A field that is missing is "-": an empty one would
   # vanish, because tab is IFS whitespace and `read` collapses consecutive tabs.
+  # The kernel version is the name of the generation's only kernel-modules/lib/modules directory, which is where nixpkgs'
+  # systemd-boot builder reads it from too.
   # A plain script rather than a package, because opi4pro-boot-card runs it on the board through `ssh ... bash -s`. So it only
   # uses what any NixOS has, and it is read-only.
   listGenerations = pkgs.writeText "opi4pro-list-generations.sh" ''
@@ -116,13 +118,16 @@ rec {
     generations="$2"
     default="''${3:-$profiles/system}"
     entry() {
-      local path dtb=-
+      local path dtb=- kernel_version=- modules
       path="$(readlink -f "$2")"
       [ -e "$path/kernel" ] && [ -e "$path/initrd" ] || return 0
       [ -e "$path/dtbs/${dtbName}" ] && dtb="$(readlink -f "$path/dtbs")/${dtbName}"
-      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$path" \
+      modules=("$path"/kernel-modules/lib/modules/*)
+      [ -d "''${modules[0]}" ] && kernel_version="$(basename "''${modules[0]}")"
+      printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' "$1" "$path" \
         "$(readlink -f "$path/kernel")" "$(readlink -f "$path/initrd")" "$dtb" \
-        "$(date "+%Y-%m-%d %H:%M" -d "@$(stat -L -c %Z "$path")")" "$(cat "$path/nixos-version")" "$(cat "$path/kernel-params")"
+        "$(date "+%Y-%m-%d %H:%M" -d "@$(stat -L -c %Z "$path")")" "$(cat "$path/nixos-version")" "$kernel_version" \
+        "$(cat "$path/kernel-params")"
     }
     entry default "$default"
     if [ "$generations" -gt 0 ] && [ -d "$profiles" ]; then
@@ -199,7 +204,7 @@ rec {
         echo "TIMEOUT ${toString menuTimeout}"
         echo "MENU TITLE ------------------------------------------------------------"
       } > "$conf"
-      while IFS=$'\t' read -r tag path kernel initrd dtb date version params; do
+      while IFS=$'\t' read -r tag path kernel initrd dtb date version kernel_version params; do
         [ "$dtb" != - ] || { echo "ERROR: $path has no dtbs/${dtbName}" >&2; exit 1; }
         add "$kernel" Image
         linux_file="$added"
@@ -207,14 +212,18 @@ rec {
         initrd_file="$added"
         add "$dtb" dtb
         dtb_file="$added"
+        if [ "$tag" = default ]; then
+          label="NixOS - Default"
+          [ "$kernel_version" = - ] || label+=" (Linux $kernel_version)"
+        else
+          label="NixOS - Configuration $tag ($date - $version"
+          [ "$kernel_version" = - ] || label+=" - Linux $kernel_version"
+          label+=")"
+        fi
         {
           echo
           echo "LABEL nixos-$tag"
-          if [ "$tag" = default ]; then
-            echo "  MENU LABEL NixOS - Default"
-          else
-            echo "  MENU LABEL NixOS - Configuration $tag ($date - $version)"
-          fi
+          echo "  MENU LABEL $label"
           echo "  LINUX $linux_file"
           echo "  INITRD $initrd_file"
           echo "  APPEND init=$path/init $params"

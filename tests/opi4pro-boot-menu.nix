@@ -32,7 +32,7 @@ let
   fakeKernel =
     name:
     pkgs.runCommand "linux-${name}" { } ''
-      mkdir -p $out/dtbs/$(dirname ${dtbName})
+      mkdir -p $out/dtbs/$(dirname ${dtbName}) $out/lib/modules/6.6.${name}
       echo "kernel ${name}" > $out/Image
       echo "dtb ${name}" > $out/dtbs/${dtbName}
     '';
@@ -45,6 +45,7 @@ let
       mkdir -p $out
       ln -s ${kernel}/Image $out/kernel
       ln -s ${kernel}/dtbs $out/dtbs
+      ln -s ${kernel} $out/kernel-modules
       ln -s ${pkgs.writeText "initrd-${name}" "initrd ${name}"} $out/initrd
       echo "init ${name}" > $out/init
       printf 'console=ttyS0,115200n8 loglevel=7' > $out/kernel-params
@@ -116,6 +117,10 @@ pkgs.runCommand "opi4pro-boot-menu"
     [ "$(find hook/${bootFiles.menuDir}/nixos -type f | wc -l)" = 7 ] \
       || fail "expected 2 kernels, 3 initrds and 2 DTBs"
     grep -q '^TIMEOUT ${toString bootFiles.menuTimeout}$' hook/$conf || fail "TIMEOUT is not the scaled one"
+    grep -q '^  MENU LABEL NixOS - Default (Linux 6\.6\.new)$' hook/$conf \
+      || fail "the default entry does not name its kernel version"
+    grep -q '^  MENU LABEL NixOS - Configuration 1-default (.* - 26\.05\.one - Linux 6\.6\.old)$' hook/$conf \
+      || fail "a generation's entry does not name its kernel version"
     grep -q "^  APPEND init=${system3}/init console=ttyS0,115200n8 loglevel=7$" hook/$conf \
       || fail "the default entry is not the system being installed, with its kernel-params"
     grep -E '^  (LINUX|INITRD|FDT) ' hook/$conf | while read -r _ path; do
