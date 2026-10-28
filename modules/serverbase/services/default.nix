@@ -5,5 +5,6 @@
     ./encrypted-state/encrypted-state.nix
     ./initrd-ssh.nix
     ./firewall-fallback.nix
+    ./mount-check.nix
   ];
 }

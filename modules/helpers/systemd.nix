@@ -1,4 +1,4 @@
-{ lib, ... }:
+{ lib, utils, ... }:
 {
   systemd = rec {
     notifyUnitConfig = {
@@ -74,6 +74,37 @@
           "XDG_CACHE_HOME=%t/%N"
         ];
       };
+    # A unit in a chroot of its own closure (nixpkgs' `confinement`), so a code execution in it sees the store paths its
+    # `Exec*` lines need and the few files of /etc it is given, not the machine's whole store and /etc. Confinement also
+    # turns on PrivateUsers, so the unit sees only its own user and root. What any networked program reads from /etc is
+    # bound here: the resolver, the hosts file, the CA bundle, and an nsswitch.conf of its own, because the machine's
+    # names `resolve` and `mymachines`, NSS modules the chroot does not have. The unit adds the rest:
+    # - `BindReadOnlyPaths` for its configuration and secrets outside the store (a symlink's target is what is bound);
+    # - `BindPaths` for what it writes outside StateDirectory and RuntimeDirectory, which systemd mounts in by itself
+    #   (a `ReadWritePaths` names the host's path, which is not in the chroot);
+    # - `packages` for what its scripts take from PATH, which confinement does not follow;
+    # - its mount checks as `mountCheckDependencies`, not in a preStart.
+    confined =
+      {
+        pkgs,
+        packages ? [ ],
+      }:
+      {
+        confinement = {
+          enable = true;
+          inherit packages;
+        };
+        serviceConfig.BindReadOnlyPaths = [
+          "-/etc/resolv.conf"
+          "-/etc/hosts"
+          "/etc/ssl/certs/ca-certificates.crt"
+          "${pkgs.writeText "confined-nsswitch.conf" ''
+            passwd: files
+            group: files
+            hosts: files dns
+          ''}:/etc/nsswitch.conf"
+        ];
+      };
     checkMountScript =
       mounts:
       lib.strings.concatStrings (
@@ -88,6 +119,19 @@
           fi
         '') mounts
       );
+    # `checkMountScript` for a `confined` unit: it requires the `mount-check@` instance of each path, which runs the
+    # check outside the chroot. Inside, every bound path is a mount point whether or not the filesystem behind it is
+    # mounted, and even a `+` command runs in the chroot, where /proc is not mounted. The instance does not remain
+    # active, so it runs again at every start of the unit, as a preStart would.
+    mountCheckDependencies =
+      mounts:
+      let
+        units = map (mount: "mount-check@${utils.escapeSystemdPath mount}.service") mounts;
+      in
+      {
+        requires = units;
+        after = units;
+      };
     mkSystemdPackageForTraefik =
       {
         pkgs,

@@ -76,12 +76,12 @@
         config.allowUnfree = false;
       };
       base =
-        { lib, ... }:
+        { lib, utils, ... }:
         {
           imports = serverbaseModules.default;
           _module.args = {
             inherit inputs;
-            helpers = import ./helpers { inherit lib; };
+            helpers = import ./helpers { inherit lib utils; };
             pkgs-unstable = inputs.nixpkgs-unstable.legacyPackages.${system};
           };
           nixpkgs.pkgs = lib.mkForce testPkgs;
@@ -273,7 +273,6 @@
         configuration = {
           specialArgs = {
             inherit inputs;
-            helpers = import ./helpers { inherit lib; };
             pkgs-unstable = inputs.nixpkgs-unstable.legacyPackages.${suffixedSystem};
           }
           // (if combination.machine ? specialArgs then combination.machine.specialArgs else { });
@@ -281,6 +280,14 @@
           modules =
             serverbaseModules.default
             ++ [
+              # Through `_module.args`, as the checks' base node does, and not `specialArgs`: `utils` is built from the
+              # machine's `config`, which `specialArgs` comes before. Either way `helpers` cannot be used in `imports`.
+              (
+                { lib, utils, ... }:
+                {
+                  _module.args.helpers = import ./helpers { inherit lib utils; };
+                }
+              )
               (
                 if combination.isVMBoot then
                   combination.machine.hardwareModule.virtualboot

@@ -4,7 +4,13 @@
 # a nixosTest: there is nothing to boot, and it finishes in seconds. The values it asserts are the ones every service in
 # both repositories is wired with, so a change here that looks harmless is caught before it reaches a machine.
 let
-  helpers = import ../modules/helpers { inherit lib; };
+  # NixOS's own `utils`, which a machine gets as a module argument. Only the parts that need no configuration are reached
+  # here (the path escaping); `systemdUtils.lib` would read `config` and fail on this empty one.
+  utils = import "${pkgs.path}/nixos/lib/utils.nix" {
+    inherit lib pkgs;
+    config = { };
+  };
+  helpers = import ../modules/helpers { inherit lib utils; };
 
   unitTests = lib.runTests {
     testProxyNetworkNamesAreDerivedFromTheNetworkName = {
@@ -45,6 +51,25 @@ let
         helpers.systemd.restartServiceConfig { setup.isTest = true; }
       );
       expected.Restart = "no";
+    };
+
+    # the instance is the path as systemd escapes it, `-` included: `var-lib-authelia-main` would be another path
+    testAConfinedUnitRequiresAndFollowsTheMountCheckOfEachPath = {
+      expr = helpers.systemd.mountCheckDependencies [
+        "/var/lib/authelia-main"
+        "/mnt/apps/garage/data"
+      ];
+      expected =
+        let
+          units = [
+            "mount-check@var-lib-authelia\\x2dmain.service"
+            "mount-check@mnt-apps-garage-data.service"
+          ];
+        in
+        {
+          requires = units;
+          after = units;
+        };
     };
 
     # the whole point of the helper is to win over whatever restart policy a service's own module already set

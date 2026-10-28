@@ -824,16 +824,27 @@ in
             lib.mapAttrsToList (
               path: units:
               lib.map (unit: {
-                ${lib.removeSuffix ".service" unit} = {
-                  # A LIST, not a bare string, and that is load-bearing. Upstream modules set this too - nixpkgs'
-                  # postgresql module already asks for its own data directory - and NixOS merges a systemd unit
-                  # option by equality unless at least one definition is a list, in which case every definition is
-                  # concatenated. A string here is an evaluation conflict with any module that got there first;
-                  # a list makes both requirements hold, which is what systemd wants anyway (RequiresMountsFor
-                  # accepts repeated assignments and unions them).
-                  unitConfig.RequiresMountsFor = [ path ];
-                  preStart = lib.mkBefore (helpers.systemd.checkMountScript [ path ]);
-                };
+                ${lib.removeSuffix ".service" unit} =
+                  { config, ... }:
+                  {
+                    # A LIST, not a bare string, and that is load-bearing. Upstream modules set this too - nixpkgs'
+                    # postgresql module already asks for its own data directory - and NixOS merges a systemd unit
+                    # option by equality unless at least one definition is a list, in which case every definition is
+                    # concatenated. A string here is an evaluation conflict with any module that got there first;
+                    # a list makes both requirements hold, which is what systemd wants anyway (RequiresMountsFor
+                    # accepts repeated assignments and unions them).
+                    unitConfig.RequiresMountsFor = [ path ];
+                    preStart = lib.mkIf (!config.confinement.enable) (
+                      lib.mkBefore (helpers.systemd.checkMountScript [ path ])
+                    );
+                    inherit
+                      (lib.mapAttrs (_: lib.mkIf config.confinement.enable) (
+                        helpers.systemd.mountCheckDependencies [ path ]
+                      ))
+                      requires
+                      after
+                      ;
+                  };
               }) (lib.filter (lib.hasSuffix ".service") units)
             ) cfg.paths
           )
