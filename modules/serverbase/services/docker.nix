@@ -182,6 +182,9 @@
               # that runs as root on the host, and kernel_params. Nothing here needs either, and a container is whoever
               # wrote the job.
               patch_key enable_annotations '[]'
+              # The shipped io_uring fails on every host here, which refuses io_uring_setup (serverbase's sysctls).
+              # Containers get no block devices (disable_block_device_use), so this only matters if that changes.
+              patch_key block_device_aio '"threads"'
               mv configuration.toml $out
             '';
           in

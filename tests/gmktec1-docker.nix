@@ -123,6 +123,10 @@
         enabled = machine.succeed("grep '^enable_annotations = ' /etc/docker-kata-kata/configuration.toml").strip()
         assert enabled == "enable_annotations = []", f"kata lets containers' annotations through: {enabled}"
 
+    with subtest("kata's qemu does its block I/O in threads, since the host refuses io_uring"):
+        aio = machine.succeed("grep '^block_device_aio = ' /etc/docker-kata-kata/configuration.toml").strip()
+        assert aio == 'block_device_aio = "threads"', f"kata's qemu would ask for io_uring: {aio}"
+
     (_, failed) = machine.systemctl("--failed --quiet")
     machine.log(f"systemctl --failed output: {failed}")
     assert "" == failed, "Expected no failed units and got: " + failed

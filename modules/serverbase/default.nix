@@ -121,6 +121,21 @@
       systemd-boot.enable = lib.mkDefault false; # using grub and not UEFI
       timeout = lib.mkForce 10;
     };
+    kernel.sysctl = {
+      # io_uring has been the largest source of kernel privilege escalations of the last years, and nothing here needs
+      # it. 2 makes io_uring_setup fail with EPERM for every process, root included, so no ring exists at all; libuv
+      # (Node) and PostgreSQL take the classic calls when it is refused. Containers share the host's kernel, so this
+      # holds for them too, and the kata guests' qemu is kept off it in services/docker.nix.
+      "kernel.io_uring_disabled" = 2;
+      # Only the installer ISO kexecs, and it is a system of its own, without this module. The NAS's vendor kernel has
+      # no kexec and no such key, and systemd-sysctl skips it there with one journal line per boot.
+      "kernel.kexec_load_disabled" = 1;
+      # Otherwise any process makes the kernel load a line discipline module by asking for it on a tty.
+      "dev.tty.ldisc_autoload" = 0;
+      # IPv4 already refuses redirects. IPv6 is off by default (ipv6.nix); this holds for a machine that turns it on.
+      "net.ipv6.conf.all.accept_redirects" = 0;
+      "net.ipv6.conf.default.accept_redirects" = 0;
+    };
   };
 
   networking = {
@@ -292,6 +307,13 @@
       };
     };
     logind.settings.Login.KillUserProcesses = true;
+    # A single-label name that misses DNS would otherwise be asked of the whole LAN, over LLMNR and mDNS, and any host
+    # there may answer it. Nothing here resolves `.local` names; the NAS announces itself through avahi, which this
+    # does not touch.
+    resolved.settings.Resolve = {
+      LLMNR = false;
+      MulticastDNS = false;
+    };
   };
 
   # This value determines the NixOS release from which the default

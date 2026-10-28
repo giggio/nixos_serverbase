@@ -8,6 +8,7 @@
   base-networking = ./base-networking.nix;
   firewall-fallback = ./firewall-fallback.nix;
   base-nix-env = ./base-nix-env.nix;
+  base-kernel-defaults = ./base-kernel-defaults.nix;
   clone-config = ./clone-config.nix;
   secrets-sops = ./secrets-sops.nix;
   machines-boot = ./machines-boot.nix;
