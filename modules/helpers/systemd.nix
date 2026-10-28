@@ -78,7 +78,8 @@
     # `Exec*` lines need and the few files of /etc it is given, not the machine's whole store and /etc. Confinement also
     # turns on PrivateUsers, so the unit sees only its own user and root. What any networked program reads from /etc is
     # bound here: the resolver, the hosts file, the CA bundle, and an nsswitch.conf of its own, because the machine's
-    # names `resolve` and `mymachines`, NSS modules the chroot does not have. The unit adds the rest:
+    # names `resolve` and `mymachines`, NSS modules the chroot does not have. And the time zone: without
+    # /etc/localtime a program falls back to UTC, which moves its logs and its schedules. The unit adds the rest:
     # - `BindReadOnlyPaths` for its configuration and secrets outside the store (a symlink's target is what is bound);
     # - `BindPaths` for what it writes outside StateDirectory and RuntimeDirectory, which systemd mounts in by itself
     #   (a `ReadWritePaths` names the host's path, which is not in the chroot);
@@ -97,6 +98,7 @@
         serviceConfig.BindReadOnlyPaths = [
           "-/etc/resolv.conf"
           "-/etc/hosts"
+          "-/etc/localtime"
           "/etc/ssl/certs/ca-certificates.crt"
           "${pkgs.writeText "confined-nsswitch.conf" ''
             passwd: files
