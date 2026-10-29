@@ -266,6 +266,15 @@
           chown "$USER_UID:$USER_GID" "$GNUPG_DIR" && \
           logger -t pam-exec-ssh-session "SUCCESS: $GNUPG_DIR created" || \
           logger -t pam-exec-ssh-session "FAIL: could not create $GNUPG_DIR"
+        # The forwarded sockets (gpg-agent's, and the sudo agent's in sudo.nix) are kept by the first connection that
+        # binds them, since StreamLocalBindUnlink is off. When that connection ends its socket file stays, with nothing
+        # behind it, and would keep every later connection from binding the path. sshd opens this session before it
+        # handles a connection's forwards, so a file nothing answers on is removed here, in time for the new one.
+        for socket in "$RUNDIR/ssh-remote-agent.sock" "$GNUPG_DIR/S.gpg-agent"; do
+          if [ -S "$socket" ] && ! ${pkgs.socat}/bin/socat -u OPEN:/dev/null UNIX-CONNECT:"$socket" 2>/dev/null; then
+            rm -f "$socket" && logger -t pam-exec-ssh-session "REMOVED: $socket, which nothing answered on"
+          fi
+        done
       '';
     in
     lib.mkDefault (
@@ -297,7 +306,12 @@
       # `Match User` block of its own.
       authorizedKeysInHomedir = false;
       settings = {
-        StreamLocalBindUnlink = "yes";
+        # The first connection to forward a socket keeps it. With `yes` the newest took the path from the one that had
+        # it, and when the newest ended (a second, unshared connection, made only to run one command) the path pointed at
+        # nothing, while the session that had it was still open: sudo fell to the password with no YubiKey asked. A
+        # second connection's forward now fails instead, and its sessions use the first's agent, the same one. The file
+        # an ended connection leaves is removed when the next session opens (pam_exec_ssh_session above).
+        StreamLocalBindUnlink = "no";
 
         # Key-only. Every account that can reach these machines has a key, so a password prompt on a public-facing
         # sshd is a guessing target and nothing else - and until the per-machine split lands, one guessed password

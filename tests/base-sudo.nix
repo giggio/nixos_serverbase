@@ -110,6 +110,25 @@ in
         (status, out) = ssh(sudo)
         assert status != 0, f"sudo succeeded with no agent and no password: {out}"
 
+    with subtest("a second connection that comes and goes leaves the first one's agent in place"):
+        # A session open from the PC holds the sudo agent; another connection to the same machine, made for one command,
+        # used to take the socket and leave it answering nothing when it ended, so sudo in the first fell to the password.
+        machine.succeed(
+            "SSH_AUTH_SOCK= ssh -f -N -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o BatchMode=yes"
+            " -o IdentitiesOnly=yes -i /root/login-key -o ExitOnForwardFailure=yes"
+            f" -o RemoteForward={'${agentSocket}'}:/root/sudo-agent.sock ${user}@localhost"
+        )
+        (status, out) = ssh("true", forward="/root/login-agent.sock")
+        assert status == 0, f"a second connection could not log in: {out}"
+        (status, out) = ssh(sudo)
+        assert status == 0, f"sudo lost the first connection's agent to a second connection: {out}"
+
+    with subtest("once the connection that held the socket ends, the next one gets it"):
+        machine.succeed("pkill -f 'ssh -f -N'")
+        machine.wait_until_fails("SSH_AUTH_SOCK=${agentSocket} ssh-add -l", timeout=30)
+        (status, out) = ssh(sudo, forward="/root/sudo-agent.sock")
+        assert status == 0, f"the socket an ended connection left kept the next one from forwarding: {out}"
+
     with subtest("git pushes to the forge share one connection, and nothing else does"):
         config = machine.succeed("su - ${user} -c 'ssh -G -l forgejo forge.example'")
         assert "controlmaster auto" in config and "controlpersist 600" in config, \

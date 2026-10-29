@@ -63,12 +63,13 @@ in
         assert "openpgp:0x2E6F4761" in authorized, \
             "the configured ssh key is not in the user's authorized keys"
 
-    with subtest("sshd is running and unlinks stale bound sockets"):
+    with subtest("sshd is running, and a forwarded socket stays with the connection that has it"):
         machine.wait_for_unit("sshd.service")
         machine.wait_for_open_port(22)
         settings = machine.succeed("sshd -T")
-        assert "streamlocalbindunlink yes" in settings.lower(), \
-            "sshd does not have StreamLocalBindUnlink enabled, so forwarded sockets would not be reusable"
+        # the first connection keeps a forwarded socket; base-sudo shows what that is for
+        assert "streamlocalbindunlink no" in settings.lower(), \
+            "sshd lets a later connection take a forwarded socket from the one that holds it"
 
     with subtest("a key is the only way in, and keyboard-interactive is closed too"):
         # Read back from sshd rather than from the Nix option, because they answer different questions: the option

@@ -16,8 +16,8 @@ let
   # is what every server already had when this was written, allocated as the first normal user.
   uid = 1000;
   # A fixed path rather than whatever sshd's own forwarded agent is called: that name changes on every connection, so a
-  # zellij pane opened after a reattach would hold a dead socket. With a fixed path the newest connection's forward is
-  # the one found, which is also how the gpg-agent forward already behaves (StreamLocalBindUnlink, in default.nix).
+  # zellij pane opened after a reattach would hold a dead socket. With a fixed path the connection that holds it is the
+  # one found, the first of those still open, as for the gpg-agent forward (StreamLocalBindUnlink, in default.nix).
   agentSocket = "/run/user/${toString uid}/ssh-remote-agent.sock";
 in
 {
