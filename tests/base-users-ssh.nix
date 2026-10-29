@@ -107,6 +107,21 @@ in
         assert ownership == "700 ${user}", \
             f"{gnupg} is '{ownership}', expected '700 ${user}' so that only the user can reach its agent sockets"
 
+    with subtest("a key added to ~/.ssh/authorized_keys does not let anyone in"):
+        # anything running as the account could otherwise add its own way in, which no configuration would show
+        assert "authorizedkeysfile /etc/ssh/authorized_keys.d/%u" in settings.lower(), \
+            f"sshd reads more authorized keys files than the declared ones: {settings}"
+        machine.succeed("ssh-keygen -q -t ed25519 -N \"\" -f /root/planted-key")
+        machine.succeed(
+            "install -d -o ${user} -m 0700 /home/${user}/.ssh"
+            " && install -o ${user} -m 0600 /root/planted-key.pub /home/${user}/.ssh/authorized_keys"
+        )
+        machine.fail(
+            "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+            " -o BatchMode=yes -o ConnectTimeout=10"
+            " -i /root/planted-key ${user}@localhost true"
+        )
+
     with subtest("the pam hook is wired into the ssh service and not into every service"):
         machine.succeed("grep -q pam_exec.so /etc/pam.d/sshd")
         machine.fail("grep -q pam_exec.so /etc/pam.d/login")

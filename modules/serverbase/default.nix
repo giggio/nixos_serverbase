@@ -291,6 +291,11 @@
   services = {
     openssh = {
       enable = true;
+      # Only the keys the configuration declares, in /etc/ssh/authorized_keys.d. With the nixpkgs default sshd also
+      # reads ~/.ssh/authorized_keys, so anything that runs as an account can add a key of its own there and keep a way
+      # in that no configuration shows. A service that does keep its users' keys in its home (a git forge) gets a
+      # `Match User` block of its own.
+      authorizedKeysInHomedir = false;
       settings = {
         StreamLocalBindUnlink = "yes";
 
