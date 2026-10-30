@@ -126,7 +126,7 @@ fi
 if [ "$resume" -eq 0 ]; then
   target_dir=$(dirname "$IMAGE")
   avail=$(df --output=avail -k "$target_dir" | tail -n1)
-  echo "Creating a $SIZE container at $IMAGE ($(( avail / 1024 / 1024 )) GiB free on $target_dir)"
+  echo "Creating a $SIZE container at $IMAGE ($((avail / 1024 / 1024)) GiB free on $target_dir)"
 
   # Fully allocated, NOT sparse. A sparse container on a filesystem that later fills up gives ENOSPC to writes coming
   # from INSIDE the container - so the error surfaces on a database, at fsync time, caused by something entirely
@@ -237,7 +237,7 @@ clevis luks unlock -d "$loop" -n "$MAPPER" -o "--perf-no_read_workqueue --perf-n
 usable=$(blockdev --getsize64 "/dev/mapper/$MAPPER")
 image_bytes=$(stat -c %s "$IMAGE")
 echo "  $(numfmt --to=iec "$usable") usable inside a $(numfmt --to=iec "$image_bytes") container" \
-  "($(( (image_bytes - usable) * 1000 / image_bytes ))‰ overhead)"
+  "($(((image_bytes - usable) * 1000 / image_bytes))‰ overhead)"
 
 # The second line of defence for --resume, and independent of the first: the progress file says an init is
 # unfinished, this asks the container itself. If a filesystem is already there then the marker is lying - left
@@ -254,18 +254,21 @@ echo "Creating the filesystem..."
 # root filesystem, and on a large container that margin is many gigabytes of nothing.
 mkfs.ext4 -q -m 0 -L "$MAPPER" "/dev/mapper/$MAPPER"
 
-mkdir -p "$MOUNT_POINT"
-mount "/dev/mapper/$MAPPER" "$MOUNT_POINT"
+# A private mount point, not $MOUNT_POINT: systemd takes a mount appearing there as its own mount unit's job done,
+# so an init run at boot (createOnBoot) consumed the queued mount, and the container was never mounted after it.
+prepare_dir=$(mktemp -d -p /run encrypted-state-init.XXXXXX)
+mount "/dev/mapper/$MAPPER" "$prepare_dir"
 
 # The container mirrors the real tree, so the directories are created at the paths they will be bound from. Ownership
 # is left to the migration, which copies it from the originals.
 while IFS= read -r path; do
   [ -z "$path" ] && continue
-  mkdir -p "${MOUNT_POINT}${path}"
+  mkdir -p "${prepare_dir}${path}"
   echo "  prepared ${MOUNT_POINT}${path}"
 done <<<"$STATE_PATHS"
 
-umount "$MOUNT_POINT"
+umount "$prepare_dir"
+rmdir "$prepare_dir"
 cryptsetup close "$MAPPER"
 losetup --detach "$loop"
 trap - ERR # clears the "resume with encrypted-state-wipe" message set above; there is nothing left to resume
@@ -313,6 +316,11 @@ if [ "$BIND_STATE" = "1" ]; then
   echo "WARNING: NOT starting encrypted-state.target - it would bind empty directories over your live data." >&2
   echo "WARNING: set bindState = false, switch, then run encrypted-state-migrate." >&2
   exit 1
+fi
+
+if [ "${ENCRYPTED_STATE_NO_START:-0}" = "1" ]; then
+  echo "ENCRYPTED_STATE_NO_START is set; leaving the container closed for the boot to open."
+  exit 0
 fi
 
 echo

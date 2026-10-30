@@ -499,6 +499,22 @@ in
       '';
     };
 
+    createOnBoot = mkOption {
+      type = types.bool;
+      default = false;
+      description = ''
+        Run `encrypted-state-init` at boot when the container does not exist, before the unlock, so a new VM comes
+        up with its container open, like the real machine, instead of with the unlock failed until someone runs
+        the init by hand. An init interrupted by a reboot is finished with `--resume` on the next boot.
+
+        The recovery passphrase is random and kept nowhere: the key server is the only way in, which costs nothing
+        on a machine that can be thrown away and recreated.
+
+        VMs and test nodes only, asserted. On a real machine a missing container is a fault to look at, and
+        creating an empty one in its place would hide it.
+      '';
+    };
+
     paths = mkOption {
       default = { };
       description = ''
@@ -540,6 +556,10 @@ in
         # deleting one nftables table; enabling it on a real machine takes its databases down until someone notices.
         assertion = !cfg.simulateKeyServerOutage || config.setup.isVM || config.setup.isTest;
         message = "setup.encryptedState.simulateKeyServerOutage cuts the machine off from its key server. It is for VMs and test nodes only.";
+      }
+      {
+        assertion = !cfg.createOnBoot || config.setup.isVM || config.setup.isTest;
+        message = "setup.encryptedState.createOnBoot replaces a missing container with an empty one. It is for VMs and test nodes only.";
       }
       {
         # nft takes an address here: a host name would be resolved once, when the rules load, or fail the build's
@@ -714,6 +734,36 @@ in
             # that reports the outage keys on it having failed, and `nixos-rebuild switch` waits on its start job.
             TimeoutStartSec = cfg.unlockAttemptTimeoutSeconds + 120;
           };
+        };
+
+        encrypted-state-create = lib.mkIf cfg.createOnBoot {
+          description = "Create the application state container on a machine that has none";
+          wants = [ "network-online.target" ];
+          after = [ "network-online.target" ];
+          before = [ unlockUnit ];
+          wantedBy = [ unlockUnit ];
+          unitConfig = {
+            # The unlock is ordered after this, so default dependencies here would hand the unlock basic.target
+            # through the back door, with the ordering cycles its own comment describes.
+            DefaultDependencies = "no";
+            RequiresMountsFor = [ (builtins.dirOf cfg.image) ];
+            ConditionPathExists = [
+              "|!${cfg.image}"
+              "|${scriptEnv.WIPE_PROGRESS}"
+            ];
+          };
+          # init finishes by starting the target, whose unlock is waiting on this unit: a deadlock. The boot
+          # transaction that is already queued starts it instead.
+          environment.ENCRYPTED_STATE_NO_START = "1";
+          serviceConfig.Type = "oneshot";
+          script = ''
+            passphrase_file=$(mktemp -p /run)
+            trap 'rm -f "$passphrase_file"' EXIT
+            head -c 32 /dev/urandom | base64 -w0 >"$passphrase_file"
+            init_args=()
+            [ -e ${lib.escapeShellArg cfg.image} ] && init_args+=(--resume)
+            ENCRYPTED_STATE_PASSPHRASE_FILE="$passphrase_file" ${initScript}/bin/encrypted-state-init "''${init_args[@]}"
+          '';
         };
 
         # systemd-tmpfiles-setup runs at sysinit, long before anything here is mounted, so every tmpfiles rule

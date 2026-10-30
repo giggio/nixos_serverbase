@@ -55,7 +55,11 @@ let
   # Both client nodes, differing only in `bindState` - which is the one thing that differs between the two deploys
   # of a real migration, and cannot be changed mid-test because a nixosTest node has exactly one configuration.
   mkNode =
-    { hostName, bindState }:
+    {
+      hostName,
+      bindState,
+      createOnBoot ? false,
+    }:
     { nodes, lib, ... }:
     {
       imports = [ testNodes.base ];
@@ -64,7 +68,12 @@ let
         username = "giggio";
         encryptedState = {
           enable = true;
-          inherit bindState image mountPoint;
+          inherit
+            bindState
+            createOnBoot
+            image
+            mountPoint
+            ;
           size = initialSize;
           # 32 MiB rather than the 256 MiB default. argon2id allocates this for real, twice per test run, on a node
           # with 1 GiB - and what is being tested is the plumbing around the KDF, not the KDF.
@@ -239,11 +248,20 @@ in
       hostName = "phase1";
       bindState = false;
     };
+
+    # Not started with the others: its first boot binds the container to the key server, which has to be up.
+    created = mkNode {
+      hostName = "created";
+      bindState = false;
+      createOnBoot = true;
+    };
   };
 
   testScript = # python
     ''
-      start_all()
+      tang.start()
+      client.start()
+      phase1.start()
       tang.wait_for_unit("tangd.socket")
       tang.wait_for_open_port(${toString tangPort})
       client.wait_for_unit("multi-user.target")
@@ -355,6 +373,27 @@ in
               "Look for 'deleted to break ordering cycle' in the journal to see which one."
           )
           client.require_unit_state("systemd-tmpfiles-setup.service", "active")
+
+      with subtest("createOnBoot: a machine with no container creates it before the unlock, and opens it"):
+          create_condition = "systemctl show -p ConditionResult --value encrypted-state-create.service"
+          create_result = "systemctl show -p Result --value encrypted-state-create.service"
+          created.start()
+          created.wait_for_unit("multi-user.target")
+          assert created.succeed(create_condition).strip() == "yes", "encrypted-state-create did not run"
+          assert created.succeed(create_result).strip() == "success", created.succeed("journalctl -b -u encrypted-state-create.service --no-pager")
+          created.require_unit_state("encrypted-state-unlock.service", "active")
+          created.require_unit_state("${containerMountUnit}", "active")
+          created.fail("test -e /var/lib/encrypted-state-wipe")
+          # the recovery passphrase went to a temporary file in /run, and must not outlive the init
+          created.fail("ls /run/tmp.*")
+          assert "Found ordering cycle" not in created.succeed("journalctl -b --no-pager")
+
+          # the next boot opens the container it already has, and creates nothing
+          created.shutdown()
+          created.start()
+          created.wait_for_unit("multi-user.target")
+          assert created.succeed(create_condition).strip() == "no", "encrypted-state-create ran on a machine that has a container"
+          created.require_unit_state("encrypted-state-unlock.service", "active")
 
       with subtest("with no container, the service that owns the state does NOT start"):
           # This is the whole point of the file. RequiresMountsFor on a mount that cannot happen must keep the unit
