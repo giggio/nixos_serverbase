@@ -30,8 +30,8 @@
 # what a build over there substitutes instead of compiling. Pushing to `servers` rather than a public cache also means
 # every machine already has it: they carry the attic substituter and its netrc from sops.
 #
-# Everything is one job on purpose: the runner's container gets a fresh /nix every time, so a second job would
-# re-download the whole closure to reach the same state.
+# Everything is one job on purpose. /nix is a volume that outlives the job (see the container below), but two jobs would
+# still each pay for a checkout, a dev shell and the evaluation, and with a capacity of one they could not overlap.
 name: Build
 on:
   workflow_dispatch:
@@ -48,8 +48,17 @@ jobs:
     name: build and check
     runs-on: nix-kvm
     container:
-      # derived from nixos/nix:2.32.8
       image: giggio/nixaction
+      # The store, its database and its GC roots all live under /nix, so a named volume there keeps the three together
+      # from one run to the next: the inputs, the dev shell and every closure already fetched or built are still there,
+      # and a run downloads only what moved. Every nix job on this runner mounts the same volume, whichever repository
+      # it comes from, so what one of them fetched the others find. It works because giggio/nixaction keeps all of its
+      # own tools outside /nix (static nix, the rest from Debian): Docker fills a named volume from the image only the
+      # first time it is mounted, and an image whose tools were store paths would go on running the first image's tools
+      # out of the volume after every update. The runner allows this one volume only (valid_volumes on home_instance,
+      # in the superproject).
+      volumes:
+        - nix-store:/nix
     steps:
       - uses: actions/checkout@v4
       - name: Configure nix
@@ -63,6 +72,12 @@ jobs:
             # nixosTest derivations declare requiredSystemFeatures = "kvm nixos-test"; nix will not schedule them
             # unless it believes it offers both. /dev/kvm itself comes from the runner, which passes the host device in.
             echo 'system-features = nixos-test benchmark big-parallel kvm'
+            # The volume above only grows, and it sits on the host's root filesystem. These measure that filesystem's
+            # free space, not the volume: when a build takes it under min-free, nix collects garbage until max-free is
+            # free again. Nothing in the volume is rooted beyond the job that is running, so that is a cache eviction,
+            # and what it evicts comes back from the attic cache.
+            echo 'min-free = 100G'
+            echo 'max-free = 130G'
           } >> /etc/nix/nix.conf
           echo "Starting nix development environment..."
           nix print-dev-env .#build --verbose
@@ -73,9 +88,10 @@ jobs:
         run: |
           source <(nix print-dev-env .#build)
           attic login --set-default servers "${{ secrets.ATTIC_ENDPOINT }}" "${{ secrets.ATTIC_TOKEN }}"
-          # Read FROM the cache too, not just write to it. The container's /nix starts empty on every run, so without a
-          # substituter the opi4pro vendor kernel and U-Boot - which no public cache has - would be compiled from
-          # source every time, which is the entire thing the pin is meant to stop. `attic use` takes the endpoint and
+          # Read FROM the cache too, not just write to it. The volume at /nix keeps what earlier runs fetched, but
+          # garbage collection empties it in part and a new volume starts empty, so without a substituter the opi4pro
+          # vendor kernel and U-Boot - which no public cache has - would then be compiled from source, which is the
+          # entire thing the pin is meant to stop. `attic use` takes the endpoint and
           # the cache's public key from the login above, so neither has to be written down here.
           attic use servers
           # Printed on purpose: a substituter that failed to configure shows up as a four-hour build rather than as an

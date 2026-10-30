@@ -58,8 +58,10 @@ jobs:
       # and a job's own `container.image` overrides that, which is what this line is doing. Without it `docker` would
       # mean node, not nix.
       #
-      # derived from nixos/nix:2.32.8
       image: giggio/nixaction
+      # The /nix volume every nix job on this runner shares; build.yaml says why.
+      volumes:
+        - nix-store:/nix
     steps:
       - uses: actions/checkout@v4
       - name: Configure nix
@@ -71,6 +73,9 @@ jobs:
             # that plans a build rather than just evaluating one - reads as a confusing platform error rather than as
             # a missing line here. No `system-features` and no /dev/kvm: nothing in this job boots a VM.
             echo 'extra-platforms = aarch64-linux'
+            # As in build.yaml: the volume only grows, so collect garbage before the host's disk runs low.
+            echo 'min-free = 100G'
+            echo 'max-free = 130G'
           } >> /etc/nix/nix.conf
           echo "Starting nix development environment..."
           nix print-dev-env .#build --verbose
