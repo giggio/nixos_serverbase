@@ -82,8 +82,10 @@
             file = "$VM_DIR/secret-disk.qcow2";
           }
         ]
+        # The serial names the disk inside the VM as /dev/disk/by-id/virtio-disk<n>, the same n as the file.
         (lib.lists.imap1 (idx: imgCfg: {
           driveExtraOpts.werror = "report";
+          deviceExtraOpts.serial = "disk${toString idx}";
           file = "$VM_DIR/disk${toString idx}.qcow2";
         }) config.setup.vm.extraDisks)
       ];

@@ -910,8 +910,6 @@
           # rehearse its own boot.
           swtpm
           tpm2-tools
-          libguestfs-with-appliance
-          guestfs-tools
           picocom # for serial communication
         ]);
       shellHook = /* bash */ ''

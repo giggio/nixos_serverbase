@@ -106,7 +106,8 @@ $(out_img_dir)/.%.img.zst.stamp: $(nix_deps)
 	mkdir -p "$(out_img_dir)"
 	# opi4pro images are UNATTENDED INSTALLERS that decrypt the private cache address with sops (see
 	# modules/setup-opi4pro.nix). Two things are injected here, straight into the image's ext4 root (partition 2), AFTER the
-	# lean image is built (decompress -> guestfish -> recompress); every other image keeps the cheap symlink-to-store path:
+	# lean image is built (decompress -> scripts/ext4-copy-in.sh -> recompress); every other image keeps the cheap
+	# symlink-to-store path:
 	#   1. The age key that unlocks the secrets. It must NEVER pass through nix - it would end up world-readable in the store.
 	#   2. The flake SOURCE at /etc/nixos, which nixos-install installs from. The flake pins its inputs as `git+file:`
 	#      references in flake.lock, so /etc/nixos must be a REAL git tree - both the top-level repo and every submodule need
@@ -115,10 +116,9 @@ $(out_img_dir)/.%.img.zst.stamp: $(nix_deps)
 	#      the top-level one via `git rev-parse --git-dir`, and each submodule's via `git submodule foreach --recursive`. These
 	#      are tiny (~6 MB); the multi-GB `out`/artifacts are untracked and never staged, so no `git clean`/`gc` is needed. A
 	#      submodule's `.git` is usually a pointer FILE into the superproject's `.git/modules/...`, which rides along inside the
-	#      top-level `.git` we copied, so the pointers still resolve. The staged tree is packed into a tar with `--owner=0
-	#      --group=0` and `tar-in`'d to /etc/nixos: the installer runs nixos-install as ROOT, and nix's libgit2 refuses a repo
-	#      whose path is not owned by the current user, so the whole tree must land owned by root - which `copy-in` cannot do
-	#      (it preserves the build user's uid) and guestfish has no recursive chown, hence the root-owned tar.
+	#      top-level `.git` we copied, so the pointers still resolve. The whole tree must land owned by root: the installer
+	#      runs nixos-install as ROOT, and nix's libgit2 refuses a repo whose path is not owned by the current user.
+	#      ext4-copy-in.sh writes everything as root, without needing root itself.
 	#      One fix-up before packing: a superproject flake pins its submodule inputs by the BUILD host's absolute path (e.g.
 	#      `git+file:/home/user/.../nixos_serverbase`), which does not exist on the target. So in the staged flake.nix (if any -
 	#      the submodule alone has none) we rewrite that path - the working tree's top level from `git rev-parse --show-toplevel`
@@ -137,6 +137,8 @@ $(out_img_dir)/.%.img.zst.stamp: $(nix_deps)
 	    zstd -d -f -o "$(out_img_dir)/$*.img" "$(result_img_dir)/$*.img.zst"; \
 	    chmod +w "$(out_img_dir)/$*.img"; \
 	    export staging="$$(mktemp -d)"; \
+	    key_dir="$$(mktemp -d -p "/run/user/$$(id -u)")"; \
+	    install -m 0400 "$$agekey" "$$key_dir/server.agekey"; \
 	    mkdir -p "$$staging/nixos"; \
 	    git ls-files --recurse-submodules -z | tar --null -T - -cf - | tar -C "$$staging/nixos" -xf -; \
 	    cp -a "$$(git rev-parse --git-dir)" "$$staging/nixos/.git"; \
@@ -146,9 +148,11 @@ $(out_img_dir)/.%.img.zst.stamp: $(nix_deps)
 	      esc_top="$${top//./\\.}"; \
 	      sed -i "s#git+file:$$esc_top#git+file:/etc/nixos#g" "$$staging/nixos/flake.nix"; \
 	    fi; \
-	    tar -C "$$staging/nixos" --owner=0 --group=0 -cf "$$staging/nixos.tar" .; \
-	    guestfish -a "$(out_img_dir)/$*.img" run : mount /dev/sda2 / : mkdir-p /etc/sops/age : upload "$$agekey" /etc/sops/age/server.agekey : chmod 0400 /etc/sops/age/server.agekey : mkdir-p /etc/nixos : tar-in "$$staging/nixos.tar" /etc/nixos : sync; \
-	    rm -rf "$$staging"; \
+	    $(serverbase_dir)scripts/ext4-copy-in.sh "$(out_img_dir)/$*.img" 2 "$$key_dir/server.agekey" /etc/sops/age/server.agekey \
+	      && $(serverbase_dir)scripts/ext4-copy-in.sh "$(out_img_dir)/$*.img" 2 "$$staging/nixos" /etc/nixos; \
+	    copied=$$?; \
+	    rm -rf "$$staging" "$$key_dir"; \
+	    [ "$$copied" -eq 0 ] || exit "$$copied"; \
 	    zstd -f -o "$(out_img_dir)/$*.img.zst" "$(out_img_dir)/$*.img"; \
 	    rm -f "$(out_img_dir)/$*.img"; \
 	    ;; \
@@ -205,33 +209,29 @@ $(machine_systems): $(out_system_dir)/%: $(out_system_dir)/.%.stamp;
 # VM disk. A missing per-machine key is not an error; the machine just falls back to the shared one.
 $(secrets_qcow2):
 	@echo "Creating secrets qcow2 $@..."
-	mkdir -p "$$(dirname "$@")"
-	qemu-img create -f qcow2 $@ 4M
-	virt-format -a $@ --filesystem=ext4
 	@set -eu; \
-	  cmds='run\nmount /dev/sda1 /\nmkdir-p /nixos-secrets'; \
-	  uploaded=0; \
+	  root_dir="$$(mktemp -d -p "/run/user/$$(id -u)")"; \
+	  trap 'rm -rf "$$root_dir"' EXIT; \
+	  mkdir "$$root_dir/nixos-secrets"; \
+	  copied=0; \
 	  for key in $(foreach m,$(sops_base_machines),$(sops_key_dir)/$(m).agekey) $(sops_agekey); do \
 	    [ -f "$$key" ] || continue; \
-	    name="$$(basename "$$key")"; \
-	    cmds="$$cmds\nupload $$key /nixos-secrets/$$name\nchmod 0400 /nixos-secrets/$$name"; \
-	    uploaded=$$((uploaded + 1)); \
+	    install -m 0400 "$$key" "$$root_dir/nixos-secrets/"; \
+	    copied=$$((copied + 1)); \
 	  done; \
-	  test "$$uploaded" -gt 0 || { echo "ERROR: no age keys found in $(sops_key_dir)" >&2; exit 1; }; \
+	  test "$$copied" -gt 0 || { echo "ERROR: no age keys found in $(sops_key_dir)" >&2; exit 1; }; \
 	  for key in $(foreach m,$(sops_base_machines),$(sops_key_dir)/$(m).lukskey) $(sops_lukskey); do \
 	    [ -f "$$key" ] || continue; \
-	    name="$$(basename "$$key")"; \
-	    cmds="$$cmds\nupload $$key /nixos-secrets/$$name\nchmod 0400 /nixos-secrets/$$name"; \
-	    echo "Uploading root passphrase $$name to $@"; \
+	    install -m 0400 "$$key" "$$root_dir/nixos-secrets/"; \
+	    echo "Copying root passphrase $$(basename "$$key") to $@"; \
 	  done; \
-	  echo "Uploading $$uploaded age key(s) to $@"; \
-	  printf '%b\n' "$$cmds\nsync\nexit" | guestfish -a $@
+	  echo "Copying $$copied age key(s) to $@"; \
+	  $(serverbase_dir)scripts/create-disk.sh $@ 4M secrets "$$root_dir"
 
 $(empty_qcow2):
 	@echo "Creating empty qcow2 $@..."
 	mkdir -p "$$(dirname "$@")"
 	qemu-img create -f qcow2 "$@" 48G
-	# virt-format -a "$@" --filesystem=ext4
 
 $(out_system_dir_stamp): $(machine_system_stamps)
 	touch "$@"

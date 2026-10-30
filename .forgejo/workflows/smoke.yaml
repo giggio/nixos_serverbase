@@ -79,8 +79,8 @@ jobs:
           } >> /etc/nix/nix.conf
           echo "Starting nix development environment..."
           nix print-dev-env .#build --verbose
-      # `.#build` rather than the default shell: the default one carries libguestfs-with-appliance and guestfs-tools and
-      # they are not cached for this platform, so entering it costs a multi-minute build before any real work starts.
+      # `.#build` rather than the default shell: the default one is devenv's, with the commit hooks and the workstation
+      # tools for running VMs, none of which a check needs.
       # The Makefile also needs `ip` and VMS_DIR at PARSE time, both of which the shell supplies.
       - name: Check formatting
         run: |
