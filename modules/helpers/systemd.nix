@@ -79,7 +79,9 @@
     # turns on PrivateUsers, so the unit sees only its own user and root. What any networked program reads from /etc is
     # bound here: the resolver, the hosts file, the CA bundle, and an nsswitch.conf of its own, because the machine's
     # names `resolve` and `mymachines`, NSS modules the chroot does not have. And the time zone: without
-    # /etc/localtime a program falls back to UTC, which moves its logs and its schedules. The unit adds the rest:
+    # /etc/localtime a program falls back to UTC, which moves its logs and its schedules. And passwd and group, which
+    # every process on the machine can already read: without them looking up the unit's own uid fails, and .NET's
+    # `Environment.UserName` throws, which took the servarr web interfaces down. The unit adds the rest:
     # - `BindReadOnlyPaths` for its configuration and secrets outside the store (a symlink's target is what is bound);
     # - `BindPaths` for what it writes outside StateDirectory and RuntimeDirectory, which systemd mounts in by itself
     #   (a `ReadWritePaths` names the host's path, which is not in the chroot);
@@ -99,6 +101,8 @@
           "-/etc/resolv.conf"
           "-/etc/hosts"
           "-/etc/localtime"
+          "-/etc/passwd"
+          "-/etc/group"
           "/etc/ssl/certs/ca-certificates.crt"
           "${pkgs.writeText "confined-nsswitch.conf" ''
             passwd: files
