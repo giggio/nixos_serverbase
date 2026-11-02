@@ -141,6 +141,8 @@ eval_jobs ?= $(shell nproc)
 # stopped being safe than vCPU count alone. Pinning it to 1 keeps every concurrent build to its fair share.
 check_cores ?= 1
 
+nix_rebuild = 0
+
 # Wall clock per check, in seconds. The in-driver watchdog (tests/lib/diagnostics.nix) catches a driver that stops
 # making progress, but nothing there catches a guest that keeps answering while getting nowhere, or a build that never
 # reaches the driver at all. Without this such a check holds one of the $(check_jobs) slots for the whole run.
@@ -413,6 +415,9 @@ eval_costs:
 ## pass/fail table
 checks:
 	@set -o pipefail; \
+	if [ '$(nix_rebuild)' = '1' ]; then \
+	  echo "Running checks with rebuild"; \
+	fi; \
 	schedule=$$($(check_memory_cmd)) || exit 1; \
 	if [ -z "$$schedule" ]; then echo "this flake defines no checks" >&2; exit 1; fi; \
 	rm -rf "$(check_out_dir)"; mkdir -p "$(check_out_dir)"; \
@@ -427,7 +432,17 @@ checks:
 	  name="$$1"; log="$(check_out_dir)/$$name.log"; started=$$SECONDS; \
 	  if nix build $(nix_flags) ".#checks.$(architecture)-linux.$$name" \
 	      --no-link --print-build-logs --cores $(check_cores) --timeout $(check_timeout) > "$$log" 2>&1 < /dev/null; then \
-	    result=pass; status=0; \
+	    if [ '$(nix_rebuild)' = '1' ]; then \
+	      printf '\n=== that was the first build of this check; running it again ===\n\n' > "$$log"; \
+	      if nix build $(nix_flags) ".#checks.$(architecture)-linux.$$name" \
+	          --no-link --print-build-logs --cores $(check_cores) --timeout $(check_timeout) --rebuild > "$$log" 2>&1 < /dev/null; then \
+	        result=pass; status=0; \
+	      else \
+	        status=$$?; result=fail; \
+	      fi; \
+	    else \
+	      result=pass; status=0; \
+	    fi; \
 	  else \
 	    status=$$?; result=fail; \
 	  fi; \
