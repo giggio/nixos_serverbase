@@ -94,9 +94,10 @@ in
 
     with subtest("a session opened with an authorized key gets a private gnupg runtime directory"):
         machine.succeed("install -m 0600 ${snakeOilEd25519PrivateKey} /root/snakeoil-key")
-        # BatchMode so that a rejected key fails outright instead of stalling on a password prompt
+        # BatchMode so that a rejected key fails outright instead of stalling on a password prompt. -n because ssh would
+        # otherwise take the driver's shell stream as its stdin, and the driver then waits forever on this command.
         machine.succeed(
-            "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+            "ssh -n -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
             " -o BatchMode=yes -o ConnectTimeout=10"
             " -i /root/snakeoil-key ${user}@localhost true"
         )
