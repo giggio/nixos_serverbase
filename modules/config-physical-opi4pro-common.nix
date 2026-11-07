@@ -605,7 +605,7 @@ let
   # To move on, set kernelStableVersion and its hash from https://cdn.kernel.org/pub/linux/kernel/v6.x/sha256sums.asc
   # (`nix hash convert --hash-algo sha256 --to sri <hex>`). kernelStableBase only moves with the vendor tree's SUBLEVEL.
   kernelStableBase = "6.6.98";
-  kernelStableVersion = "6.6.160";
+  kernelStableVersion = "6.6.161";
   kernelOrgTarball =
     version: hash:
     bootchainPkgs.fetchurl {
@@ -615,7 +615,7 @@ let
 
   # What the diff leaves out: tools/ and Documentation/ are not built; drivers/net/phy/motorcomm.c is the vendor's own driver
   # (the one the board's YT8531 PHY binds to), a replacement of upstream's, so stable's hunks for it cannot apply - and the
-  # stable change to that file up to 6.6.160 is a conversion from of_property_* to device_property_*, not a fix.
+  # stable change to that file up to 6.6.161 is a conversion from of_property_* to device_property_*, not a fix.
   # --no-dereference keeps diff from following the symlinks under scripts/dtc/include-prefixes, which would put every
   # device-tree hunk in twice. Anything diff cannot express as a hunk (a binary file, a symlink that changed, a file that
   # became a directory) fails the build here, instead of being dropped in silence.
@@ -623,7 +623,7 @@ let
     bootchainPkgs.buildPackages.runCommand "linux-${kernelStableBase}-to-${kernelStableVersion}.patch"
       {
         base = kernelOrgTarball kernelStableBase "sha256-KWo0xQCrwixDS5Z9Rx11VoiR8GqY8R/DHF55sDf0XeU=";
-        target = kernelOrgTarball kernelStableVersion "sha256-skxAqeIYhpWAM1hWft2lHECAF2QkpX2+/KReWsROwiU=";
+        target = kernelOrgTarball kernelStableVersion "sha256-fTRAW+XNSYmypenL76eY46F1IYkBJx4DSvP+ToQLccY=";
         nativeBuildInputs = [ bootchainPkgs.buildPackages.patchutils ];
       }
       ''
