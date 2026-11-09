@@ -605,7 +605,7 @@ let
   # To move on, set kernelStableVersion and its hash from https://cdn.kernel.org/pub/linux/kernel/v6.x/sha256sums.asc
   # (`nix hash convert --hash-algo sha256 --to sri <hex>`). kernelStableBase only moves with the vendor tree's SUBLEVEL.
   kernelStableBase = "6.6.98";
-  kernelStableVersion = "6.6.161";
+  kernelStableVersion = "6.6.162";
   kernelOrgTarball =
     version: hash:
     bootchainPkgs.fetchurl {
@@ -623,7 +623,7 @@ let
     bootchainPkgs.buildPackages.runCommand "linux-${kernelStableBase}-to-${kernelStableVersion}.patch"
       {
         base = kernelOrgTarball kernelStableBase "sha256-KWo0xQCrwixDS5Z9Rx11VoiR8GqY8R/DHF55sDf0XeU=";
-        target = kernelOrgTarball kernelStableVersion "sha256-fTRAW+XNSYmypenL76eY46F1IYkBJx4DSvP+ToQLccY=";
+        target = kernelOrgTarball kernelStableVersion "sha256-SqifNlL8Ex5dOZkPO81LnhMQKK8/MV2+g/OoVX3AbwY=";
         nativeBuildInputs = [ bootchainPkgs.buildPackages.patchutils ];
       }
       ''
