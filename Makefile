@@ -587,6 +587,11 @@ $(cache_machines): cache_%:
 ## step fails. Serial on purpose: these are evaluations and uploads, not builds, so there is nothing to overlap.
 cache_systems: $(cache_machines)
 
+.PHONY: update_kernel_stable
+## Moves the opi4pro kernel's 6.6 stable pin (version and hash) to kernel.org's newest release, if there is one
+update_kernel_stable:
+	$(serverbase_dir)scripts/update-kernel-stable.sh $(serverbase_dir)modules/config-physical-opi4pro-common.nix
+
 ## Default target (do not use)
 default:
 	@echo "no default target"
