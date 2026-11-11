@@ -59,6 +59,8 @@ let
       hostName,
       bindState,
       createOnBoot ? false,
+      # Each specialisation is one more whole system to evaluate, so only the node that switches to it carries it.
+      withRespec ? false,
     }:
     { nodes, lib, ... }:
     {
@@ -181,16 +183,18 @@ let
       # A configuration whose only difference is a unit named in `paths`: the table the scripts carry changes, so
       # the unlock unit's scripts change, which is what a rename of a container's unit does on gmktec1. The last
       # subtest switches to it with the container open.
-      specialisation.respec.configuration = {
-        setup.encryptedState.paths."${statePath}" = lib.mkForce [
-          "testapp.service"
-          "renamed.service"
-        ];
-        systemd.services.renamed = {
-          serviceConfig = {
-            Type = "oneshot";
-            RemainAfterExit = true;
-            ExecStart = "${pkgs.coreutils}/bin/true";
+      specialisation = lib.mkIf withRespec {
+        respec.configuration = {
+          setup.encryptedState.paths."${statePath}" = lib.mkForce [
+            "testapp.service"
+            "renamed.service"
+          ];
+          systemd.services.renamed = {
+            serviceConfig = {
+              Type = "oneshot";
+              RemainAfterExit = true;
+              ExecStart = "${pkgs.coreutils}/bin/true";
+            };
           };
         };
       };
@@ -237,6 +241,7 @@ in
       # working before the container exists at all, which is the state a key-server outage puts the machine into
       # and therefore the one worth asserting. `phase1` covers the sequence an operator actually types.
       bindState = true;
+      withRespec = true;
     };
 
     # The documented phase-1 machine: container enabled, nothing bound yet. It exists because both nodes here used

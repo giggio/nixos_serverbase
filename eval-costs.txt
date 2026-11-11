@@ -9,7 +9,7 @@ checks.x86_64-linux.boot-test 1189
 checks.x86_64-linux.clevis-unlock 1942
 checks.x86_64-linux.clone-config 3110
 checks.x86_64-linux.custom-packages 193
-checks.x86_64-linux.encrypted-state 5214
+checks.x86_64-linux.encrypted-state 3722
 checks.x86_64-linux.encrypted-state-integrity 1941
 checks.x86_64-linux.firewall-fallback 1451
 checks.x86_64-linux.flake-matrix 416
