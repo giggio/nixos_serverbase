@@ -83,11 +83,9 @@ check_memory ?= $(shell { cat /proc/meminfo; \
 # else is running, so the floor is serial, which is the most a host that small can do anyway.
 check_reserve ?= 1536
 
-# What one check costs on top of its guests, in MiB. Each one runs its own `nix build`, which evaluates this flake -
-# the machine configurations included - before it starts a VM, and then stays resident for as long as the VM runs.
-# Measured with `/usr/bin/time -v nix eval --no-eval-cache ...drvPath` over a spread of checks: 0.9G for the
-# cheapest, 1.3G for gmktec1-nextcloud. This is not a rounding error next to a 1G guest, and it is the process the
-# OOM killer actually picked every time in the run above, qemu having faulted in only part of what it asked for.
+# What one running check is charged on top of its guests, in MiB: what qemu and the test driver take outside the
+# guests' own memory, the shared memory of the test's state directory included. Not its evaluator, which `checks`
+# runs first and lets exit. It is also what `dirty_checks` charges for an evaluator.
 check_overhead ?= 1024
 
 # What an evaluator is charged when nothing has measured it, in MiB - deliberately NOT $(check_overhead), which is a
@@ -142,6 +140,7 @@ eval_jobs ?= $(shell nproc)
 check_cores ?= 1
 
 nix_rebuild = 0
+use_plans ?= 0
 
 # Wall clock per check, in seconds. The in-driver watchdog (tests/lib/diagnostics.nix) catches a driver that stops
 # making progress, but nothing there catches a guest that keeps answering while getting nowhere, or a build that never
@@ -168,16 +167,51 @@ nix_flags ?=
 
 check_names_cmd = nix eval $(nix_flags) --raw --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrNames cs)' .\#checks.$(architecture)-linux
 
-# `<name> <MiB>` per check, for the scheduler in `checks`. A nixosTest carries its nodes on the derivation it
-# produces, so what a check will ask qemu for is readable without building anything; a check that is a plain
-# derivation has no `nodes` and boots nothing, and is charged $(check_overhead) alone. One evaluation answers for
-# every check at once, which is the only reason this is affordable - it costs about what one check's own `nix build`
-# spends evaluating, and it is paid before any VM starts, so it contends with nothing.
+# `<MiB> <drv>` for the check at attribute $(1), for the scheduler in `checks`. A nixosTest carries its nodes on the
+# derivation it produces, so what a check will ask qemu for is readable without building anything; a check that is a
+# plain derivation has no `nodes` and boots nothing, and is charged $(check_overhead) alone.
+#
+# One process per check, like `eval` and for the same reason: a single evaluation over the whole attribute set holds
+# every check's nodes live at once, and with the superproject's 72 checks that is more than 6G. This one evaluation is
+# also the only one the check gets: `checks` builds the .drv it printed.
 #
 # A node's options are read off the node itself. The `node.config` that also resolves is the compatibility attribute
-# the test framework keeps for pre-22.11 tests, and touching it prints a deprecation warning per node - which here
-# means one for every node of every check, ahead of every `make checks` run.
-check_memory_cmd = nix eval $(nix_flags) --raw --apply 'cs: builtins.concatStringsSep "\n" (builtins.attrValues (builtins.mapAttrs (name: check: name + " " + builtins.toString (if check ? nodes then builtins.foldl'\'' (total: node: total + node.virtualisation.memorySize) 0 (builtins.attrValues check.nodes) else 0)) cs))' .\#checks.$(architecture)-linux
+# the test framework keeps for pre-22.11 tests, and touching it prints a deprecation warning per node.
+check_plan_cmd = nix eval $(nix_flags) --raw --apply 'check: builtins.toString (if check ? nodes then builtins.foldl'\'' (total: node: total + node.virtualisation.memorySize) 0 (builtins.attrValues check.nodes) else 0) + " " + check.drvPath' ".\#$(1)"
+
+# The two halves of building check $(1) without an evaluator resident while its VMs run: the evaluator prints the
+# .drv and exits, and the build takes a store path. The caller appends the build's remaining flags.
+check_drv_cmd = nix eval $(nix_flags) --raw ".\#checks.$(architecture)-linux.$(1).drvPath"
+check_build = nix build "$(1)^*" --no-link --cores $(check_cores) --timeout $(check_timeout)
+
+# Reads attribute paths and appends what each costs to evaluate, in MiB, and where the number came from: measured in
+# $(eval_costs_file) plus $(eval_cost_margin), or assumed at $(eval_overhead).
+eval_costs_awk = awk -v costs="$(eval_costs_file)" -v fallback=$(eval_overhead) -v margin=$(eval_cost_margin) ' \
+  BEGIN { while ((getline line < costs) > 0) { split(line, f, " "); if (f[1] != "") cost[f[1]] = f[2] } } \
+  { if ($$0 in cost) print $$0, int(cost[$$0] * (100 + margin) / 100), "measured"; \
+    else print $$0, fallback, "assumed" }'
+
+# The scheduler of `eval` and `checks`, a bash function: reads `<name> <cost> [arguments]` lines and runs
+# `$1 <name> [arguments]` for each in the background, at most $2 at a time and within $3 MiB, then waits for them all.
+# A bin-packing loop rather than `xargs -P` because the second bound is a weight, not a count: a slot has to be given
+# back with the size of what was in it, which is what the pid-to-cost map and `wait -n -p` are for. A job bigger than
+# the whole budget would otherwise never be startable, so the memory bound is skipped when nothing else is running.
+define pack_jobs
+pack_jobs() { \
+  local run=$$1 jobs=$$2 budget=$$3 used=0 name cost arguments finished; local -A running; \
+  while read -r name cost arguments; do \
+    while [ $${#running[@]} -ge "$$jobs" ] \
+       || { [ $${#running[@]} -gt 0 ] && [ $$((used + cost)) -gt "$$budget" ]; }; do \
+      wait -n -p finished; \
+      used=$$((used - running[$$finished])); \
+      unset "running[$$finished]"; \
+    done; \
+    $$run "$$name" $$arguments & \
+    running[$$!]=$$cost; used=$$((used + cost)); \
+  done; \
+  wait; \
+}
+endef
 
 # Drops the architecture-free aliases from a set of attribute names, leaving one name per derivation.
 #
@@ -270,8 +304,8 @@ list_checks:
 # outright on the box that runs CI, which had 8G then and has 16G now - still short of it. `make eval` died with
 # `Error 137` there while passing here.
 #
-# Scheduled by the same bin-packing loop as `checks`, and for the same reason: the bound that binds is a weight, not
-# a count, so a slot has to be given back with the size of what was in it. It used to be a flat `xargs -P N` with N
+# Scheduled by $(pack_jobs), the bin-packing loop `checks` uses, and for the same reason: the bound that binds is a
+# weight, not a count. It used to be a flat `xargs -P N` with N
 # derived from the WORST attribute's cost, and that is a different thing than it sounds - it does not run N average
 # attributes, it runs however many the most expensive one would allow. With four ISOs at ~2.9G setting the price and
 # a mean of 1.03G, CI's 4G kata guest bought exactly one evaluator and ran all 93 in series, which is how this target
@@ -323,10 +357,7 @@ eval:
 	  printf 'checks.$(architecture)-linux.%s\n' $$checks; \
 	  printf 'packages.$(architecture)-linux.%s\n' $$packages; \
 	} | { if [ -n '$(eval_skip)' ]; then grep -Ev '$(eval_skip)'; else cat; fi; } \
-	  | awk -v costs="$(eval_costs_file)" -v fallback=$(eval_overhead) -v margin=$(eval_cost_margin) ' \
-	  BEGIN { while ((getline line < costs) > 0) { split(line, f, " "); if (f[1] != "") cost[f[1]] = f[2] } } \
-	  { if ($$0 in cost) print $$0, int(cost[$$0] * (100 + margin) / 100), "measured"; \
-	    else print $$0, fallback, "assumed" }'); \
+	  | $(eval_costs_awk)); \
 	budget=$(check_memory); \
 	total=$$(printf '%s\n' "$$schedule" | wc -l); \
 	measured=$$(printf '%s\n' "$$schedule" | grep -c ' measured$$' || true); \
@@ -347,18 +378,8 @@ eval:
 	  fi; \
 	  return 0; \
 	}; \
-	declare -A running_cost; used=0; \
-	while read -r attribute cost _; do \
-	  while [ $${#running_cost[@]} -ge $(eval_jobs) ] \
-	     || { [ $${#running_cost[@]} -gt 0 ] && [ $$((used + cost)) -gt $$budget ]; }; do \
-	    wait -n -p finished; \
-	    used=$$((used - running_cost[$$finished])); \
-	    unset "running_cost[$$finished]"; \
-	  done; \
-	  eval_one "$$attribute" & \
-	  running_cost[$$!]=$$cost; used=$$((used + cost)); \
-	done < <(printf '%s\n' "$$schedule" | sort -k2,2nr -k1,1); \
-	wait; \
+	$(pack_jobs); \
+	pack_jobs eval_one $(eval_jobs) "$$budget" < <(printf '%s\n' "$$schedule" | sort -k2,2nr -k1,1 | cut -d' ' -f1,2); \
 	if [ -s "$$failed" ]; then \
 	  echo; echo "$$(wc -l < "$$failed") of $$total attributes failed to evaluate:" >&2; \
 	  sed 's/^/  /' "$$failed" >&2; rm -f "$$failed"; exit 1; \
@@ -405,12 +426,11 @@ eval_costs:
 # Run like this to use every core, on a machine with the memory to back it:
 # make checks check_jobs=$(nproc) check_cores=1 check_memory=$$((64 * 1024))
 #
-# The scheduler is a bin-packing loop rather than `xargs -P` because the second bound is a weight, not a count: a slot
-# has to be given back with the size of the check that was in it, which is what the pid-to-cost map and `wait -n -p`
-# are for. Largest first, so the big checks pack around the small ones instead of the small ones finishing early and
-# leaving the biggest to run against a full budget at the end. A check bigger than the whole budget would otherwise
-# never be startable, so the memory bound is skipped when nothing else is running - it runs alone, which is the most
-# the host can do for it anyway.
+# Two passes, so that no evaluator is resident while a VM runs. The first evaluates every check, one process each,
+# packed by what $(eval_costs_file) says an evaluation costs, and leaves `<MiB> <drv>` in the check's .plan file. The
+# second builds those .drv files, packed by the guests' memory. A check that does not evaluate fails in the first
+# pass, with the evaluator's error as its log. Both passes take the largest first, so the big ones pack around the
+# small ones instead of being left to run against a full budget at the end.
 ## Runs every check, as many at a time as check_jobs and check_memory allow, each into its own log, then prints a
 ## pass/fail table
 checks:
@@ -418,57 +438,56 @@ checks:
 	if [ '$(nix_rebuild)' = '1' ]; then \
 	  echo "Running checks with rebuild"; \
 	fi; \
-	schedule=$$($(check_memory_cmd)) || exit 1; \
-	if [ -z "$$schedule" ]; then echo "this flake defines no checks" >&2; exit 1; fi; \
+	names=$$($(check_names_cmd)) || exit 1; \
+	if [ -z "$$names" ]; then echo "this flake defines no checks" >&2; exit 1; fi; \
 	rm -rf "$(check_out_dir)"; mkdir -p "$(check_out_dir)"; \
-	checks_total=$$(printf '%s\n' "$$schedule" | wc -l); budget=$(check_memory); \
-	echo "running $$checks_total checks, up to $(check_jobs) at a time within $$budget MiB; logs in $(check_out_dir)/"; \
-	alone=$$(printf '%s\n' "$$schedule" | awk -v overhead=$(check_overhead) -v budget="$$budget" '$$2 + overhead > budget { n++ } END { print n + 0 }'); \
-	if [ "$$alone" -gt 0 ]; then \
-	  echo "  $$alone of them cost more than that on their own and will run alone; if any is killed, this host is too small for it"; \
-	fi; \
-	echo; \
-	run_check() { \
-	  name="$$1"; log="$(check_out_dir)/$$name.log"; started=$$SECONDS; \
-	  if nix build $(nix_flags) ".#checks.$(architecture)-linux.$$name" \
-	      --no-link --print-build-logs --cores $(check_cores) --timeout $(check_timeout) > "$$log" 2>&1 < /dev/null; then \
-	    if [ '$(nix_rebuild)' = '1' ]; then \
-	      printf '\n=== that was the first build of this check; running it again ===\n\n' > "$$log"; \
-	      if nix build $(nix_flags) ".#checks.$(architecture)-linux.$$name" \
-	          --no-link --print-build-logs --cores $(check_cores) --timeout $(check_timeout) --rebuild > "$$log" 2>&1 < /dev/null; then \
-	        result=pass; status=0; \
-	      else \
-	        status=$$?; result=fail; \
-	      fi; \
-	    else \
-	      result=pass; status=0; \
-	    fi; \
-	  else \
-	    status=$$?; result=fail; \
-	  fi; \
-	  elapsed=$$((SECONDS - started)); \
+	checks_total=$$(echo $$names | wc -w); budget=$(check_memory); \
+	finish_check() { \
+	  local name=$$1 result=$$2 elapsed=$$3 status=$$4 done_so_far; \
 	  printf '%s %s %s\n' "$$result" "$$elapsed" "$$status" > "$(check_out_dir)/$$name.result"; \
 	  done_so_far=$$(ls "$(check_out_dir)"/*.result | wc -l); \
 	  if [ "$$result" = pass ]; then \
 	    printf '[%2s/%2s] \033[32mpass\033[0m  %s (%ss)\n' "$$done_so_far" "$$checks_total" "$$name" "$$elapsed"; \
 	  else \
 	    printf '[%2s/%2s] \033[31mFAIL\033[0m  %s (%ss)  %s\n' \
-	      "$$done_so_far" "$$checks_total" "$$name" "$$elapsed" "$$log"; \
+	      "$$done_so_far" "$$checks_total" "$$name" "$$elapsed" "$(check_out_dir)/$$name.log"; \
 	  fi; \
 	}; \
-	declare -A running_memory; used=0; \
-	while read -r name memory; do \
-	  memory=$$((memory + $(check_overhead))); \
-	  while [ $${#running_memory[@]} -ge $(check_jobs) ] \
-	     || { [ $${#running_memory[@]} -gt 0 ] && [ $$((used + memory)) -gt $$budget ]; }; do \
-	    wait -n -p finished; \
-	    used=$$((used - running_memory[$$finished])); \
-	    unset "running_memory[$$finished]"; \
-	  done; \
-	  run_check "$$name" & \
-	  running_memory[$$!]=$$memory; used=$$((used + memory)); \
-	done < <(printf '%s\n' "$$schedule" | sort -k2,2nr -k1,1); \
-	wait; \
+	plan_check() { \
+	  local name=$${1##*.} started=$$SECONDS plan status; \
+	  if plan=$$($(call check_plan_cmd,$$1) 2> "$(check_out_dir)/$$name.log"); then \
+	    echo "$$plan" > "$(check_out_dir)/$$name.plan"; \
+	  else \
+	    status=$$?; finish_check "$$name" fail $$((SECONDS - started)) "$$status"; \
+	  fi; \
+	}; \
+	run_check() { \
+	  local name=$$1 drv=$$2 log="$(check_out_dir)/$$1.log" started=$$SECONDS result=pass status=0; \
+	  $(call check_build,$$drv) --print-build-logs > "$$log" 2>&1 < /dev/null || { status=$$?; result=fail; }; \
+	  if [ "$$result" = pass ] && [ '$(nix_rebuild)' = '1' ]; then \
+	    printf '\n=== that was the first build of this check; running it again ===\n\n' >> "$$log"; \
+	    $(call check_build,$$drv) --print-build-logs --rebuild >> "$$log" 2>&1 < /dev/null || { status=$$?; result=fail; }; \
+	  fi; \
+	  finish_check "$$name" "$$result" $$((SECONDS - started)) "$$status"; \
+	}; \
+	$(pack_jobs); \
+	echo "evaluating $$checks_total checks, up to $(eval_jobs) at a time within $$budget MiB"; \
+	pack_jobs plan_check $(eval_jobs) "$$budget" < <(printf 'checks.$(architecture)-linux.%s\n' $$names \
+	  | $(eval_costs_awk) | sort -k2,2nr -k1,1 | cut -d' ' -f1,2); \
+	schedule=$$(for plan in "$(check_out_dir)"/*.plan; do \
+	  [ -r "$$plan" ] || continue; \
+	  read -r memory drv < "$$plan"; \
+	  echo "$$(basename "$$plan" .plan) $$((memory + $(check_overhead))) $$drv"; \
+	done); \
+	if [ -n "$$schedule" ]; then \
+	  echo "running $$(printf '%s\n' "$$schedule" | wc -l) checks, up to $(check_jobs) at a time within $$budget MiB; logs in $(check_out_dir)/"; \
+	  alone=$$(printf '%s\n' "$$schedule" | awk -v budget="$$budget" '$$2 > budget { n++ } END { print n + 0 }'); \
+	  if [ "$$alone" -gt 0 ]; then \
+	    echo "  $$alone of them cost more than that on their own and will run alone; if any is killed, this host is too small for it"; \
+	  fi; \
+	  echo; \
+	  pack_jobs run_check $(check_jobs) "$$budget" < <(printf '%s\n' "$$schedule" | sort -k2,2nr -k1,1); \
+	fi; \
 	$(checks_report_body)
 
 ## Reprints the table from the last `make checks`, without building anything
@@ -479,8 +498,8 @@ checks_report:
 check_%:
 	@mkdir -p "$(check_out_dir)"
 	@set -o pipefail; \
-	nix build $(nix_flags) ".#checks.$(architecture)-linux.$*" \
-	  --no-link --print-build-logs --cores $(check_cores) --timeout $(check_timeout) 2>&1 | tee "$(check_out_dir)/$*.log"
+	{ drv=$$($(call check_drv_cmd,$*)) && $(call check_build,$$drv) --print-build-logs; } 2>&1 \
+	  | tee "$(check_out_dir)/$*.log"
 
 # A check that has passed once is a realised store path, so every later `nix build` of it is a no-op that prints
 # nothing and exits 0. That is what makes a suite cheap to re-run, and it also means a check cannot be run twice to
@@ -490,12 +509,11 @@ recheck_%:
 	@mkdir -p "$(check_out_dir)"
 	@set -o pipefail; \
 	{ \
-	  nix build $(nix_flags) ".#checks.$(architecture)-linux.$*" --no-link --print-build-logs \
-	    --cores $(check_cores) --timeout $(check_timeout) 2>&1 \
+	  drv=$$($(call check_drv_cmd,$*)) \
+	  && $(call check_build,$$drv) --print-build-logs \
 	  && printf '\n=== that was the first build of this check; running it again ===\n\n' \
-	  && nix build $(nix_flags) ".#checks.$(architecture)-linux.$*" --no-link --print-build-logs --rebuild \
-	    --cores $(check_cores) --timeout $(check_timeout) 2>&1; \
-	} | tee "$(check_out_dir)/$*.log"
+	  && $(call check_build,$$drv) --print-build-logs --rebuild; \
+	} 2>&1 | tee "$(check_out_dir)/$*.log"
 
 # Same run as `checks`, under a name meant for a crontab or systemd timer rather than a terminal: it is the full
 # sweep that catches whatever a per-push run of just the affected checks (see `dirty_checks`) could miss - a check
@@ -536,6 +554,9 @@ dirty_checks:
 	printf '%s\n' $$names | xargs -P $(dirty_jobs) -n1 $(SHELL) -c 'report "$$0"'
 
 ## Pushes one check's result to the cache, e.g. `make cache_check_gmktec1-boot` - builds it first if needed
+# Evaluates the check as it is now, unless `use_plans=1`, which `cache_checks` passes: then it takes the .drv from the
+# plan the last `make checks` left, so pushing what that run built costs no second evaluation. A plan outlives edits
+# to the tree, so it is only read when asked for.
 # stderr is sent to its own log, same as `checks` does per-check, not to $$log - this recipe's stdout is
 # the store path piped into `attic push`, so 2>&1 here would corrupt that stream. It is mainly nix's
 # eval-cache SQLite chatter (harmless under xargs -P: N parallel `nix build`s share one eval-cache file
@@ -545,13 +566,15 @@ dirty_checks:
 cache_check_%:
 	@echo -e "Pushing cache for check \e[32m$*\e[0m"
 	@mkdir -p "$(check_out_dir)"
-	nix build $(nix_flags) ".#checks.$(architecture)-linux.$*" --no-link --print-out-paths --cores $(check_cores) --timeout $(check_timeout) 2>"$(check_out_dir)/cache_$*.log" | attic push servers --stdin
+	@set -o pipefail; plan="$(check_out_dir)/$*.plan"; \
+	if [ '$(use_plans)' = 1 ] && [ -r "$$plan" ]; then read -r _ drv < "$$plan"; else drv=$$($(call check_drv_cmd,$*)) || exit 1; fi; \
+	$(call check_build,$$drv) --print-out-paths 2>"$(check_out_dir)/cache_$*.log" | attic push servers --stdin
 
 ## Pushes every check's result to the cache, check_jobs at a time - so a later run elsewhere can substitute instead
-## of re-running a check nothing has invalidated
+## of re-running a check nothing has invalidated. Pushes what the last `make checks` built, when it left plans.
 cache_checks:
 	@names=$$($(check_names_cmd)) || exit 1; \
-	printf '%s\n' $$names | xargs -P $(check_jobs) -I{} $(MAKE) --no-print-directory cache_check_{}
+	printf '%s\n' $$names | xargs -P $(check_jobs) -I{} $(MAKE) --no-print-directory use_plans=1 cache_check_{}
 
 # The table, and for every check that failed the lines that say why. A log path on its own is traceability only in the
 # sense that the evidence exists somewhere; lifting the driver's `!!!` lines and nix's `error:` lines into the summary
