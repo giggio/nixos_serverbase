@@ -76,7 +76,12 @@
         config.allowUnfree = false;
       };
       base =
-        { lib, utils, ... }:
+        {
+          config,
+          lib,
+          utils,
+          ...
+        }:
         {
           imports = serverbaseModules.default;
           _module.args = {
@@ -95,6 +100,13 @@
               enable = lib.mkDefault false;
               useCredentials = lib.mkDefault false;
             };
+          };
+          # For the tang fixtures. Every tangd@ instance shares RuntimeDirectory=tang, and systemd removes it when any
+          # instance stops, so a connection arriving as another one ends fails with 226/NAMESPACE on /run/tang; on a
+          # loaded VM that was 655 of 4800 requests. The real key server is not NixOS, so only the fixtures need it.
+          # todo: remove when nixpkgs' tangd@ stops sharing one RuntimeDirectory across its instances
+          systemd.services."tangd@" = lib.mkIf config.services.tang.enable {
+            serviceConfig.RuntimeDirectoryPreserve = true;
           };
         };
       machine =
