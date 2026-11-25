@@ -605,7 +605,7 @@ let
   # To move on, set kernelStableVersion and its hash from https://cdn.kernel.org/pub/linux/kernel/v6.x/sha256sums.asc
   # (`nix hash convert --hash-algo sha256 --to sri <hex>`). kernelStableBase only moves with the vendor tree's SUBLEVEL.
   kernelStableBase = "6.6.98";
-  kernelStableVersion = "6.6.162";
+  kernelStableVersion = "6.6.163";
   kernelOrgTarball =
     version: hash:
     bootchainPkgs.fetchurl {
@@ -623,7 +623,7 @@ let
     bootchainPkgs.buildPackages.runCommand "linux-${kernelStableBase}-to-${kernelStableVersion}.patch"
       {
         base = kernelOrgTarball kernelStableBase "sha256-KWo0xQCrwixDS5Z9Rx11VoiR8GqY8R/DHF55sDf0XeU=";
-        target = kernelOrgTarball kernelStableVersion "sha256-SqifNlL8Ex5dOZkPO81LnhMQKK8/MV2+g/OoVX3AbwY=";
+        target = kernelOrgTarball kernelStableVersion "sha256-CMpX7mFHFJWP/GqmRR40+5b8OYAB5+Fv9/xtv8y5Rog=";
         nativeBuildInputs = [ bootchainPkgs.buildPackages.patchutils ];
       }
       ''
@@ -807,6 +807,10 @@ let
           {
             name = "bsp-cpufreq-exit-returns-void-6.6.160";
             patch = ./opi4pro-kernel-patches/bsp-cpufreq-exit-returns-void-6.6.160.patch;
+          }
+          {
+            name = "bsp-power-supply-dev-of-node-6.6.163";
+            patch = ./opi4pro-kernel-patches/bsp-power-supply-dev-of-node-6.6.163.patch;
           }
         ];
       extraMeta.branch = "6.6";

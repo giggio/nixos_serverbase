@@ -11,7 +11,7 @@
     # touching the kernel config/patches - i.e. when a rebuild is happening anyway, and knowing that bumping it costs one full
     # rebuild of both kernels. There is no security argument for bumping it on its own: nothing here links against the pinned
     # userland, and the kernel sources themselves come from nixos-hardware and the vendor repos, which are not pinned to it.
-    nixpkgs-bootchain.url = "github:nixos/nixpkgs/8623c4c20aa4ca2f5fb81510d2944066c3fb0d96"; # nixos-26.05, 2026-07-26
+    nixpkgs-bootchain.url = "github:nixos/nixpkgs/0dc498bfe49baeb18b0f9891e800b53bb2603193"; # nixos-26.05, 2026-11-24
     # No home-manager input: the servers use the one home-manager-config pins, see modules/serverbase/home/hm-inputs.nix
     nixos-hardware.url = "github:NixOS/nixos-hardware/master";
     sops-nix = {

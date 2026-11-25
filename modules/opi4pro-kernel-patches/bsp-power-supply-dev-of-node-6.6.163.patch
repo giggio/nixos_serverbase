@@ -1,0 +1,73 @@
+The vendor's power drivers read the device-tree node of a power supply from its of_node field. Upstream removed that
+field, since the same node is already in its dev.of_node ("power: supply: core: get rid of of_node", 134254038739),
+and the 6.6 stable line took it in 6.6.163 as a dependency of "power: supply: core: Honor supplied-from with
+CONFIG_OF=y". This reads dev.of_node instead, in the four drivers this config builds and in the two typec ones it
+does not, so enabling those later does not break the build again.
+todo: remove when the vendor tree is based on 6.6.163 or later and carries this itself.
+
+--- a/bsp/drivers/power/supply/sunxi_usb_power.c
++++ b/bsp/drivers/power/supply/sunxi_usb_power.c
+@@ -295,7 +295,7 @@
+ 
+ 	memset(&gpio_para, 0, sizeof(gpio_para));
+ 
+-	gpio_para.gpio = of_get_named_gpio(psy->of_node, gpio_name, 0);
++	gpio_para.gpio = of_get_named_gpio(psy->dev.of_node, gpio_name, 0);
+ 	if (gpio_para.gpio < 0) {
+ 		PMIC_INFO("%s not detected\n", gpio_name);
+ 		return 0;
+--- a/bsp/drivers/power/supply/sunxi_usb_power_limit.c
++++ b/bsp/drivers/power/supply/sunxi_usb_power_limit.c
+@@ -825,7 +825,7 @@
+ 
+ 	psy = power_limit->power_psy[SUNXI_SUPPLY_LIST_USB_POWER].psy;
+ 
+-	np = of_parse_phandle(psy->of_node, "det_usb_supply", 0);
++	np = of_parse_phandle(psy->dev.of_node, "det_usb_supply", 0);
+ 	if (np) {
+ 		ret = sunxi_usb_power_limit_dt_parse(np, power_limit_config);
+ 		if (ret) {
+--- a/bsp/drivers/power/temp_ctrl/sunxi_power_temp_ctrl.c
++++ b/bsp/drivers/power/temp_ctrl/sunxi_power_temp_ctrl.c
+@@ -70,7 +70,7 @@
+ int sunxi_power_register_cooler(struct power_supply *psy)
+ {
+ 	psy->tcd = devm_thermal_of_cooling_device_register(&psy->dev,
+-		psy->of_node, (char *)psy->desc->name, psy, &psy_tcd_ops);
++		psy->dev.of_node, (char *)psy->desc->name, psy, &psy_tcd_ops);
+ 
+ 	return PTR_ERR_OR_ZERO(psy->tcd);
+ }
+--- a/bsp/drivers/power/typec/tcpci_husb311.c
++++ b/bsp/drivers/power/typec/tcpci_husb311.c
+@@ -410,7 +410,7 @@
+ 	np = of_parse_phandle(chip->dev->of_node, "det_usb_supply", 0);
+ 	if (np) {
+ 		if (of_property_read_u32(np, "pmu_usbad_cur", &pmu_usbad_cur)) {
+-			np = of_parse_phandle(chip->usb_psy->of_node, "det_usb_supply", 0);
++			np = of_parse_phandle(chip->usb_psy->dev.of_node, "det_usb_supply", 0);
+ 			if (np) {
+ 				if (of_property_read_u32(np, "pmu_usbad_cur", &pmu_usbad_cur))
+ 					pmu_usbad_cur = 0;
+--- a/bsp/drivers/power/typec/sunxi_tcpci/tcpci_axp517.c
++++ b/bsp/drivers/power/typec/sunxi_tcpci/tcpci_axp517.c
+@@ -450,7 +450,7 @@
+ 		np = of_parse_phandle(chip->dev->of_node, "det_usb_supply", 0);
+ 		if (np) {
+ 			if (of_property_read_u32(np, "pmu_usbad_cur", &pmu_usbad_cur)) {
+-				np = of_parse_phandle(chip->usb_psy->of_node, "det_usb_supply", 0);
++				np = of_parse_phandle(chip->usb_psy->dev.of_node, "det_usb_supply", 0);
+ 				if (np) {
+ 					if (of_property_read_u32(np, "pmu_usbad_cur", &pmu_usbad_cur))
+ 						pmu_usbad_cur = 0;
+--- a/bsp/drivers/power/typec/sunxi_cc_logic/sunxi_cc_logic.c
++++ b/bsp/drivers/power/typec/sunxi_cc_logic/sunxi_cc_logic.c
+@@ -763,7 +763,7 @@
+ 			if (IS_ERR_OR_NULL(port->usb_power_psy))
+ 				return -EPROBE_DEFER;
+ 			PMIC_INFO("get det_usb_supply\n");
+-			np = of_parse_phandle(port->usb_power_psy->of_node, "det_usb_supply", 0);
++			np = of_parse_phandle(port->usb_power_psy->dev.of_node, "det_usb_supply", 0);
+ 			if (!of_property_read_bool(np, "pmu_usb_typec_used")) {
+ 				PMIC_ERR("no used type-c device\n");
+ 				return -ENODEV;
