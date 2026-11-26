@@ -362,7 +362,7 @@ eval:
 	total=$$(printf '%s\n' "$$schedule" | wc -l); \
 	measured=$$(printf '%s\n' "$$schedule" | grep -c ' measured$$' || true); \
 	echo "evaluating $$(echo $$machines | wc -w) machines, $$(echo $$checks | wc -w) checks and $$(echo $$packages | wc -w) packages,"; \
-	echo "  up to $(eval_jobs) at a time within $$budget MiB; $$measured of $$total costed from $(eval_costs_file), the rest charged $(eval_overhead)"; \
+	echo "  up to $(eval_jobs) at a time (eval_jobs) within $$budget MiB; $$measured of $$total costed from $(eval_costs_file), the rest charged $(eval_overhead)"; \
 	if [ -n '$(eval_skip)' ]; then echo "  leaving out everything matching '$(eval_skip)'"; fi; \
 	if [ "$$measured" -eq 0 ]; then \
 	  echo "  no measurements, so this run is as serial as the budget makes it - regenerate with 'make eval_costs'"; \
@@ -430,7 +430,8 @@ eval_costs:
 # packed by what $(eval_costs_file) says an evaluation costs, and leaves `<MiB> <drv>` in the check's .plan file. The
 # second builds those .drv files, packed by the guests' memory. A check that does not evaluate fails in the first
 # pass, with the evaluator's error as its log. Both passes take the largest first, so the big ones pack around the
-# small ones instead of being left to run against a full budget at the end.
+# small ones instead of being left to run against a full budget at the end. The two passes have different count bounds:
+# $(eval_jobs) for the evaluators, which are single-threaded and want one core each, and $(check_jobs) for the VMs.
 ## Runs every check, as many at a time as check_jobs and check_memory allow, each into its own log, then prints a
 ## pass/fail table
 checks:
@@ -471,7 +472,7 @@ checks:
 	  finish_check "$$name" "$$result" $$((SECONDS - started)) "$$status"; \
 	}; \
 	$(pack_jobs); \
-	echo "evaluating $$checks_total checks, up to $(eval_jobs) at a time within $$budget MiB"; \
+	echo "evaluating $$checks_total checks, up to $(eval_jobs) at a time (eval_jobs) within $$budget MiB"; \
 	pack_jobs plan_check $(eval_jobs) "$$budget" < <(printf 'checks.$(architecture)-linux.%s\n' $$names \
 	  | $(eval_costs_awk) | sort -k2,2nr -k1,1 | cut -d' ' -f1,2); \
 	schedule=$$(for plan in "$(check_out_dir)"/*.plan; do \
@@ -480,7 +481,7 @@ checks:
 	  echo "$$(basename "$$plan" .plan) $$((memory + $(check_overhead))) $$drv"; \
 	done); \
 	if [ -n "$$schedule" ]; then \
-	  echo "running $$(printf '%s\n' "$$schedule" | wc -l) checks, up to $(check_jobs) at a time within $$budget MiB; logs in $(check_out_dir)/"; \
+	  echo "running $$(printf '%s\n' "$$schedule" | wc -l) checks, up to $(check_jobs) at a time (check_jobs) within $$budget MiB; logs in $(check_out_dir)/"; \
 	  alone=$$(printf '%s\n' "$$schedule" | awk -v budget="$$budget" '$$2 > budget { n++ } END { print n + 0 }'); \
 	  if [ "$$alone" -gt 0 ]; then \
 	    echo "  $$alone of them cost more than that on their own and will run alone; if any is killed, this host is too small for it"; \
@@ -578,7 +579,10 @@ cache_checks:
 
 # The table, and for every check that failed the lines that say why. A log path on its own is traceability only in the
 # sense that the evidence exists somewhere; lifting the driver's `!!!` lines and nix's `error:` lines into the summary
-# is what makes the common question - which assertion broke - answerable without a second command.
+# is what makes the common question - which assertion broke - answerable without a second command. The test script's
+# linter (ruff, `F811 ...`) and type checker (ty, `error[...]`) fail the build before any VM starts, and nix's own
+# error then names only the derivation, so their lines and the `--> testScriptWithTypes:<line>` under each are lifted
+# too.
 #
 # The exit status is reported alongside, because the one failure the log cannot explain is the one where there is no
 # log: a check killed by a signal - 137 is SIGKILL, which off a build host means the OOM killer - stops mid-line with
@@ -608,7 +612,7 @@ for name in $$failures; do \
     printf '    killed by signal %s%s\n' "$$((status - 128))" \
       "$$([ "$$status" = 137 ] && echo ' (SIGKILL - on a build host that is the OOM killer; see check_memory)')"; \
   fi; \
-  reason=$$(grep -aE '!!!|AssertionError|watchdog fired|^error:|error: builder for|timed out after' "$$log" \
+  reason=$$(grep -aE '!!!|AssertionError|watchdog fired|^error:|error: builder for|timed out after|> F[0-9]+ |> error\[|--> testScriptWithTypes:' "$$log" \
     | sed 's/^[^>]*> //' | awk '!seen[$$0]++' | head -n 20); \
   if [ -n "$$reason" ]; then printf '%s\n' "$$reason" | sed 's/^/    /'; \
   elif [ "$${status:-0}" -le 128 ]; then echo "    nothing in the log names a failure; read all of $$log"; fi; \
