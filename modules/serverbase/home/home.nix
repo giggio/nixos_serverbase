@@ -14,31 +14,18 @@
 let
   hmInputs = import ./hm-inputs.nix ../home-manager/flake.lock;
   hmOverlay = import ../home-manager/pkgs/hm-pkgs.nix hmInputs;
-  # Leaf tools the system already carries, taken from it instead of being installed a second time from unstable - on a
-  # 32 GB SD card the copies are what hurts. Leaves only: swapping anything other packages are built against (python3,
-  # systemd, gettext) would change the hash of every dependent and turn cache hits into local builds.
+  # Leaf tools the system already carries, taken from it instead of being installed a second time from unstable, so a
+  # server downloads and keeps one copy of each instead of two. Leaves only: swapping anything other packages are built
+  # against (python3, systemd, gettext) would change the hash of every dependent and turn cache hits into local builds.
   #   mylua      the system's is a superset (it adds tiktoken_core), and luarocks drags cmake in with it
   #   zellij     the one on PATH is the system's anyway, and .bashrc should call the same binary
   #   todos      a script around python3 and ripgrep, both of which the system has
   #   nix-direnv otherwise brings a whole second nix, with boost and icu
-  systemCopies =
-    final: prev:
-    {
-      inherit (pkgs) mylua zellij;
-      inherit (hmOverlay pkgs pkgs) todos;
-      nix-direnv = prev.nix-direnv.override { nix = config.nix.package; };
-    }
-    # todo: remove when atuin builds on aarch64 again: https://hydra.nixos.org/job/nixpkgs/unstable/atuin.aarch64-linux
-    # 18.24.x fails its e2e_ai_sessions tests there (timeouts), so the cache has no aarch64 build and every pi compiles it,
-    # then fails the same tests. 02c087f is home-manager-config's previous nixpkgs pin, and its aarch64 atuin is cached.
-    // lib.optionalAttrs pkgs.stdenv.hostPlatform.isAarch64 {
-      inherit
-        ((builtins.getFlake "github:nixos/nixpkgs/02c087f3fe673c9e317f206a627cb6b910336dbe?narHash=sha256-IoNisKcGbUjdd45qCqywGMCYmZ5EnkxezvLII0FWwNA%3D")
-        .legacyPackages.${pkgs.stdenv.hostPlatform.system}
-        )
-        atuin
-        ;
-    };
+  systemCopies = final: prev: {
+    inherit (pkgs) mylua zellij;
+    inherit (hmOverlay pkgs pkgs) todos;
+    nix-direnv = prev.nix-direnv.override { nix = config.nix.package; };
+  };
   hmPkgs = import hmInputs.nixpkgs.outPath {
     inherit (pkgs.stdenv.hostPlatform) system;
     # Not the config the PC gives its whole system: `rocmSupport` there would change the hash of every package and turn

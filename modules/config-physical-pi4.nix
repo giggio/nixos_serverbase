@@ -144,8 +144,8 @@ in
   # nixpkgs' sd-image.nix already defines fileSystems."/boot/firmware" (device/fsType), but with
   # "noauto" in its options - it's treated as an opaque blob, never mounted at runtime. Without a
   # mount, nixos-hardware's activation script (hardware.raspberry-pi.firmware.enable) can't find
-  # it and silently skips, so config.txt changes (like the one above) would only reach the card
-  # on the next SD-image rebuild + reflash. mkForce here drops "noauto" (options is a list, so a
+  # it and silently skips, so config.txt changes (like the one above) would only reach the boot
+  # disk on the next SD-image rebuild + reflash. mkForce here drops "noauto" (options is a list, so a
   # plain re-declaration would merge instead of replace it) while keeping "nofail" so a firmware
   # partition problem still can't block boot.
   fileSystems."/boot/firmware".options = lib.mkForce [ "nofail" ];
